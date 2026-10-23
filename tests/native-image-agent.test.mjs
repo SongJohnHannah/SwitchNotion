@@ -1,0 +1,41 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { setTimeout as sleep } from 'node:timers/promises';
+const require = createRequire(import.meta.url);
+const { AgentMock } = require('../src/agent-mock.cjs');
+const { createNativeImageAdapter } = require('../src/native-images.cjs');
+const SPACE = '11111111-1111-4111-8111-111111111111', THREAD = '22222222-2222-4222-8222-222222222222';
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/BkAAAAASUVORK5CYII=', 'base64');
+const waitFor = async agent => { for (let n = 0; n < 100; n++) { if (!agent.status().active) return; await sleep(5); } throw Error('agent test timed out'); };
+test('native image questions and continuation send bytes to Flash but persist only opaque file references', async t => {
+  const parent = path.resolve(import.meta.dirname, '../.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-native-image-agent-'));
+  t.after(() => { assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
+  const stateFile = path.join(root, 'conversation.json'), requests = [], lookups = [];
+  const images = createNativeImageAdapter({ resolveFile: async args => { lookups.push(args); return { url: 'https://file.notion.so/f/f/test-file/image.png?signed=fixture-only' }; }, fetchImage: async () => new Response(PNG) });
+  const provider = { config: () => ({ mode: 'deepseek', model: 'deepseek-flash' }), async* generate({ messages }) { requests.push(structuredClone(messages)); yield '图片已识别。'; } };
+  const agent = new AgentMock({ provider, images, stateFile });
+  const input = { threadId: THREAD, spaceId: SPACE, content: [{ type: 'text', text: '描述图片' }, { type: 'file', file_id: 'fixture-native-file' }] };
+  agent.create(input); await waitFor(agent);
+  assert.equal(agent.status().failed, 0);
+  const image = requests[0].find(m => Array.isArray(m.content)).content.find(c => c.type === 'image_url');
+  assert.ok(image.image_url.url.startsWith('data:image/png;base64,'));
+  const persisted = fs.readFileSync(stateFile, 'utf8');
+  assert.equal(persisted.includes(PNG.toString('base64')), false); assert.equal(persisted.includes('signed='), false); assert.equal(persisted.includes('fixture-native-file'), true);
+  const restored = new AgentMock({ provider, images, stateFile });
+  restored.send({ threadId: THREAD, spaceId: SPACE, event: { type: 'user.message', content: [{ type: 'text', text: '再描述一次这张图片' }] } }); await waitFor(restored);
+  assert.equal(restored.status().failed, 0); assert.equal(lookups.length, 2);
+  assert.equal(requests[1].some(m => Array.isArray(m.content) && m.content.some(c => c.type === 'image_url')), true);
+  assert.equal(JSON.stringify(requests).includes('signed='), false);
+});
+
+test('Pro rejects incoming native images before any model request', async () => {
+  let requested = false;
+  const images = createNativeImageAdapter({ resolveFile: async () => { throw Error('must not resolve'); }, fetchImage: async () => { throw Error('must not download'); } });
+  const provider = { config: () => ({ mode: 'deepseek', model: 'deepseek-v4-pro' }), async* generate() { requested = true; yield 'must not reach'; } };
+  const agent = new AgentMock({ provider, images });
+  agent.create({ threadId: THREAD, spaceId: SPACE, content: [{ type: 'text', text: '看看图' }, { type: 'file', file_id: 'fixture' }] }); await waitFor(agent);
+  assert.equal(agent.status().failed, 1); assert.equal(requested, false);
+});

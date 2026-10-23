@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>NotionSwitch 配置</title>
+  <link rel="stylesheet" href="settings.css">
+  <script src="settings.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-icon">N<span>↗</span></span><div>NotionSwitch<small>让 Notion 用上你的 AI</small></div></div>
+    <div class="nav-label">连接管理</div>
+    <nav aria-label="配置导航">
+      <button class="nav-item active" data-view="workspaces"><span class="nav-icon">▦</span>Notion 工作区<span id="nav-count" class="nav-count">0</span></button>
+      <button class="nav-item" data-view="deepseek"><span class="nav-icon">✧</span>DeepSeek</button>
+      <button class="nav-item" data-view="login"><span class="nav-icon">↔</span>Notion 登录</button>
+      <button class="nav-item" data-view="updates"><span class="nav-icon">↻</span>版本与更新</button>
+    </nav>
+    <div class="sidebar-bottom"><span class="local-dot"></span>本机配置<span class="version">v0.2</span></div>
+  </aside>
+  <div class="main-shell">
+    <header class="topbar"><span>配置中心</span><button id="open-notion" class="button primary">一键启动 Notion <span aria-hidden="true">↗</span></button></header>
+    <main>
+      <section id="workspaces-view">
+        <div class="page-heading"><div><span class="eyebrow">WORKSPACES</span><h1>你的 Notion 工作区</h1><p>添加连接，让 DeepSeek 搜索、总结和修改已授权的页面。</p></div><button id="add-workspace" class="button primary">＋ 添加工作区</button></div>
+        <div class="hint"><span class="hint-icon">✦</span><div><strong>只需名称和 API Key</strong><p>工作区会自动识别，添加多个后即可跨工作区使用。</p></div></div>
+        <div class="section-label"><span>已添加的工作区 <span id="workspace-count" class="count-label">0</span></span><button id="refresh" class="text-button">↻ 刷新</button></div>
+        <div id="workspace-list" class="workspace-list" aria-live="polite"></div>
+        <div class="help-card"><span class="help-icon">?</span><div><strong>还没有 Notion API Key？</strong><p>创建一个 Notion 连接，再把需要使用的页面授权给它。每个工作区只需配置一次。</p></div><button id="help" class="button secondary">获取 API Key ↗</button></div>
+      </section>
+      <section id="deepseek-view" hidden>
+        <div class="page-heading"><div><span class="eyebrow">AI PROVIDER</span><h1>DeepSeek</h1><p>所有工作区共用这一份 DeepSeek 连接。</p></div><span id="deepseek-status" class="badge">尚未配置</span></div>
+        <form id="deepseek-form" class="provider-card">
+          <div class="provider-heading"><span class="provider-icon">✧</span><div><h2>DeepSeek 官方 API</h2><p>继续使用 Notion 的原生 AI 对话界面。</p></div></div>
+          <label for="deepseek-key">API Key</label><div class="password-field"><input id="deepseek-key" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 DeepSeek API Key"><button type="button" data-toggle="deepseek-key" class="show-key">显示</button></div><p id="deepseek-key-help" class="field-help">密钥仅保存在本机。</p>
+          <label for="deepseek-model">默认模型</label><select id="deepseek-model"></select><p class="field-help">新对话默认使用此模型，也可在 Notion 的模型菜单中切换。</p>
+          <p class="field-help">Flash 支持图片理解：在原生 AI 输入框上传图片后提问，可识别截图、文字和图表。Pro 暂不支持图片输入。</p>
+          <label class="check-label"><input id="deepseek-thinking" type="checkbox"> 开启思考模式</label><p class="field-help">复杂编辑前先推理，通常需要更长时间。Flash 和 Pro 均可使用。</p>
+          <label for="deepseek-effort">思考强度</label><select id="deepseek-effort"><option value="low">快速</option><option value="high">标准（推荐）</option><option value="max">深入</option></select>
+          <label class="check-label"><input id="multi-agent" type="checkbox" checked> 多 Agent 协同</label><p class="field-help">默认开启。复杂任务可并行搜索、读取和分析，页面修改由主 Agent 统一执行与核验。</p>
+          <p class="field-help">长任务自动整理上下文并保存已完成进度，无需手动压缩。</p>
+          <div id="provider-result" class="inline-result" role="status" hidden></div>
+          <div class="form-actions"><button id="test-deepseek" type="button" class="button secondary">检测连接</button><button type="submit" class="button primary">保存设置</button></div>
+        </form>
+        <div class="note"><span class="local-dot"></span>保存后，下一轮 AI 对话自动生效。</div>
+      </section>
+      <section id="login-view" hidden>
+        <div class="page-heading"><div><span class="eyebrow">LOCAL LOGIN</span><h1>Notion 登录状态</h1><p>登录信息保存在本机，平时一键启动会自动沿用。</p></div></div>
+        <div id="login-card" class="provider-card">
+          <h2 id="login-title">正在检查本机登录信息…</h2><p id="login-description" class="dialog-description"></p>
+          <p>首次使用或登录失效时，可以从这台电脑已登录的原版 Notion 同步。只复制 Notion 的登录信息；工作区 API Key 用于页面授权，需要单独添加。</p>
+          <div class="form-actions"><button id="check-login" class="button secondary">检查登录状态</button><button id="sync-login" class="button primary">从本机 Notion 同步登录</button></div>
+          <div id="login-result" class="inline-result" role="status" hidden></div>
+        </div>
+      </section>
+      <section id="updates-view" hidden>
+        <div class="page-heading"><div><span class="eyebrow">UPDATES</span><h1>版本与更新</h1><p>更新原版 Notion 后，退出并重新启动 NotionSwitch，即可自动同步兼容版本。</p></div></div>
+        <div id="updates-card" class="provider-card">
+          <h2 id="updates-title">正在检查版本…</h2><p id="updates-versions" class="dialog-description"></p>
+          <p id="updates-message"></p><p class="field-help">更新在项目内的临时副本中准备，启动失败时自动恢复上一个版本。登录、API Key 和本机对话历史继续保留。</p>
+          <p class="field-help">原型正在运行时不会自动重启。点“更新并重启”前，请确认页面编辑已经同步。网页 AI 协议变化时可能需要新版 NotionSwitch；这里只同步本机已安装的 Notion。</p>
+          <div class="form-actions"><button id="check-updates" class="button secondary">检查更新</button><button id="rollback-update" class="button secondary" hidden>恢复上一个版本</button><button id="apply-update" class="button primary">更新并重启</button></div>
+          <div id="updates-result" class="inline-result" role="status" hidden></div>
+        </div>
+      </section>
+      <div id="load-error" class="inline-result error" role="alert" hidden></div>
+    </main>
+  </div>
+  <dialog id="workspace-dialog" aria-labelledby="dialog-title">
+    <form id="workspace-form">
+      <div class="dialog-heading"><div><span class="eyebrow">NOTION CONNECTION</span><h2 id="dialog-title">添加工作区</h2></div><button type="button" id="close-dialog" class="icon-button" aria-label="关闭">×</button></div>
+      <p class="dialog-description">粘贴连接密钥，自动识别工作区。</p>
+      <label for="workspace-name">名称 <span class="optional">可选</span></label><input id="workspace-name" maxlength="80" autocomplete="off" placeholder="例如：个人笔记、公司项目"><p class="field-help">不填则使用 Notion 工作区的名称。</p>
+      <label for="workspace-key">Notion API Key</label><div class="password-field"><input id="workspace-key" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 Notion 连接密钥"><button type="button" data-toggle="workspace-key" class="show-key">显示</button></div><p id="workspace-key-help" class="field-help">只保存在本机，不会显示已保存的密钥。</p>
+      <div id="workspace-result" class="inline-result" role="status" hidden></div>
+      <div class="dialog-footnote">添加后，请在 Notion 中把需要使用的页面授权给此连接。</div>
+      <div class="form-actions"><button id="test-workspace" type="button" class="button secondary">检测连接</button><div class="action-spacer"></div><button id="cancel-dialog" type="button" class="button quiet">取消</button><button id="save-workspace" type="submit" class="button primary">添加工作区</button></div>
+    </form>
+  </dialog>
+  <dialog id="remove-dialog" aria-labelledby="remove-title"><div class="remove-content"><h2 id="remove-title">移除工作区连接？</h2><p id="remove-description"></p><p class="field-help">只移除本机连接，Notion 中的页面不会更改。以后可以重新添加。</p><div class="form-actions"><button id="cancel-remove" class="button secondary">取消</button><button id="confirm-remove" class="button danger">移除连接</button></div></div></dialog>
+  <dialog id="login-dialog" aria-labelledby="login-confirm-title"><h2 id="login-confirm-title">同步登录并重启 NotionSwitch？</h2><p class="dialog-description">请先确认编辑已同步，并退出原版 Notion。同步成功后，NotionSwitch 会自动重启；原版 Notion 的资料不会更改。</p><p class="field-help">日常使用无需重复同步。此操作仅在本机进行。</p><div class="form-actions"><button id="cancel-login" class="button secondary">取消</button><button id="confirm-login" class="button primary">同步并重启</button></div></dialog>
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>

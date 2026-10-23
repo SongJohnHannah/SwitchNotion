@@ -1,0 +1,23 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { stageWindows } from '../scripts/package-windows.mjs';
+test('the portable package uses an allowlist, carries its runtime and licenses, and excludes private state and Notion binaries', t => {
+  const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-package-')), project = path.join(root, 'project');
+  fs.mkdirSync(project); t.after(() => { assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
+  for (const folder of ['src', 'scripts']) fs.cpSync(path.resolve(folder), path.join(project, folder), { recursive: true });
+  for (const folder of ['.notion-switch', 'research']) fs.mkdirSync(path.join(project, folder));
+  for (const name of ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'WINDOWS-使用说明.md', 'package.json', 'NotionSwitch 启动.vbs', 'NotionSwitch 配置.vbs', 'NotionSwitch 更新.vbs']) fs.copyFileSync(path.resolve(name), path.join(project, name));
+  fs.writeFileSync(path.join(project, '.notion-switch/deepseek-api-key.txt'), 'fixture secret that must never ship');
+  fs.writeFileSync(path.join(project, 'research/private.txt'), 'fixture private research');
+  const binary = path.join(root, 'node.exe'), license = path.join(root, 'LICENSE'); fs.writeFileSync(binary, 'synthetic Node runtime'); fs.writeFileSync(license, 'synthetic license');
+  const destination = path.join(project, 'dist/test/NotionSwitch');
+  const manifest = stageWindows({ sourceProject: project, destination, nodeExecutable: binary, nodeLicense: license, launcherBuilder: dir => fs.writeFileSync(path.join(dir, 'NotionSwitch.exe'), 'fixture launcher') });
+  assert.equal(fs.existsSync(path.join(destination, '.notion-switch')), false); assert.equal(fs.existsSync(path.join(destination, 'research')), false);
+  assert.equal(fs.existsSync(path.join(destination, 'bin/node.exe')), true); assert.equal(fs.existsSync(path.join(destination, 'licenses/NODE-LICENSE.txt')), true);
+  assert.equal(manifest.requiresOfficialNotion, true); assert.equal(manifest.includesUserData, false); assert.equal(manifest.license, 'MIT');
+  assert.ok(manifest.files.some(item => item.file === 'NotionSwitch.exe'));
+  assert.equal(manifest.files.some(item => /Notion\.exe|private\.txt|deepseek-api-key\.txt/.test(item.file)), false);
+  assert.throws(() => stageWindows({ sourceProject: project, destination: path.join(root, 'outside') }), /dist/);
+});

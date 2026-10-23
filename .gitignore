@@ -1,0 +1,22 @@
+# Local credentials, login profiles, transcripts and verification records
+/.notion-switch/
+/research/
+/dist/
+.env*
+*.local.json
+*api-key*.txt
+*api_key*.txt
+*.pem
+*.key
+*.p12
+*.pfx
+Cookies*
+Local State
+
+# Generated files
+node_modules/
+coverage/
+*.log
+__pycache__/
+*.pyc
+.DS_Store
