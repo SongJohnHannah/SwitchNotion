@@ -1,6 +1,7 @@
 const { randomUUID } = require('node:crypto');
 const { uuid } = require('./native-context.cjs');
 const FRAME_LIMIT = 16000 * 4 * 2;
+const languageOf = value => /^(?:zh|cmn)(?:[-_].*)?$/i.test(value || '') ? 'zh' : /^en(?:[-_].*)?$/i.test(value || '') ? 'en' : 'auto';
 class MeetingAudioSession {
   constructor({ root, provider, emit, authorize = async () => {}, onActivity = () => {}, onTranscript = () => {} }) {
     this.root = root; this.provider = provider; this.emit = emit; this.authorize = authorize; this.onActivity = onActivity; this.onTranscript = onTranscript;
@@ -43,10 +44,11 @@ class MeetingAudioSession {
       let energy = 0;
       for (let i = 0; i < bytes.length; i += 4) { const n = bytes.readFloatLE(i); if (!Number.isFinite(n) || Math.abs(n) > 1.01) throw Error('音频采样格式无效。'); energy += n * n; }
       const source = input.audioSource || 'microphone'; if (!['microphone', 'system_audio'].includes(source)) throw Error('音频来源无效。');
-      const state = this.sources.get(source) || { parts: [], bytes: 0, offset: 0, silence: 0 };
+      const state = this.sources.get(source) || { parts: [], bytes: 0, offset: 0, silence: 0, context: '' };
+      if (!state.bytes) state.language = languageOf(input.language);
       this.sources.set(source, state); state.parts.push(bytes); state.bytes += bytes.length;
       state.silence = Math.sqrt(energy / (bytes.length / 4)) < .006 ? state.silence + bytes.length / (16000 * 4) : 0;
-      if (state.bytes >= 16000 * 4 * 12 || state.bytes >= 16000 * 4 * 2 && state.silence >= .6) this.enqueue(source, state);
+      if (state.bytes >= 16000 * 4 * 20 || state.bytes >= 16000 * 4 * 4 && state.silence >= .8) this.enqueue(source, state);
       return {};
     }
     if (['drainTranscription', 'audioFinished', 'destroySession'].includes(method)) {
@@ -58,7 +60,7 @@ class MeetingAudioSession {
   }
   enqueue(source, state) {
     if (!state.bytes) return;
-    const pcm = Buffer.concat(state.parts), duration = pcm.length / (16000 * 4), start = state.offset, audioSessionId = randomUUID();
+    const pcm = Buffer.concat(state.parts), language = state.language, duration = pcm.length / (16000 * 4), start = state.offset, audioSessionId = randomUUID();
     state.parts = []; state.bytes = 0; state.silence = 0; state.offset += duration;
     if (this.queuedBytes + pcm.length > 16000 * 4 * 120) throw Error('转写速度暂时跟不上录音，请停止并等待处理完成。');
     this.queuedBytes += pcm.length; const id = randomUUID();
@@ -66,7 +68,10 @@ class MeetingAudioSession {
     this.emit(frame('pending'));
     this.jobs = this.jobs.then(async () => {
       if (this.closed || this.failure) return;
-      const text = await this.provider.transcribe({ pcm, signal: this.abort.signal }); if (this.closed) return;
+      const options = { pcm, language, context: state.context || '', signal: this.abort.signal };
+      const result = this.provider.transcribeDetailed ? await this.provider.transcribeDetailed(options) : { text: await this.provider.transcribe(options) };
+      if (this.closed) return;
+      const text = result.text; state.context = typeof result.context === 'string' ? result.context.slice(-120) : '';
       if (text.trim()) this.onTranscript({ ...this.context, id, text, source, start, duration });
       this.emit(frame(text.trim() ? 'complete' : 'ignore', text));
     }).catch(() => { this.failure = Error('本机语音转写失败，请停止录音后在配置中检测引擎。'); this.onActivity(false); this.emit({ type: 'openai_error', message: this.failure.message }); }).finally(() => { this.queuedBytes -= pcm.length; });

@@ -1,7 +1,9 @@
 /// <reference types="node" />
 
 export type SpeechLanguage = 'auto' | 'zh' | 'en';
+export type SpeechModel = 'medium' | 'large-v3-turbo';
 export interface LocalSpeechRuntime {
+  model?: SpeechModel;
   pythonExecutable: string;
   modelDirectory: string;
   dllDirectory?: string | null;
@@ -15,7 +17,7 @@ export interface LocalSpeechRuntime {
 export interface SpeechStatus {
   protocolVersion: 1;
   provider: 'faster-whisper';
-  model: 'medium';
+  model: SpeechModel;
   platform: string;
   architecture: string;
   device: 'cuda' | 'cpu';
@@ -33,6 +35,7 @@ export interface SpeechOptions {
   /** Absolute, writable, per-computer state directory; never distribute it. */
   root: string;
   runtime?: LocalSpeechRuntime;
+  model?: SpeechModel;
   idleMs?: number;
   timeoutMs?: number;
 }
@@ -44,7 +47,10 @@ export class SpeechProvider {
   configure(): Promise<LocalSpeechRuntime>;
   probe(options?: { signal?: AbortSignal }): Promise<SpeechStatus>;
   /** 16 kHz mono Float32 little-endian PCM, normalized [-1, 1], at most 60 s. */
-  transcribe(options: { pcm: Buffer; language?: SpeechLanguage; signal?: AbortSignal }): Promise<string>;
+  transcribe(options: { pcm: Buffer; language?: SpeechLanguage; context?: string; signal?: AbortSignal }): Promise<string>;
+  /** Reliable context is scoped by the caller to the same meeting and audio source. */
+  transcribeDetailed(options: { pcm: Buffer; language?: SpeechLanguage; context?: string; signal?: AbortSignal }):
+    Promise<{ text: string; context: string; language?: string }>;
   /** PCM16 / Float32 WAV, up to 10 minutes and 128 MiB; progress is 0..1. */
   transcribeWav(options: { wav: Buffer; language?: SpeechLanguage; signal?: AbortSignal;
     onProgress?: (fraction: number) => void }): Promise<string>;

@@ -1,7 +1,7 @@
 'use strict';
 const api = window.notionSwitch;
 const $ = id => document.getElementById(id);
-let state, editing, removing, toastTimer, busy = false, speechRecorder, speechPoll;
+let state, editing, removing, toastTimer, busy = false, speechRecorder, speechPoll, speechDirty = false;
 const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4500); }
 function result(id, text, error = false) { const node = $(id); node.textContent = text; node.classList.toggle('error', error); node.hidden = !text; }
@@ -115,18 +115,18 @@ async function checkSpeech() {
   const s = response.result;
   $('speech-backend').textContent = `${s.engineName} · ${s.modelName} · ${s.hardwareLabel} · ${s.computeType}`;
   $('speech-status').textContent = !s.supported ? '系统暂不支持' : s.ready ? '离线引擎就绪' : s.configured ? '已配置' : '尚未准备';
-  $('speech-enabled').checked = s.enabled;
+  if (!speechDirty) { $('speech-enabled').checked = s.enabled; $('speech-model').value = s.model || 'medium'; }
   if (s.preparing && s.progress?.message) {
     const percentage = s.progress.total ? ` ${Math.min(100, Math.floor(s.progress.received / s.progress.total * 100))}%` : '';
     result('speech-result', s.progress.message + percentage);
   }
-  $('speech-description').textContent = s.loaded ? `模型已载入 ${s.hardwareLabel}；空闲后自动释放，下一次使用会重新载入。` : s.configured ? '已发现本机 Medium 模型，下一次使用时载入。' : '尚未准备；点击“检测并准备”会自动下载缺少的组件，首次需要联网。';
+  $('speech-description').textContent = s.loaded ? `模型已载入 ${s.hardwareLabel}；空闲后自动释放，下一次使用会重新载入。` : s.configured ? `已发现本机 ${s.modelName} 模型，下一次使用时载入。` : '尚未准备；点击“检测并准备”会自动下载缺少的组件，首次需要联网。';
   $('speech-native-state').textContent = s.nativeMeetingAdapter ? '保存后重新打开 Notion 页面生效。' : '离线引擎可独立测试；原生速记接入尚未启用。';
   $('speech-enabled').disabled = !s.nativeMeetingAdapter; $('save-speech').disabled = !s.nativeMeetingAdapter;
   $('save-speech').dataset.unavailable = String(!s.nativeMeetingAdapter);
 }
 $('prepare-speech').addEventListener('click', () => operation($('speech-card'), async () => {
-  result('speech-result', '正在查找本机 Medium 模型并检测当前系统的离线引擎…');
+  result('speech-result', '正在查找所选模型并检测当前系统的离线引擎…');
   const r = await api.prepareSpeech(); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) await checkSpeech();
 }));
 speechRecorder = new window.SpeechRecorder(api, value => {
@@ -142,6 +142,7 @@ speechRecorder = new window.SpeechRecorder(api, value => {
 $('test-speech').addEventListener('click', () => { if (speechRecorder.state === 'recording') speechRecorder.stop(); else if (speechRecorder.state === 'idle' && !busy) void speechRecorder.start(); });
 window.addEventListener('pagehide', () => { clearInterval(speechPoll); void speechRecorder.cancel(); });
 $('release-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.releaseSpeech(); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); await checkSpeech(); }));
-$('save-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.saveSpeech({ enabled: $('speech-enabled').checked }); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); await checkSpeech(); }));
+for (const id of ['speech-model', 'speech-enabled']) $(id).addEventListener('change', () => { speechDirty = true; });
+$('save-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.saveSpeech({ enabled: $('speech-enabled').checked, model: $('speech-model').value }); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) speechDirty = false; await checkSpeech(); }));
 if (!api) result('load-error', '请通过“NotionSwitch 配置”快捷方式打开此窗口。', true);
 else load().then(async () => { const r = await api.updateStatus(); if (r.ok && r.result.openOnStartup) document.querySelector('[data-view="updates"]').click(); }).catch(() => result('load-error', '配置暂时无法加载，请关闭窗口后重新打开。', true));

@@ -28,16 +28,16 @@ def model_directory(directory):
     directory = Path(directory)
     if not directory.is_absolute() or not all((directory / n).is_file()
             for n in ['model.bin', 'config.json', 'tokenizer.json']):
-        raise RuntimeError('Invalid local Medium model directory')
+        raise RuntimeError('Invalid local speech model directory')
     return directory
 
 
-def discover(root):
+def discover(root, model_id='medium'):
     selected = profile()
     from faster_whisper.utils import download_model
-    model = root / 'speech/faster-whisper-medium'
+    model = root / ('speech/faster-whisper-' + model_id)
     if not (model / 'model.bin').is_file():
-        model = Path(download_model('medium', local_files_only=True))
+        model = Path(download_model(model_id, local_files_only=True))
     model = model_directory(model)
     dll = None
     dll_directories = []
@@ -53,7 +53,7 @@ def discover(root):
             dll_directories = [packages / 'cublas/bin', packages / 'cudnn/bin', packages / 'cuda_runtime/bin']
         if dll is None and not all(d.is_dir() for d in dll_directories):
             raise RuntimeError('Local CUDA 12 and cuDNN 9 runtime not found')
-    return {**selected, 'pythonExecutable': sys.executable, 'modelDirectory': str(model),
+    return {**selected, 'model': model_id, 'pythonExecutable': sys.executable, 'modelDirectory': str(model),
             'dllDirectory': str(dll) if dll else None, 'modelBytes': (model / 'model.bin').stat().st_size,
             'dllDirectories': [str(d) for d in dll_directories],
             'versions': {p: importlib.metadata.version(p) for p in ['faster-whisper', 'ctranslate2']}}
@@ -86,6 +86,6 @@ def configure(runtime):
         num_workers=1, local_files_only=True)
     if not recognizer.model.is_multilingual:
         raise RuntimeError('A multilingual model is required')
-    status = {**selected, 'protocolVersion': 1, 'provider': 'faster-whisper', 'model': 'medium',
+    status = {**selected, 'protocolVersion': 1, 'provider': 'faster-whisper', 'model': runtime.get('model', 'medium'),
               'offline': True, 'loadMs': round((time.perf_counter() - before) * 1000)}
     return recognizer, status

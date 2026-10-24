@@ -51,7 +51,8 @@
       <section id="speech-view" hidden>
         <div class="page-heading"><div><span class="eyebrow">OFFLINE SPEECH</span><h1>离线语音转写</h1><p id="speech-backend">faster-whisper · Medium 多语言模型</p></div><span id="speech-status" class="badge">尚未检测</span></div>
         <div id="speech-card" class="provider-card">
-          <h2>中文和英文，均在本机识别</h2><p>自动检测本机环境，缺少的组件会下载到本地。首次 Medium 模型约 1.5 GB，Windows 还可能需要 GPU 运行库；无需 API Key，不依赖 Codex。停止使用后自动释放资源。</p>
+            <h2>中文和英文，均在本机识别</h2><p>自动检测本机环境，缺少的组件会下载到本地。模型约 1.5～1.6 GB，Windows 还可能需要 GPU 运行库；无需 API Key，不依赖 Codex。停止使用后自动释放资源。</p>
+            <label for="speech-model">录音识别模型</label><select id="speech-model"><option value="large-v3-turbo">Whisper Large-v3 Turbo · 约 1.6 GB</option><option value="medium">Whisper Medium · 约 1.5 GB</option></select><p class="field-help">修改后点“保存设置”，缺少模型会自动下载；麦克风、系统音频和录音测试统一使用所选模型。已有模型会保留。</p>
           <p id="speech-description" class="field-help">点击“检测并准备”；缺少组件时自动下载到本地。首次模型约 1.5 GB，Windows GPU 还需额外运行库。</p>
           <p class="field-help">Windows 使用 NVIDIA GPU；M1 等 Apple Silicon Mac 的独立转写模块使用 CPU，Mac 原生 Notion 接入仍待实机验证。语音按短片段识别；DeepSeek 总结需要联网。</p>
           <label class="check-label"><input id="speech-enabled" type="checkbox"> 启用原生速记的离线转写</label><p id="speech-native-state" class="field-help">正在检查原生界面适配状态…</p>

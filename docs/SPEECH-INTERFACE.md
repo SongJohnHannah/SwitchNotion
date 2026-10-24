@@ -4,8 +4,8 @@
 
 | 系统 | 默认运行方式 | 验证状态 |
 | --- | --- | --- |
-| Windows x64 + NVIDIA | faster-whisper Medium，CUDA FP16 | RTX 2070 中文、英文文件转写已实测 |
-| Apple Silicon Mac（包括 M1） | faster-whisper Medium，CPU INT8，4 线程 | 已实现平台检测和后端选择，通过模拟契约测试；未实机验证 |
+| Windows x64 + NVIDIA | faster-whisper Medium / Large-v3 Turbo，CUDA FP16 | RTX 2070 中文、英文文件转写已实测 |
+| Apple Silicon Mac（包括 M1） | faster-whisper Medium / Large-v3 Turbo，CPU INT8，4 线程 | 已实现平台检测和后端选择，通过模拟契约测试；未实机验证 |
 | Intel Mac / Rosetta x64 进程 | 拒绝启动 | 不属于本次支持范围 |
 
 M1 的 GPU 不通过 CUDA 使用。本模块没有启用 Metal、MLX 或 Neural Engine，不承诺 M1 达到 Windows GPU 的测试速度。[CTranslate2 的 macOS ARM64 支持及 GPU 限制](https://opennmt.net/CTranslate2/installation.html)、[硬件支持](https://opennmt.net/CTranslate2/hardware_support.html)。
@@ -38,7 +38,8 @@ try {
 | --- | --- |
 | `status()` | 返回系统、架构、运行设备、精度、就绪/忙碌状态；不暴露程序和模型路径 |
 | `probe({signal}?)` | 检测并实际载入模型；缺少组件报错，不自动下载，不静默切换云端 |
-| `transcribe({pcm,language?,signal?})` | 输入单声道 16 kHz Float32 LE Buffer，数值范围 [-1,1]，最多 60 秒；返回文字 |
+| `transcribe({pcm,language?,context?,signal?})` | 输入单声道 16 kHz Float32 LE Buffer，数值范围 [-1,1]，最多 60 秒；返回文字 |
+| `transcribeDetailed({pcm,language?,context?,signal?})` | 返回 `{text,context,language}`；context 仅含高置信度文本，最多 120 字，供调用方在同一音源的下一段复用 |
 | `transcribeWav({wav,language?,signal?,onProgress?})` | PCM16 / Float32、单/双声道、8–48 kHz WAV，最多 10 分钟 / 128 MiB；自动重采样、分段，返回文字 |
 | `retain()` / `release()` | 连续录音期间保留模型；配对使用，空闲默认 20 秒释放进程及内存/显存 |
 | `close()` | 中止自己的工作进程及排队请求；不关闭其他 Whisper 程序；下次调用可重新启动 |
@@ -49,7 +50,9 @@ try {
 
 项目的 `npm run package:speech` 生成独立模块文件夹，包含代码、类型、依赖清单和本文档；不包含 Python、模型、CUDA、Notion 客户端、密钥、登录或音频。这个文件夹可直接交给 Mac 接入者，无需复制整个 NotionSwitch 项目。模块可离开 Codex 独立运行。
 
-应用配置页现已支持自动准备：优先复用已有环境，缺少时下载独立 Python、固定版本的 faster-whisper/CTranslate2 和固定 revision 的 Medium 模型；Windows 仅在缺少可用运行库时下载 CUDA 依赖。准备阶段联网，所有安装、缓存和模型保存在传入的本机状态目录。底层 `SpeechProvider.probe()` 继续保持不联网的约定，自动下载由 `src/speech/install.cjs` 的 `install({root,platform,onProgress,signal})` 完成。
+应用配置页现已支持选择模型和自动准备：优先复用已有环境，缺少时下载独立 Python、固定版本的 faster-whisper/CTranslate2 和固定 revision 的所选模型；Windows 仅在缺少可用运行库时下载 CUDA 依赖。准备阶段联网，所有安装、缓存和模型保存在传入的本机状态目录。底层 `SpeechProvider.probe()` 继续保持不联网的约定，自动下载由 `src/speech/install.cjs` 的 `install({root,platform,onProgress,signal})` 完成。独立调用时用 `new SpeechProvider({root,model:'large-v3-turbo'})` 或 `createSpeechPlatform({model:'large-v3-turbo'})` 选择 Turbo，省略则保持 Medium 兼容默认值。
+
+上下文只能来自同一会议的同一音源，切换会议后应清空。语言和上下文会传入识别器，不调用文本模型修写录音，不做固定单词替换。模型名称、来源和 revision 在 `src/speech/models.json` 中固定；Turbo 的原始模型说明见 [OpenAI 发布说明](https://github.com/openai/whisper/discussions/2363)，CTranslate2 权重见 [模型仓库](https://huggingface.co/dropbox-dash/faster-whisper-large-v3-turbo)。识别准确率仍取决于实际录音，短测试样本不代表全部会议。
 
 M1 端准备原生 ARM64 Node 22+、原生 ARM64 Python 3.11 独立环境，以及 `src/speech/requirements.txt` 中的依赖。不要在 Rosetta 的 x64 Node/Python 下运行。依赖安装属于准备阶段，可在联网电脑准备相应 ARM64 安装包后离线安装；识别阶段不联网。
 

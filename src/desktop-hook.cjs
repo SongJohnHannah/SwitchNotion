@@ -12,6 +12,7 @@ const { nativeModelCatalog } = require('./native-models.cjs');
 const { setupSettings, isSettings } = require('./settings-window.cjs');
 const { createNativeImageAdapter, describeUploadResponse } = require('./native-images.cjs');
 const { NativeSpeech, loopbackCsp } = require('./speech/native.cjs');
+const { isMeetingSummary, offlineSummaryResponse } = require('./speech/summary.cjs');
 const platform = require('./platform/index.cjs').createDesktopPlatform();
 
 const root = process.env.NOTION_SWITCH_ROOT;
@@ -59,12 +60,9 @@ async function route(request, passthrough, ses) {
     try { return json(await nativeSpeech.token()); }
     catch (error) { return json({ message: error.message, status: 503 }, 503); }
   }
-  if (isNotion(url.hostname) && url.pathname.includes('/api/') && endpoint === 'runMeetingNotesAgent' && settings.speech.enabled) {
-    return json({ name: 'NotionSwitchOfflineSpeech', message: '当前为离线转写模式，不自动连接云端总结。需要总结时，可在 AI 侧栏手动要求 DeepSeek 总结当前页。' }, 503);
-  }
-  if (isNotion(url.hostname) && endpoint === 'runInferenceTranscript' && settings.speech.enabled) {
-    const input = await request.clone().json();
-    if (input.transcript?.some(step => step.type === 'config' && step.value?.type === 'summarize-transcript')) return json({ name: 'NotionSwitchOfflineSpeech', message: '离线转写已完成；当前不自动连接云端生成会议总结。可在 AI 侧栏手动要求 DeepSeek 总结当前页。' }, 503);
+  if (isNotion(url.hostname) && url.pathname.includes('/api/') && settings.speech.enabled && ['runMeetingNotesAgent', 'runInferenceTranscript'].includes(endpoint)) {
+    const input = endpoint === 'runMeetingNotesAgent' ? null : await request.clone().json();
+    if (isMeetingSummary(endpoint, input)) return offlineSummaryResponse(endpoint, log);
   }
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && endpoint === 'getAvailableModels' && provider.status().mode === 'deepseek') {
     const input = await request.clone().json();

@@ -4,7 +4,7 @@ const { discover, worker } = require('./discovery.cjs');
 const { createSpeechPlatform } = require('./platform.cjs');
 const { decodeWav, validatePcm } = require('./wav.cjs');
 class SpeechProvider {
-  constructor({ root, runtime, platform = createSpeechPlatform(), spawnImpl = spawn, discoverImpl = discover, idleMs = 20000, timeoutMs = 120000 } = {}) {
+  constructor({ root, runtime, model = runtime?.model || 'medium', platform = createSpeechPlatform({ model }), spawnImpl = spawn, discoverImpl = discover, idleMs = 20000, timeoutMs = 120000 } = {}) {
     if (!root || !path.isAbsolute(root)) throw Error('请指定离线语音资源的绝对目录。');
     Object.assign(this, { root, platform, spawnImpl, discoverImpl, idleMs, timeoutMs });
     try { this.runtime = runtime ? platform.normalizeRuntime(runtime) : null; } catch { this.runtime = null; }
@@ -78,12 +78,14 @@ class SpeechProvider {
     const next = this.queue.then(run); this.queue = next.catch(() => {}); return next;
   }
   async probe({ signal } = {}) { await this.request('probe', {}, signal); return this.status(); }
-  async transcribe({ pcm, language = 'auto', signal }) {
+  async transcribeDetailed({ pcm, language = 'auto', context = '', signal }) {
     validatePcm(pcm); if (!['auto', 'zh', 'en'].includes(language)) throw Error('请选择自动识别、中文或英文。');
-    const result = await this.request('transcribe', { audio: pcm.toString('base64'), language }, signal);
+    if (typeof context !== 'string' || context.length > 400 || /[\u0000-\u0008]/.test(context)) throw Error('音频上下文格式无效。');
+    const result = await this.request('transcribe', { audio: pcm.toString('base64'), language, context }, signal);
     if (typeof result?.text !== 'string') throw Error('本机离线转写没有返回文字。');
-    return result.text;
+    return { text: result.text, context: typeof result.contextText === 'string' ? result.contextText.slice(-120) : '', language: result.language };
   }
+  async transcribe(options) { return (await this.transcribeDetailed(options)).text; }
   async transcribeRecording({ audio, signal }) {
     if (!Buffer.isBuffer(audio) || audio.length < 4 || audio.length > 16 * 1024 * 1024 || audio.readUInt32BE() !== 0x1a45dfa3) throw Error('音频录音格式无效。');
     const result = await this.request('transcribe_recording', { audio: audio.toString('base64') }, signal);

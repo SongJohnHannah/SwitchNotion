@@ -5,6 +5,7 @@ const { createHash } = require('node:crypto');
 const { download } = require('./download.cjs');
 const { createSpeechPlatform } = require('./platform.cjs');
 const { discover } = require('./discovery.cjs');
+const models = require('./models.json');
 const UV = Object.freeze({
   win32: { archive: 'uv-x86_64-pc-windows-msvc.zip', digest: 'a38b8d1902b7cfbc76b423ba1bb456f623f42064cdc72628b6075b89afd1019a', executable: 'uv.exe' },
   darwin: { archive: 'uv-aarch64-apple-darwin.tar.gz', digest: '743f85035a1996ecb350659e01cd9faea9709829be09b1b4b03c73eaf3c9cd73', executable: 'uv-aarch64-apple-darwin/uv' }
@@ -35,7 +36,7 @@ async function install({ root, platform = createSpeechPlatform(), onProgress = (
   const uv = path.join(tools, selected.executable), marker = path.join(tools, 'verified.json');
   const phase = message => onProgress({ message });
   const env = { ...platform.environment(root), HF_HUB_OFFLINE: '0', TRANSFORMERS_OFFLINE: '0',
-    HF_HOME: path.join(directory, 'huggingface'), HF_HUB_DISABLE_IMPLICIT_TOKEN: '1',
+    HF_HOME: path.join(directory, 'huggingface'), HF_HUB_DISABLE_IMPLICIT_TOKEN: '1', HF_HUB_DISABLE_XET: '1',
     UV_CACHE_DIR: path.join(directory, 'cache'), UV_PYTHON_INSTALL_DIR: path.join(directory, 'python-managed'),
     UV_PYTHON_BIN_DIR: path.join(directory, 'python-bin'), UV_PYTHON_INSTALL_BIN: '0', UV_PYTHON_INSTALL_REGISTRY: '0' };
   env.UV_HTTP_TIMEOUT = '90'; env.HF_HUB_DOWNLOAD_TIMEOUT = '90';
@@ -60,8 +61,9 @@ async function install({ root, platform = createSpeechPlatform(), onProgress = (
   }
   phase('正在下载 faster-whisper 和本地依赖，首次准备需要联网…');
   await runImpl(uv, ['--no-config', 'pip', 'install', '--python', python, '--only-binary=:all:', '-r', path.join(__dirname, 'requirements.txt')], { env, signal });
-  phase('正在下载或续传 Medium 中英文模型（约 1.5 GB）…');
-  await runImpl(python, [path.join(__dirname, 'managed_prepare.py'), '--root', root], { env, signal });
+  const model = models[platform.profile.model];
+  phase(`正在下载或续传 ${model.name} 中英文模型（约 ${model.size}）…`);
+  await runImpl(python, [path.join(__dirname, 'managed_prepare.py'), '--root', root, '--model', platform.profile.model], { env, signal });
   phase('正在验证本机离线环境…');
   try { return await discoverImpl(root, { platform }); }
   catch (error) { if (platform.profile.platform !== 'win32' || error.code !== 'SPEECH_RUNTIME_NOT_FOUND') throw error; }

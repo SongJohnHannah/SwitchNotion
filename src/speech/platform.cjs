@@ -1,14 +1,16 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const models = require('./models.json');
 
 function createSpeechPlatform({ id = process.platform, arch = process.arch, env = process.env,
-  home = os.homedir(), fsImpl = fs } = {}) {
+  home = os.homedir(), fsImpl = fs, model = 'medium' } = {}) {
+  if (!Object.hasOwn(models, model)) throw Error('本机语音模型选择无效。');
   const windows = id === 'win32' && arch === 'x64';
   const apple = id === 'darwin' && arch === 'arm64';
   const paths = id === 'win32' ? path.win32 : path.posix;
   const profile = Object.freeze({ platform: id, architecture: arch, supported: windows || apple,
-    provider: 'faster-whisper', model: 'medium', device: windows ? 'cuda' : 'cpu',
+    provider: 'faster-whisper', model, device: windows ? 'cuda' : 'cpu',
     computeType: windows ? 'float16' : 'int8', cpuThreads: 4, offline: true,
     hardwareLabel: windows ? 'NVIDIA GPU' : apple ? 'Apple Silicon CPU' : '不支持的平台' });
   function requireSupported() {
@@ -22,7 +24,8 @@ function createSpeechPlatform({ id = process.platform, arch = process.arch, env 
     if (!runtime || typeof runtime !== 'object' || Array.isArray(runtime) ||
       ![runtime.pythonExecutable, runtime.modelDirectory].every(v => typeof v === 'string' && !v.includes('\0') && paths.isAbsolute(v)) ||
       runtime.platform && runtime.platform !== id || runtime.architecture && runtime.architecture !== arch ||
-      runtime.device && runtime.device !== profile.device || runtime.computeType && runtime.computeType !== profile.computeType) {
+      runtime.device && runtime.device !== profile.device || runtime.computeType && runtime.computeType !== profile.computeType ||
+      (runtime.model || 'medium') !== model) {
       const error = Error('本机语音配置不属于当前系统，请在离线语音中重新检测。');
       error.code = 'SPEECH_RUNTIME_MISMATCH'; throw error;
     }
@@ -30,7 +33,7 @@ function createSpeechPlatform({ id = process.platform, arch = process.arch, env 
     // DLL paths on a Mac, even when the rest of the configuration was copied.
     if (apple && (runtime.dllDirectory || runtime.dllDirectories?.length)) throw Error('本机语音配置来自 Windows，请在 Mac 上重新检测。');
     if (runtime.dllDirectories && (!Array.isArray(runtime.dllDirectories) || runtime.dllDirectories.length > 8 || runtime.dllDirectories.some(v => typeof v !== 'string' || !paths.isAbsolute(v) || v.includes('\0')))) throw Error('本机语音运行库目录无效。');
-    return { pythonExecutable: runtime.pythonExecutable, modelDirectory: runtime.modelDirectory,
+    return { pythonExecutable: runtime.pythonExecutable, modelDirectory: runtime.modelDirectory, model,
       dllDirectory: windows ? runtime.dllDirectory || null : null, platform: id, architecture: arch, device: profile.device,
       dllDirectories: windows ? runtime.dllDirectories || [] : [],
       computeType: profile.computeType, cpuThreads: profile.cpuThreads };
@@ -40,7 +43,7 @@ function createSpeechPlatform({ id = process.platform, arch = process.arch, env 
       : [paths.join(root, 'speech/python/bin/python3'), paths.join(root, 'speech/venv/bin/python3')];
     try {
       const saved = JSON.parse(fsImpl.readFileSync(paths.join(root, 'speech.local.json'), 'utf8'));
-      result.push(normalizeRuntime(saved.runtime).pythonExecutable);
+      result.push(normalizeRuntime({ ...saved.runtime, model }).pythonExecutable);
     } catch {}
     if (env.NOTION_SWITCH_SPEECH_PYTHON) result.push(env.NOTION_SWITCH_SPEECH_PYTHON);
     if (windows) result.push(paths.join(home, 'AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe'));
@@ -61,6 +64,7 @@ function createSpeechPlatform({ id = process.platform, arch = process.arch, env 
     if (windows) value.CUDA_CACHE_PATH = paths.join(root, 'speech/cuda-cache');
     return value;
   }
-  return Object.freeze({ profile, requireSupported, normalizeRuntime, candidates, environment });
+  return Object.freeze({ profile, requireSupported, normalizeRuntime, candidates, environment,
+    withModel: next => createSpeechPlatform({ id, arch, env, home, fsImpl, model: next }) });
 }
 module.exports = { createSpeechPlatform };
