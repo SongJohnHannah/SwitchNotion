@@ -17,6 +17,7 @@
     "update": "node scripts/open-update.mjs",
     "package:windows": "node scripts/package-windows.mjs",
     "package:mac": "node scripts/package-macos.mjs",
+    "prepare:launchers": "node scripts/prepare-root-launchers.mjs",
     "package:speech": "node scripts/package-speech.mjs",
     "check:secrets": "node scripts/check-staged-secrets.mjs",
     "pretest": "node -e \"require('node:fs').mkdirSync('.notion-switch',{recursive:true})\"",

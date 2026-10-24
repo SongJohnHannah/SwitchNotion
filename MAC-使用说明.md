@@ -24,7 +24,7 @@
 
 ## 本机资料位置
 
-- 源码 `.command` 启动：项目内 `.notion-switch/`。
+- 源码 `.command` 或根目录项目模式 `.app` 启动：项目内 `.notion-switch/mac-arm64/`。
 - 分发 `.app` 启动：`~/Library/Application Support/Switch Notion/`。
 - 启动结果：上述目录中的 `launcher-last.log`。
 

@@ -49,6 +49,8 @@ try {
 
 项目的 `npm run package:speech` 生成独立模块文件夹，包含代码、类型、依赖清单和本文档；不包含 Python、模型、CUDA、Notion 客户端、密钥、登录或音频。这个文件夹可直接交给 Mac 接入者，无需复制整个 NotionSwitch 项目。模块可离开 Codex 独立运行。
 
+应用配置页现已支持自动准备：优先复用已有环境，缺少时下载独立 Python、固定版本的 faster-whisper/CTranslate2 和固定 revision 的 Medium 模型；Windows 仅在缺少可用运行库时下载 CUDA 依赖。准备阶段联网，所有安装、缓存和模型保存在传入的本机状态目录。底层 `SpeechProvider.probe()` 继续保持不联网的约定，自动下载由 `src/speech/install.cjs` 的 `install({root,platform,onProgress,signal})` 完成。
+
 M1 端准备原生 ARM64 Node 22+、原生 ARM64 Python 3.11 独立环境，以及 `src/speech/requirements.txt` 中的依赖。不要在 Rosetta 的 x64 Node/Python 下运行。依赖安装属于准备阶段，可在联网电脑准备相应 ARM64 安装包后离线安装；识别阶段不联网。
 
 默认优先查找 `root/speech/python/bin/python3`、`root/speech/venv/bin/python3`，再查找 Homebrew、用户 pyenv 和 PATH 中的 Python。特殊安装位置可通过调用进程的 `NOTION_SWITCH_SPEECH_PYTHON` 指定绝对路径。Windows 则查找对应的 `python.exe` 和 CUDA 环境。

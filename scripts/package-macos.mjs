@@ -16,7 +16,7 @@ function descendants(root) {
     if (item.isDirectory()) visit(file); else files.push(file);
   } } visit(root); return files;
 }
-export function stageMac({ sourceProject = project, destination }) {
+export function stageMac({ sourceProject = project, destination, projectAware = false }) {
   const target = path.resolve(destination), relative = path.relative(path.join(sourceProject, 'dist'), target);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || fs.existsSync(target)) throw Error('Mac 分发目标必须是 dist 内的新目录。');
   const sources = ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'MAC-使用说明.md', 'package.json', 'assets/notion.icns',
@@ -41,7 +41,8 @@ export function stageMac({ sourceProject = project, destination }) {
 <key>CFBundleShortVersionString</key><string>${version}</string><key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><true/></dict></plist>\n`);
   const entry = path.join(app, 'Contents/MacOS/SwitchNotion');
-  fs.writeFileSync(entry, '#!/bin/sh\nset -eu\nbase=$(CDPATH= cd "$(dirname "$0")/../Resources/project" && pwd -P)\nexport NOTION_SWITCH_ROOT="$HOME/Library/Application Support/Switch Notion"\nexec /bin/sh "$base/scripts/launch-macos.sh" notion "$base"\n', { mode: 0o755 });
+  const sourceMode = projectAware ? 'adjacent=$(CDPATH= cd "$(dirname "$0")/../../.." && pwd -P)\nif [ -f "$adjacent/scripts/launch-macos.mjs" ] && [ -f "$adjacent/src/desktop-hook.cjs" ]; then\n  base="$adjacent"\n  export NOTION_SWITCH_ROOT="${NOTION_SWITCH_ROOT:-$base/.notion-switch/mac-arm64}"\nelse\n  export NOTION_SWITCH_ROOT="${NOTION_SWITCH_ROOT:-$HOME/Library/Application Support/Switch Notion}"\nfi\n' : 'export NOTION_SWITCH_ROOT="${NOTION_SWITCH_ROOT:-$HOME/Library/Application Support/Switch Notion}"\n';
+  fs.writeFileSync(entry, '#!/bin/sh\nset -eu\nbase=$(CDPATH= cd "$(dirname "$0")/../Resources/project" && pwd -P)\n' + sourceMode + 'exec /bin/sh "$base/scripts/launch-macos.sh" notion "$base"\n', { mode: 0o755 });
   fs.chmodSync(entry, 0o755);
   for (const [name, targetMode] of [['Switch Notion 启动.command', 'notion'], ['Switch Notion 配置.command', 'settings']]) {
     const launcher = path.join(target, name);

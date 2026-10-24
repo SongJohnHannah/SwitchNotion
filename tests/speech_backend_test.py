@@ -32,7 +32,8 @@ class BackendContract(unittest.TestCase):
         model = types.SimpleNamespace(model=types.SimpleNamespace(is_multilingual=True))
         constructor = Mock(return_value=model)
         ct2 = types.SimpleNamespace(get_supported_compute_types=Mock(return_value=supported or {'int8', 'float16'}))
-        modules = {'ctranslate2': ct2, 'faster_whisper': types.SimpleNamespace(WhisperModel=constructor)}
+        modules = {'ctranslate2': ct2, 'faster_whisper': types.SimpleNamespace(WhisperModel=constructor),
+                   'faster_whisper.vad': types.SimpleNamespace(get_vad_model=Mock())}
         with patch.object(backend, 'profile', return_value=selected), patch.dict(sys.modules, modules), \
                 patch.object(backend, 'model_directory', return_value=Path('/local-medium')):
             result = backend.configure({**selected, 'modelDirectory': '/local-medium', **extra})

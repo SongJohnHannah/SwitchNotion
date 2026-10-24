@@ -95,7 +95,7 @@ test('copied Windows runtime is discarded and replaced through the platform disc
 });
 
 test('settings persist only the current platform profile and present M1 CPU status without paths', async t => {
-  const f = fixture(t), service = new settings.SpeechSettings({ root: f.root, provider: f.provider });
+  const f = fixture(t), service = new settings.SpeechSettings({ root: f.root, provider: f.provider, runtimeExists: () => true });
   const result = await service.request('speech.prepare'); assert.equal(result.ok, true, result.error);
   assert.ok(result.result.message.includes('Apple Silicon CPU'));
   const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'speech.local.json'), 'utf8'));

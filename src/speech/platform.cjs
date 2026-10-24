@@ -28,13 +28,15 @@ function createSpeechPlatform({ id = process.platform, arch = process.arch, env 
     }
     // Windows v1 settings did not include a platform stamp. Never reuse its
     // DLL paths on a Mac, even when the rest of the configuration was copied.
-    if (apple && runtime.dllDirectory) throw Error('本机语音配置来自 Windows，请在 Mac 上重新检测。');
+    if (apple && (runtime.dllDirectory || runtime.dllDirectories?.length)) throw Error('本机语音配置来自 Windows，请在 Mac 上重新检测。');
+    if (runtime.dllDirectories && (!Array.isArray(runtime.dllDirectories) || runtime.dllDirectories.length > 8 || runtime.dllDirectories.some(v => typeof v !== 'string' || !paths.isAbsolute(v) || v.includes('\0')))) throw Error('本机语音运行库目录无效。');
     return { pythonExecutable: runtime.pythonExecutable, modelDirectory: runtime.modelDirectory,
       dllDirectory: windows ? runtime.dllDirectory || null : null, platform: id, architecture: arch, device: profile.device,
+      dllDirectories: windows ? runtime.dllDirectories || [] : [],
       computeType: profile.computeType, cpuThreads: profile.cpuThreads };
   }
   function candidates(root) {
-    const result = windows ? [paths.join(root, 'speech/python/python.exe')]
+    const result = windows ? [paths.join(root, 'speech/python/Scripts/python.exe'), paths.join(root, 'speech/python/python.exe')]
       : [paths.join(root, 'speech/python/bin/python3'), paths.join(root, 'speech/venv/bin/python3')];
     try {
       const saved = JSON.parse(fsImpl.readFileSync(paths.join(root, 'speech.local.json'), 'utf8'));

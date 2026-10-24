@@ -62,7 +62,9 @@ def transcribe(message):
         return {'text': '', 'segments': [], 'elapsedMs': 0}
     before = time.perf_counter()
     segments, info = recognizer.transcribe(samples, language=None if language == 'auto' else language,
-        beam_size=5, best_of=5, temperature=0, condition_on_previous_text=False, vad_filter=False)
+        beam_size=5, best_of=5, temperature=0, condition_on_previous_text=False,
+        vad_filter=True, vad_parameters={'min_speech_duration_ms': 150,
+            'min_silence_duration_ms': 350, 'speech_pad_ms': 150})
     result = [{'start': s.start, 'end': s.end, 'text': s.text} for s in segments]
     text = ''.join(s['text'] for s in result).strip()
     if len(text) > 50000:
@@ -70,7 +72,7 @@ def transcribe(message):
     return {'text': text, 'segments': result, 'language': info.language,
             'elapsedMs': round((time.perf_counter() - before) * 1000)}
 while True:
-    line = sys.stdin.readline(8 * 1024**2)
+    line = sys.stdin.readline(32 * 1024**2)
     if not line:
         break
     message = None
@@ -87,6 +89,9 @@ while True:
             result = configure(message['runtime'])
         elif kind == 'transcribe':
             result = transcribe(message)
+        elif kind == 'transcribe_recording':
+            from recording_decode import decode_recording
+            result = transcribe(decode_recording(message))
         elif kind == 'probe' and recognizer is not None:
             result = {**configured, 'ready': True}
         else:

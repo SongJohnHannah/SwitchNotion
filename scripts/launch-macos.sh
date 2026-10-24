@@ -6,7 +6,7 @@ project=${2:-$(CDPATH= cd "$(dirname "$0")/.." && pwd -P)}
 case "$target" in notion|settings|update) ;; *) exit 2 ;; esac
 if [ "$(uname -s)" != Darwin ]; then echo '此入口用于 Apple Silicon Mac；Windows 请双击项目内的 Windows 启动程序。'; exit 1; fi
 if [ "$(uname -m)" != arm64 ]; then /usr/bin/osascript -e 'display alert "Switch Notion" message "请在 M1 等 Apple Silicon Mac 的原生 ARM64 环境中启动。"'; exit 1; fi
-state=${NOTION_SWITCH_ROOT:-$project/.notion-switch}
+state=${NOTION_SWITCH_ROOT:-$project/.notion-switch/mac-arm64}
 case "$state" in /*) ;; *) exit 2 ;; esac
 mkdir -p "$state"
 export NOTION_SWITCH_ROOT="$state"
@@ -46,4 +46,4 @@ end run
 APPLESCRIPT
   exit 1
 fi
-echo 'Switch Notion 已打开，本窗口可以关闭。'
+echo '启动流程已结束，本窗口可以关闭。'

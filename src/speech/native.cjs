@@ -6,6 +6,7 @@ const allowedOrigin = origin => { try { const u = new URL(origin); return u.prot
 class NativeSpeech {
   constructor({ speech, log = () => {}, originAllowed = allowedOrigin } = {}) {
     this.speech = speech; this.log = log; this.originAllowed = originAllowed; this.tickets = new Map(); this.connections = new Set(); this.port = null; this.transportReady = false;
+    this.warming = null; this.warmError = null; this.closed = false;
     this.server = http.createServer((_req, res) => res.writeHead(404).end());
     this.server.on('upgrade', (req, socket, head) => this.connect(req, socket, head));
     this.ready = new Promise((resolve, reject) => { this.server.once('error', reject); this.server.listen(0, '127.0.0.1', () => { this.port = this.server.address().port; resolve(); }); });
@@ -16,17 +17,31 @@ class NativeSpeech {
   async token() {
     await this.ready;
     if (!this.enabled || !this.transportReady) throw Error('本机离线语音或原生连接适配尚未准备，本次录音没有连接云端。');
-    await this.speech.provider.probe();
+    if (this.speech.recording) throw Error('本机录音测试正在进行，请先停止测试。');
     for (const [token, ticket] of this.tickets) if (ticket.expires < Date.now()) this.tickets.delete(token);
     if (this.tickets.size >= 64) throw Error('本机录音连接过多，请停止后重新打开速记。');
-    const token = randomBytes(32).toString('hex'); this.tickets.set(token, { expires: Date.now() + 30 * 60 * 1000 }); return { accessToken: token };
+    const token = randomBytes(32).toString('hex'); this.tickets.set(token, { expires: Date.now() + 30 * 60 * 1000 });
+    // Let the native microphone connection start immediately. Model loading
+    // runs in parallel; audio work remains serialized by SpeechProvider.
+    this.warm(); return { accessToken: token };
+  }
+  warm() {
+    if (this.warming) return;
+    this.warmError = null;
+    this.warming = Promise.resolve().then(() => this.speech.provider.probe()).catch(() => {
+      if (this.closed) return;
+      this.warmError = '本机转写引擎未能载入，请停止录音并重新检测。';
+      for (const connection of this.connections) connection.fail();
+    }).finally(() => { this.warming = null; });
   }
   connect(req, socket, head) {
     let url; try { url = new URL(req.url, this.endpoint); } catch { socket.destroy(); return; }
     const ticket = this.tickets.get(url.searchParams.get('token'));
     if (!this.enabled || !this.originAllowed(req.headers.origin) || !/^\/primus-v8\/?$/.test(url.pathname) || url.searchParams.get('transport') !== 'websocket' || url.searchParams.get('EIO') !== '4' || !ticket || ticket.expires < Date.now() || this.connections.size >= 2) { socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return; }
     let peer, session, heartbeat, active = false;
-    const connection = { close: () => peer?.close() };
+    const connection = { close: () => peer?.close(), fail: () => {
+      peer?.send('4' + JSON.stringify({ type: 'openai_error', message: this.warmError })); session?.close(); peer?.close();
+    } };
     const send = value => peer?.send('4' + JSON.stringify(value));
     const stop = () => { clearInterval(heartbeat); session?.close(); this.connections.delete(connection); };
     peer = upgrade(req, socket, head, { onClose: stop, onMessage: text => {
@@ -47,12 +62,13 @@ class NativeSpeech {
     } });
     this.connections.add(connection);
     peer.send('0' + JSON.stringify({ sid: randomUUID(), upgrades: [], pingInterval: 20000, pingTimeout: 20000, maxPayload: 1024 * 1024 }));
+    if (this.warmError) { connection.fail(); return; }
     heartbeat = setInterval(() => { peer.send('2'); send('primus::ping::' + Date.now()); }, 15000); heartbeat.unref?.();
     const { provider, device, platform, architecture } = this.speech.provider.status?.() || {};
     this.log({ type: 'offline-audio-connected', provider, device, platform, architecture });
   }
-  status() { return { available: !!this.port, enabled: this.enabled, transportReady: this.transportReady, connections: this.connections.size }; }
-  close() { for (const c of this.connections) c.close(); this.connections.clear(); this.tickets.clear(); this.server.close(); }
+  status() { return { available: !!this.port, enabled: this.enabled, transportReady: this.transportReady, connections: this.connections.size, warming: !!this.warming }; }
+  close() { this.closed = true; for (const c of this.connections) c.close(); this.connections.clear(); this.tickets.clear(); this.server.close(); }
 }
 function loopbackCsp(policy, endpoint) {
   if (!policy || !endpoint) return policy;

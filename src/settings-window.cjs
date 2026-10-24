@@ -1,21 +1,19 @@
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { app, BrowserWindow, ipcMain, Menu, MenuItem, Tray, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, MenuItem, Tray, shell } = require('electron');
 const { SettingsService } = require('./settings-service.cjs');
 const { LoginService } = require('./login-state.cjs');
 const { UpdateService } = require('./update-service.cjs');
 const { createDesktopPlatform } = require('./platform/index.cjs');
 const { SpeechSettings } = require('./speech/settings.cjs');
+const { microphonePermission } = require('./speech/microphone-permission.cjs');
 const marker = '--notion-switch-settings';
 const settingsContents = new WeakSet();
 let constructingSettings = false;
 function isSettings(contents) { return constructingSettings || settingsContents.has(contents); }
 function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () => false, getCompatibility = () => ({}), speech }) {
   const service = new SettingsService({ root });
-  speech ||= new SpeechSettings({ root, isBusy, chooseWav: async () => {
-    const picked = await dialog.showOpenDialog({ title: '选择本机 WAV 录音进行离线转写测试', properties: ['openFile'], filters: [{ name: 'WAV 录音', extensions: ['wav'] }] });
-    return picked.canceled ? null : picked.filePaths[0];
-  } });
+  speech ||= new SpeechSettings({ root, isBusy });
   const isTaskBusy = isBusy;
   isBusy = () => isTaskBusy() || speech.preparing || speech.provider.status().busy || speech.provider.leases > 0;
   app.on('will-quit', () => speech.close());
@@ -57,9 +55,11 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
     window.removeMenu();
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', event => event.preventDefault());
-    window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    const permitted = (contents, permission, details) => microphonePermission({ contents, expected: window?.webContents, url, permission, details, active: speech.recording });
+    window.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) => callback(permitted(contents, permission, details)));
+    window.webContents.session.setPermissionCheckHandler((contents, permission, _origin, details) => permitted(contents, permission, details));
     window.once('ready-to-show', () => { window.show(); window.focus(); });
-    window.on('closed', () => { window = null; });
+    window.on('closed', () => { speech.capture?.cancel(); window = null; });
     await window.loadFile(file);
   }
   ipcMain.handle('notion-switch:settings', async (event, action, input = {}) => {

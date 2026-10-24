@@ -30,6 +30,23 @@ async function client(service) {
   return { ws, messages, wait, send };
 }
 const event = value => { try { return value.startsWith('4') ? JSON.parse(value.slice(1)) : null; } catch { return null; } };
+test('native start returns its token and accepts a microphone connection while the model is still loading', async t => {
+  const f = fixture(t); let finish;
+  f.service.speech.provider.probe = () => new Promise(resolve => { finish = resolve; });
+  const token = await Promise.race([f.service.token(), new Promise((_, reject) => setTimeout(() => reject(Error('Model load blocked recording start')), 500))]);
+  assert.equal(typeof token.accessToken, 'string'); assert.equal(f.service.status().warming, true);
+  const c = await client(f.service); t.after(() => c.ws.close());
+  c.send('transcriptionInfo', 'fast-context', { rootBlockId: B, spaceId: W });
+  await c.wait(m => event(m)?.requestId === 'fast-context'); assert.equal(f.leases(), 1); finish();
+});
+test('background model failure is explicit and releases the native recording rather than leaving a false running state', async t => {
+  const f = fixture(t); let fail;
+  f.service.speech.provider.probe = () => new Promise((_resolve, reject) => { fail = reject; });
+  const c = await client(f.service); t.after(() => c.ws.close());
+  c.send('transcriptionInfo', 'context', { rootBlockId: B, spaceId: W }); await c.wait(m => event(m)?.requestId === 'context');
+  fail(Error('fixture unavailable model'));
+  await c.wait(m => event(m)?.type === 'openai_error'); assert.equal(f.leases(), 0);
+});
 test('native Engine.IO/Primus transport returns real local transcript events and drains the final short segment once', async t => {
   const f = fixture(t), c = await client(f.service); t.after(() => c.ws.close());
   await c.wait(m => m.startsWith('0'));

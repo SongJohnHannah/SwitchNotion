@@ -21,6 +21,8 @@
 
 ## M1 Mac 双击启动
 
+未压缩入口现放在项目根目录：Windows 双击 `Switch Notion.exe`，M1 Mac 双击 `Switch Notion.app`，Mac 也可用 `Switch Notion 启动.command`。入口按当前系统查找 Notion。详见 [一键启动说明](一键启动说明.md)；重新生成入口使用 `npm run prepare:launchers`，无需 ZIP。
+
 下载源码后双击根目录的 `Switch Notion 启动.command`；配置入口为 `Switch Notion 配置.command`。Mac 分发包可双击 `Switch Notion.app`，或把应用拖入“应用程序”后打开。首次自动查找官方 Notion，缺少运行环境时由窗口提示准备，无需输入终端命令。
 
 Mac 代码和分发包已生成并通过合成流程测试，M1 真机尚未验收，也尚未提供 Apple Developer ID 公证。安装、首次系统确认及本机资料位置见 [Mac 使用说明](MAC-使用说明.md)。

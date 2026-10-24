@@ -1,7 +1,7 @@
 'use strict';
 const api = window.notionSwitch;
 const $ = id => document.getElementById(id);
-let state, editing, removing, toastTimer, busy = false;
+let state, editing, removing, toastTimer, busy = false, speechRecorder, speechPoll;
 const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4500); }
 function result(id, text, error = false) { const node = $(id); node.textContent = text; node.classList.toggle('error', error); node.hidden = !text; }
@@ -57,7 +57,9 @@ document.querySelectorAll('[data-view]').forEach(button => button.addEventListen
   clearKey('deepseek-key'); result('provider-result', '');
   if (button.dataset.view === 'login') checkLogin();
   if (button.dataset.view === 'updates') checkUpdates();
-  if (button.dataset.view === 'speech') checkSpeech();
+  clearInterval(speechPoll);
+  if (button.dataset.view === 'speech') { checkSpeech(); speechPoll = setInterval(() => void checkSpeech().catch(() => {}), 750); }
+  else if (speechRecorder?.state !== 'idle') void speechRecorder?.cancel();
 }));
 document.querySelectorAll('[data-toggle]').forEach(button => button.addEventListener('click', () => { const input = $(button.dataset.toggle); input.type = input.type === 'password' ? 'text' : 'password'; button.textContent = input.type === 'password' ? '显示' : '隐藏'; }));
 $('add-workspace').addEventListener('click', () => openWorkspace());
@@ -114,7 +116,11 @@ async function checkSpeech() {
   $('speech-backend').textContent = `${s.engineName} · ${s.modelName} · ${s.hardwareLabel} · ${s.computeType}`;
   $('speech-status').textContent = !s.supported ? '系统暂不支持' : s.ready ? '离线引擎就绪' : s.configured ? '已配置' : '尚未准备';
   $('speech-enabled').checked = s.enabled;
-  $('speech-description').textContent = s.loaded ? `模型已载入 ${s.hardwareLabel}；空闲后自动释放，下一次使用会重新载入。` : s.configured ? '已发现本机 Medium 模型，下一次使用时载入。' : '尚未检测到本机组件，请点击“检测并准备”。';
+  if (s.preparing && s.progress?.message) {
+    const percentage = s.progress.total ? ` ${Math.min(100, Math.floor(s.progress.received / s.progress.total * 100))}%` : '';
+    result('speech-result', s.progress.message + percentage);
+  }
+  $('speech-description').textContent = s.loaded ? `模型已载入 ${s.hardwareLabel}；空闲后自动释放，下一次使用会重新载入。` : s.configured ? '已发现本机 Medium 模型，下一次使用时载入。' : '尚未准备；点击“检测并准备”会自动下载缺少的组件，首次需要联网。';
   $('speech-native-state').textContent = s.nativeMeetingAdapter ? '保存后重新打开 Notion 页面生效。' : '离线引擎可独立测试；原生速记接入尚未启用。';
   $('speech-enabled').disabled = !s.nativeMeetingAdapter; $('save-speech').disabled = !s.nativeMeetingAdapter;
   $('save-speech').dataset.unavailable = String(!s.nativeMeetingAdapter);
@@ -123,12 +129,18 @@ $('prepare-speech').addEventListener('click', () => operation($('speech-card'), 
   result('speech-result', '正在查找本机 Medium 模型并检测当前系统的离线引擎…');
   const r = await api.prepareSpeech(); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) await checkSpeech();
 }));
-$('test-speech').addEventListener('click', () => operation($('speech-card'), async () => {
-  result('speech-result', '选择 WAV 录音后在本机转写…'); const r = await api.testSpeech();
-  if (r.ok && r.result.cancelled) { result('speech-result', ''); return; }
-  result('speech-result', r.ok ? r.result.message + ` 耗时 ${(r.result.elapsedMs / 1000).toFixed(2)} 秒。` : r.error, !r.ok);
-  if (r.ok) { $('speech-transcript').textContent = r.result.text || '未识别到人声。'; $('speech-transcript').hidden = false; } await checkSpeech();
-}));
+speechRecorder = new window.SpeechRecorder(api, value => {
+  $('test-speech').textContent = value.state === 'recording' ? '停止并转写' : value.state === 'transcribing' ? '正在转写…' : '录音测试';
+  $('test-speech').disabled = ['preparing', 'transcribing'].includes(value.state);
+  if (value.message) result('speech-result', value.message, value.state === 'error');
+  if (value.state === 'preparing') $('speech-transcript').hidden = true;
+  if (value.result) {
+    result('speech-result', value.result.message + ` 耗时 ${(value.result.elapsedMs / 1000).toFixed(2)} 秒。`);
+    $('speech-transcript').textContent = value.result.text || '未检测到清晰人声。'; $('speech-transcript').hidden = false;
+  }
+});
+$('test-speech').addEventListener('click', () => { if (speechRecorder.state === 'recording') speechRecorder.stop(); else if (speechRecorder.state === 'idle' && !busy) void speechRecorder.start(); });
+window.addEventListener('pagehide', () => { clearInterval(speechPoll); void speechRecorder.cancel(); });
 $('release-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.releaseSpeech(); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); await checkSpeech(); }));
 $('save-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.saveSpeech({ enabled: $('speech-enabled').checked }); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); await checkSpeech(); }));
 if (!api) result('load-error', '请通过“NotionSwitch 配置”快捷方式打开此窗口。', true);

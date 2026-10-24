@@ -8,6 +8,8 @@ const project = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const files = ['src/speech-provider.cjs', 'src/speech-provider.d.cts', 'src/speech/provider.cjs',
   'src/speech/platform.cjs', 'src/speech/discovery.cjs', 'src/speech/wav.cjs',
   'src/speech/worker.py', 'src/speech/faster_backend.py', 'src/speech/requirements.txt',
+  'src/speech/recording_decode.py', 'src/speech/download.cjs', 'src/speech/install.cjs',
+  'src/speech/extract-runtime.ps1', 'src/speech/managed_prepare.py',
   'LICENSE', 'THIRD-PARTY-NOTICES.md'];
 const hash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 

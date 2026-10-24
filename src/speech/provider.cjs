@@ -72,8 +72,7 @@ class SpeechProvider {
     const epoch = this.epoch;
     const run = async () => {
       signal?.throwIfAborted(); if (epoch !== this.epoch) throw Error('离线转写已停止。');
-      await this.start(); signal?.throwIfAborted();
-      try { return await this.exchange(this.child, type, fields, signal); }
+      try { await this.start(); signal?.throwIfAborted(); return await this.exchange(this.child, type, fields, signal); }
       finally { this.scheduleRelease(); }
     };
     const next = this.queue.then(run); this.queue = next.catch(() => {}); return next;
@@ -84,6 +83,11 @@ class SpeechProvider {
     const result = await this.request('transcribe', { audio: pcm.toString('base64'), language }, signal);
     if (typeof result?.text !== 'string') throw Error('本机离线转写没有返回文字。');
     return result.text;
+  }
+  async transcribeRecording({ audio, signal }) {
+    if (!Buffer.isBuffer(audio) || audio.length < 4 || audio.length > 16 * 1024 * 1024 || audio.readUInt32BE() !== 0x1a45dfa3) throw Error('音频录音格式无效。');
+    const result = await this.request('transcribe_recording', { audio: audio.toString('base64') }, signal);
+    if (typeof result?.text !== 'string') throw Error('本机离线转写没有返回文字。'); return result.text;
   }
   async transcribeWav({ wav, language = 'auto', signal, onProgress = () => {} }) {
     const { pcm } = decodeWav(wav), texts = [], limit = 30 * 16000 * 4; this.retain();

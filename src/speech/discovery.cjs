@@ -13,6 +13,7 @@ async function discover(root, { execFileImpl = execFile, platform = createSpeech
       }));
     if (result) return result;
   }
-  throw Error(`未找到本机 faster-whisper Medium 与 ${platform.profile.hardwareLabel} 运行环境；请先准备离线转写环境。`);
+  const error = Error(`未找到本机 faster-whisper Medium 与 ${platform.profile.hardwareLabel} 运行环境；请先准备离线转写环境。`);
+  error.code = 'SPEECH_RUNTIME_NOT_FOUND'; throw error;
 }
 module.exports = { discover, environment, worker };

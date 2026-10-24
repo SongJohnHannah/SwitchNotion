@@ -5,6 +5,7 @@ export interface LocalSpeechRuntime {
   pythonExecutable: string;
   modelDirectory: string;
   dllDirectory?: string | null;
+  dllDirectories?: string[];
   platform?: 'win32' | 'darwin';
   architecture?: 'x64' | 'arm64';
   device?: 'cuda' | 'cpu';
@@ -47,6 +48,7 @@ export class SpeechProvider {
   /** PCM16 / Float32 WAV, up to 10 minutes and 128 MiB; progress is 0..1. */
   transcribeWav(options: { wav: Buffer; language?: SpeechLanguage; signal?: AbortSignal;
     onProgress?: (fraction: number) => void }): Promise<string>;
+  transcribeRecording(options: { audio: Buffer; signal?: AbortSignal }): Promise<string>;
   retain(): void;
   release(): void;
   close(): void;

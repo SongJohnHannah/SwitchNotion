@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>NotionSwitch 配置</title>
   <link rel="stylesheet" href="settings.css">
+  <script src="speech-recorder.js" defer></script>
   <script src="settings.js" defer></script>
 </head>
 <body>
@@ -50,11 +51,11 @@
       <section id="speech-view" hidden>
         <div class="page-heading"><div><span class="eyebrow">OFFLINE SPEECH</span><h1>离线语音转写</h1><p id="speech-backend">faster-whisper · Medium 多语言模型</p></div><span id="speech-status" class="badge">尚未检测</span></div>
         <div id="speech-card" class="provider-card">
-          <h2>中文和英文，均在本机识别</h2><p>自动使用这台电脑已有的 Medium 模型和离线运行环境，无需 API Key，也不依赖 Codex。停止使用后自动释放资源。</p>
-          <p id="speech-description" class="field-help">点击“检测并准备”，查找本机离线组件。</p>
+          <h2>中文和英文，均在本机识别</h2><p>自动检测本机环境，缺少的组件会下载到本地。首次 Medium 模型约 1.5 GB，Windows 还可能需要 GPU 运行库；无需 API Key，不依赖 Codex。停止使用后自动释放资源。</p>
+          <p id="speech-description" class="field-help">点击“检测并准备”；缺少组件时自动下载到本地。首次模型约 1.5 GB，Windows GPU 还需额外运行库。</p>
           <p class="field-help">Windows 使用 NVIDIA GPU；M1 等 Apple Silicon Mac 的独立转写模块使用 CPU，Mac 原生 Notion 接入仍待实机验证。语音按短片段识别；DeepSeek 总结需要联网。</p>
           <label class="check-label"><input id="speech-enabled" type="checkbox"> 启用原生速记的离线转写</label><p id="speech-native-state" class="field-help">正在检查原生界面适配状态…</p>
-          <div class="form-actions"><button id="prepare-speech" class="button primary">检测并准备</button><button id="test-speech" class="button secondary">选择录音测试</button><button id="release-speech" class="button secondary">释放资源</button><button id="save-speech" class="button secondary">保存设置</button></div>
+          <div class="form-actions"><button id="prepare-speech" class="button primary">检测并准备</button><button id="test-speech" class="button secondary">录音测试</button><button id="release-speech" class="button secondary">释放资源</button><button id="save-speech" class="button secondary">保存设置</button></div>
           <div id="speech-result" class="inline-result" role="status" hidden></div>
           <pre id="speech-transcript" class="inline-result" hidden></pre>
         </div>
