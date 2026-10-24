@@ -11,7 +11,7 @@ const hash = file => createHash('sha256').update(fs.readFileSync(file)).digest('
 function buildLaunchers(destination, sourceProject) {
   const file = path.join(destination, 'NotionSwitch.exe');
   execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(sourceProject, 'scripts', 'compile-launcher.ps1'), '-Source', path.join(sourceProject, 'scripts', 'windows-launcher.cs'), '-Destination', file], { windowsHide: true, timeout: 30000, stdio: 'pipe' });
-  for (const name of ['NotionSwitch 配置.exe', 'NotionSwitch 更新.exe']) fs.copyFileSync(file, path.join(destination, name));
+  for (const name of ['Switch Notion.exe', 'NotionSwitch 配置.exe', 'NotionSwitch 更新.exe']) fs.copyFileSync(file, path.join(destination, name));
 }
 function descendants(root) {
   const files = [];

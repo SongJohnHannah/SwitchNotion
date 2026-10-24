@@ -9,14 +9,14 @@ function unsupported(id, capability) {
   error.code = 'PLATFORM_CAPABILITY_UNAVAILABLE'; error.platform = id; error.capability = capability;
   return error;
 }
-function createDesktopPlatform({ id = process.platform, env = process.env, home = os.homedir(), fs,
+function createDesktopPlatform({ id = process.platform, arch = process.arch, env = process.env, home = os.homedir(), fs,
   execFileSync = childProcess.execFileSync, registry } = {}) {
   // Electron virtualizes app.asar through fs. Installation discovery must use
   // the physical filesystem, just like archive inspection in runtime-update.
   fs ||= process.versions.electron ? require('original-fs') : require('node:fs');
   const factory = id === 'win32' ? windows : id === 'darwin' ? macos : null;
   if (!factory) throw unsupported(id, 'prepareRuntime');
-  const adapter = factory({ env, home, execFileSync, registry });
+  const adapter = factory({ env, home, arch, fs, execFileSync, registry });
   const capabilities = Object.freeze({ ...adapter.capabilities });
   const requireCapability = capability => { if (capabilities[capability] !== true) throw unsupported(id, capability); };
   const json = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };

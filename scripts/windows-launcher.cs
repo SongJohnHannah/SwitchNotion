@@ -28,7 +28,7 @@ internal static class NotionSwitchLauncher
         }
         catch (Exception error)
         {
-            MessageBox.Show(error.Message, "NotionSwitch", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(error.Message, "Switch Notion", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }
 }

@@ -1,2 +1,6 @@
 * text=auto eol=lf
 *.vbs -text
+*.command text eol=lf
+*.sh text eol=lf
+*.icns binary
+*.ico binary

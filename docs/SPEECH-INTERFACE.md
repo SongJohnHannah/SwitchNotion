@@ -59,7 +59,7 @@ NotionSwitch 配置保存平台和架构，复制来的 Windows 配置会在 Mac
 
 ## 后续接入 Mac 原生 Notion
 
-语音模块的 M1 CPU 实现与 Mac Notion 桌面启动是两件事。当前完整 NotionSwitch 启动包仍为 Windows 版。Mac 端仍需完成 `docs/PLATFORM-INTERFACE.md` 中的应用包、签名、登录和 Notion 原生控件验收。
+语音模块的 M1 CPU 实现与 Mac Notion 桌面启动分别验证。Mac 的双击启动、`.app` 分发、隔离副本和本机签名流程已实现，见项目 `MAC-使用说明.md`；应用启动、登录和 Notion 原生控件仍待 M1 真机验收。
 
 Notion 原生桥接通过 `SpeechProvider` 的统一接口取得文字；其余 Agent 和页面工具不需要增加 CPU/CUDA 判断。若以后接入 Apple GPU，保留上述外部接口，在 `src/speech/platform.cjs` 和 `src/speech/faster_backend.py` 处替换具体运行实现，并重新通过契约及真实音频测试。
 

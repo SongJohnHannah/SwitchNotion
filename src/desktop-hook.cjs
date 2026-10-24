@@ -22,7 +22,7 @@ for (const [name, dir] of [['userData', 'profile'], ['sessionData', 'profile'], 
   const location = path.join(root, dir); fs.mkdirSync(location, { recursive: true }); app.setPath(name, location);
 }
 app.setAppLogsPath(path.join(root, 'logs'));
-app.setName('NotionSwitch Prototype');
+app.setName('Switch Notion');
 // Keep the original installation's OS URL association and application identity.
 app.setAsDefaultProtocolClient = () => false;
 app.removeAsDefaultProtocolClient = () => false;

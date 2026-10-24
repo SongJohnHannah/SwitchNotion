@@ -7,7 +7,9 @@ import { inspectDesktop } from './desktop-compat.mjs';
 import { prependToEntry, assertSourceUnchanged } from './asar.mjs';
 
 export const project = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-export const stateRoot = path.join(project, '.notion-switch');
+const stateOverride = process.env.NOTION_SWITCH_ROOT;
+if (stateOverride && !path.isAbsolute(stateOverride)) throw Error('运行资料目录必须是绝对路径。');
+export const stateRoot = stateOverride || path.join(project, '.notion-switch');
 export const runtime = path.join(stateRoot, 'runtime');
 const { createDesktopPlatform } = platformModule;
 const readJson = file => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;

@@ -31,3 +31,9 @@ test('web compatibility failures are visible in version status without exposing 
   const result = await f.service.request('update.status'); assert.equal(result.ok, true);
   assert.equal(result.result.clientCompatible, false); assert.ok(result.result.message.includes('网页'));
 });
+test('a relocated Mac app keeps update helpers in its payload while state lives under Application Support', async t => {
+  const payload = path.resolve('.notion-switch', 'fixture-app', 'Contents', 'Resources', 'project');
+  const f = fixture(t, { projectDirectory: payload });
+  assert.equal((await f.service.request('update.apply')).ok, true);
+  assert.equal(f.calls[0].args[0], path.join(payload, 'scripts', 'update-helper.mjs'));
+});

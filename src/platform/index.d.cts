@@ -18,6 +18,7 @@ export interface CompatibilityPolicy {
 }
 export interface PlatformOptions {
   id?: 'win32' | 'darwin';
+  arch?: string;
   env?: NodeJS.ProcessEnv;
   home?: string;
   /** Must bypass Electron ASAR virtualization. Defaults to original-fs there. */

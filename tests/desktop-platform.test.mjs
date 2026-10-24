@@ -50,14 +50,14 @@ test('macOS discovery uses app bundles without Windows commands or Windows archi
   assert.equal(layout.appRoot, path.join(root, 'runtime', 'Notion.app'));
   assert.equal(layout.archive, path.join(layout.appRoot, 'Contents', 'Resources', 'app.asar'));
   assert.equal(platform.login.strategy, 'interactive'); assert.equal(platform.capabilities.syncLogin, false);
-  assert.deepEqual(platform.compatibility.reviewedBuilds, {});
-  assert.throws(() => inspectDesktop(Buffer.from('unread'), platform.compatibility), /尚未审核/);
+  assert.equal(platform.compatibility.reviewedBuilds['7.40.1'], '48154144947412453a987b55cc1725c5a4dbf66f7b90ea919384d061cde2716f');
+  assert.notEqual(platform.compatibility.reviewedBuilds['7.40.1'], createDesktopPlatform({ id: 'win32' }).compatibility.reviewedBuilds['7.40.1']);
   assert.equal(platform.samePath(path.join(dir, 'A'), path.join(dir, 'a')), false);
   assert.doesNotThrow(() => platform.configureAppIdentity({}));
 });
 
 test('unsupported Mac preparation, rollback, launch and login do not copy, mutate or start helpers', async t => {
-  const root = fixture(t), platform = createDesktopPlatform({ id: 'darwin', home: root });
+  const root = fixture(t), platform = createDesktopPlatform({ id: 'darwin', arch: 'x64', home: root });
   const missing = path.join(root, 'must-not-create'); let called = false;
   const fail = () => { called = true; throw Error('unexpected side effect'); };
   assert.throws(() => prepareRuntime({ root: missing, platform, copy: fail }), unsupported);

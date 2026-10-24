@@ -4,10 +4,12 @@ const { pathToFileURL } = require('node:url');
 const { spawn } = require('node:child_process');
 const { createDesktopPlatform } = require('./platform/index.cjs');
 class UpdateService {
-  constructor({ root, platform = createDesktopPlatform(), isBusy = () => false, getCompatibility = () => ({}), onRestart = () => {}, spawnImpl = spawn, load } = {}) {
+  constructor({ root, projectDirectory = process.env.NOTION_SWITCH_PROJECT || path.resolve(root, '..'), platform = createDesktopPlatform(), isBusy = () => false, getCompatibility = () => ({}), onRestart = () => {}, spawnImpl = spawn, load } = {}) {
     this.platform = platform;
+    if (!path.isAbsolute(projectDirectory)) throw Error('项目目录必须是绝对路径。');
+    this.projectDirectory = projectDirectory;
     this.root = root; this.isBusy = isBusy; this.getCompatibility = getCompatibility; this.onRestart = onRestart; this.spawnImpl = spawnImpl; this.updating = false;
-    this.load = load || (() => import(pathToFileURL(path.join(root, '..', 'scripts', 'runtime-update.mjs')).href));
+    this.load = load || (() => import(pathToFileURL(path.join(this.projectDirectory, 'scripts', 'runtime-update.mjs')).href));
   }
   async request(action, input = {}) {
     if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length || !['update.status', 'update.apply', 'update.rollback'].includes(action)) return { ok: false, error: '无法识别这项更新操作。' };
@@ -33,7 +35,7 @@ class UpdateService {
     this.platform.requireCapability('prepareRuntime');
     const { nodeExecutable } = JSON.parse(fs.readFileSync(path.join(this.root, 'launcher.local.json'), 'utf8'));
     if (!this.platform.isNodeExecutable(nodeExecutable)) throw Error('Node unavailable');
-    const script = path.resolve(this.root, '..', 'scripts', 'update-helper.mjs');
+    const script = path.join(this.projectDirectory, 'scripts', 'update-helper.mjs');
     return new Promise((resolve, reject) => {
       const child = this.spawnImpl(nodeExecutable, [script, mode, String(process.pid)], { windowsHide: true, detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
       let done = false;

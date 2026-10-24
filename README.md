@@ -1,6 +1,6 @@
 # NotionSwitch
 
-在 Notion Windows 桌面版的原生 AI 界面中使用自己的 DeepSeek API Key，支持当前页面上下文、跨页面操作和多个已授权工作区。
+在 Notion 桌面版的原生 AI 界面中使用自己的 DeepSeek API Key，支持当前页面上下文、跨页面操作和多个已授权工作区。应用显示名为 Switch Notion，复用 Notion 图标。Windows 已实测；M1 Mac 启动与打包代码已实现，待真机验收。
 
 项目通过本机隔离副本和协议适配器接入 DeepSeek。原版 Notion 安装保持原样，Notion 页面内容通过官方 API 读取和修改。本项目是独立原型，与 Notion、DeepSeek 官方没有隶属关系。
 
@@ -15,20 +15,26 @@
 - 支持选区引用和原生浮动 AI 编辑预览。
 - 整个普通表格、数据库或记录的选区即使没有文字预览，也能保留引用并读取对应行、字段和记录；记录选区不会自动扩展为整库。视图筛选信息无法确认时会说明范围。
 - Flash 图片输入已接入；原生附件上传的完整链路仍需进一步实测。
-- 提供登录同步、Windows 一键启动、兼容版本同步和上一版本恢复。
+- 提供 Windows 一键启动与登录同步，新增 M1 Mac 双击启动和 `.app` 分发入口、兼容版本同步和上一版本恢复。
 
 跨工作区操作需要分别配置连接并给目标页面授权。默认使用当前工作区；需要跨区时明确指定工作区或要求跨工作区搜索。未授权页面无法通过连接访问。
 
+## M1 Mac 双击启动
+
+下载源码后双击根目录的 `Switch Notion 启动.command`；配置入口为 `Switch Notion 配置.command`。Mac 分发包可双击 `Switch Notion.app`，或把应用拖入“应用程序”后打开。首次自动查找官方 Notion，缺少运行环境时由窗口提示准备，无需输入终端命令。
+
+Mac 代码和分发包已生成并通过合成流程测试，M1 真机尚未验收，也尚未提供 Apple Developer ID 公证。安装、首次系统确认及本机资料位置见 [Mac 使用说明](MAC-使用说明.md)。
+
 ## Windows 使用
 
-目前只支持 Windows x64，不提供 Mac 包。需要本机安装官方 [Notion 桌面版](https://www.notion.com/desktop)。
+Windows 支持 x64。需要本机安装官方 [Notion 桌面版](https://www.notion.com/desktop)。
 
-桌面安装、启动、更新校验和登录策略已封装到平台接口。macOS 的 `.app` 布局和查找已预留，运行与签名仍需实机适配；接入说明见 [平台接口](docs/PLATFORM-INTERFACE.md)。
+桌面安装、启动、更新校验和登录策略已封装到平台接口，自动按本机系统查找 Notion；接入说明见 [平台接口](docs/PLATFORM-INTERFACE.md)。
 
 如果使用迁移包：
 
 1. 完整解压 ZIP 到可写目录。
-2. 双击 `NotionSwitch.exe`，自动查找已安装的 Notion。
+2. 双击 `Switch Notion.exe`（保留原入口 `NotionSwitch.exe`），自动查找已安装的 Notion。
 3. 未安装时，使用准备窗口的官网入口安装，随后重新检测；也可手动选择安装位置。
 4. 双击 `NotionSwitch 配置.exe`，填写 DeepSeek Key 和需要访问的工作区连接密钥。
 5. 在隔离原型中登录，或在配置界面按提示同步本机 Notion 登录。

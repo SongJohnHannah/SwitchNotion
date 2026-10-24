@@ -12,7 +12,7 @@ platform.requireCapability('launchRuntime');
 const control = path.join(stateRoot, 'control.json');
 fs.mkdirSync(stateRoot, { recursive: true });
 const releaseLaunch = launchLock(stateRoot); process.once('exit', releaseLaunch);
-fs.writeFileSync(path.join(stateRoot, 'launcher.local.json'), JSON.stringify({ nodeExecutable: fs.realpathSync(process.execPath) }), { mode: 0o600 });
+fs.writeFileSync(path.join(stateRoot, 'launcher.local.json'), JSON.stringify({ nodeExecutable: fs.realpathSync(process.execPath), projectDirectory: path.resolve(import.meta.dirname, '..') }), { mode: 0o600 });
 if (fs.existsSync(control)) {
   try {
     const info = JSON.parse(fs.readFileSync(control, 'utf8'));
@@ -26,7 +26,7 @@ function launch() {
  const stdout = fs.openSync(path.join(stateRoot, 'desktop-stdout.log'), 'a');
  const stderr = fs.openSync(path.join(stateRoot, 'desktop-stderr.log'), 'a');
  const child = platform.launchRuntime({ container: runtime, stateRoot,
-  env: { ...process.env, ...(['blocked', 'held'].includes(prepared.updateStatus) ? { NOTION_SWITCH_OPEN_SETTINGS: '1', NOTION_SWITCH_UPDATE_VIEW: '1' } : {}) },
+  env: { ...process.env, NOTION_SWITCH_PROJECT: path.resolve(import.meta.dirname, '..'), ...(['blocked', 'held'].includes(prepared.updateStatus) ? { NOTION_SWITCH_OPEN_SETTINGS: '1', NOTION_SWITCH_UPDATE_VIEW: '1' } : {}) },
   stdio: ['ignore', stdout, stderr],
  });
  fs.closeSync(stdout); fs.closeSync(stderr);
