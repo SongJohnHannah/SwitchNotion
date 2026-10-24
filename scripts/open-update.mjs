@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { stateRoot } from './runtime-update.mjs';
+import platformModule from '../src/platform/index.cjs';
+platformModule.createDesktopPlatform().requireCapability('prepareRuntime');
 const control = path.join(stateRoot, 'control.json');
 if (fs.existsSync(control)) {
   const info = JSON.parse(fs.readFileSync(control, 'utf8')), headers = { authorization: `Bearer ${info.token}` }, url = `http://127.0.0.1:${info.port}`;

@@ -202,6 +202,15 @@ function createSession({ request, authorize, mutate, signal }) {
     if (!Array.isArray(result.results) || result.has_more && typeof result.next_cursor !== 'string') fail('返回的子块分页格式异常。');
     return result;
   };
+  const siblingIds = async id => {
+    const ids = []; let cursor;
+    do {
+      const batch = await list(id, cursor); ids.push(...batch.results.map(block => uuid(block.id)));
+      if (ids.length > 10000) fail('目标容器过大，未执行中间插入；请使用较小的容器。');
+      cursor = batch.has_more ? batch.next_cursor : null;
+    } while (cursor);
+    return ids;
+  };
   const verifyCreated = async (expected, actual, depth = 0) => {
     const { children, ...content } = expected[expected.type];
     if (actual.type !== expected.type || !matches(actual[actual.type], content) || actual.in_trash || actual.archived) return false;
@@ -241,13 +250,19 @@ function createSession({ request, authorize, mutate, signal }) {
       if (!Array.isArray(args.blocks) || !args.blocks.length || args.blocks.length > 100 || Buffer.byteLength(JSON.stringify(args.blocks)) > 400000) fail('追加块需为 1–100 项，单次内容不超过 400KB。');
       const counter = { count: 0 }, blocks = args.blocks.map(block => validateBlock(block, { counter }));
       await authorizeReferences(blocks);
+      let beforeIds;
       if (args.after !== undefined) {
         const after = await authorize(args.after, 'block'), metadata = await read(after);
         if (![metadata.parent?.block_id, metadata.parent?.page_id].includes(id)) fail('after 必须是目标容器的直接子块。');
+        beforeIds = await siblingIds(id);
+        if (!beforeIds.includes(after)) fail('插入位置已变化，请重新读取，未执行修改。');
       }
-      return mutate({ name, target: id, args, method: 'PATCH', endpoint: `blocks/${id}/children`, body: { children: blocks, ...(args.after ? { after: uuid(args.after) } : {}) }, verify: async submitted => {
-        const created = Array.isArray(submitted.results) ? submitted.results : [];
-        let verified = created.length === blocks.length && !submitted.has_more;
+      return mutate({ name, target: id, args, method: 'PATCH', endpoint: `blocks/${id}/children`, body: { children: blocks, ...(args.after ? { position: { type: 'after_block', after_block: { id: uuid(args.after) } } } : {}) }, verify: async submitted => {
+        // Mid-list insertion can echo following existing siblings in results.
+        // Establish identity from a pre-write snapshot, never treat echoes as new.
+        const existing = new Set(beforeIds || []);
+        const created = (Array.isArray(submitted.results) ? submitted.results : []).filter(block => !existing.has(uuid(block.id)));
+        let verified = created.length === blocks.length && (!submitted.has_more || !!beforeIds) && new Set(created.map(block => block.id)).size === created.length;
         const result = [];
         for (let i = 0; i < created.length; i++) {
           const block = await read(uuid(created[i].id));
@@ -255,6 +270,12 @@ function createSession({ request, authorize, mutate, signal }) {
           const sameContent = i < blocks.length && await verifyCreated(blocks[i], block);
           verified &&= sameParent && sameContent;
           result.push(remember(block));
+        }
+        if (beforeIds) {
+          const expectedIds = [...beforeIds], at = expectedIds.indexOf(uuid(args.after)) + 1;
+          expectedIds.splice(at, 0, ...result.map(block => uuid(block.id)));
+          const currentIds = await siblingIds(id);
+          verified &&= currentIds.length === expectedIds.length && currentIds.every((value, index) => value === expectedIds[index]);
         }
         return { verified, block_id: id, created_block_ids: result.map(block => block.id), results: result, url: urlFor(id), note: verified ? '新增块均已独立读回核验，未重写原有块。' : '新增块已提交但读回核验未通过，请检查后继续，不能重复提交。' };
       } });

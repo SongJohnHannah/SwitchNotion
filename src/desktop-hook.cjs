@@ -11,6 +11,8 @@ const { NotionRouter } = require('./notion-routing.cjs');
 const { nativeModelCatalog } = require('./native-models.cjs');
 const { setupSettings, isSettings } = require('./settings-window.cjs');
 const { createNativeImageAdapter, describeUploadResponse } = require('./native-images.cjs');
+const { NativeSpeech, loopbackCsp } = require('./speech/native.cjs');
+const platform = require('./platform/index.cjs').createDesktopPlatform();
 
 const root = process.env.NOTION_SWITCH_ROOT;
 if (!root || !path.isAbsolute(root) || !fs.existsSync(path.join(root, 'prepared.json'))) throw new Error('Start the isolated prototype using npm start');
@@ -24,13 +26,13 @@ app.setName('NotionSwitch Prototype');
 // Keep the original installation's OS URL association and application identity.
 app.setAsDefaultProtocolClient = () => false;
 app.removeAsDefaultProtocolClient = () => false;
-const setAppUserModelId = app.setAppUserModelId.bind(app);
-app.setAppUserModelId = () => setAppUserModelId('notion.switch.prototype');
+platform.configureAppIdentity(app);
 
 const provider = new ProviderRouter({ root });
 const workspace = new NotionRouter({ root, log });
 const mock = new NativeMock({ log, stateFile: path.join(root, 'conversations.local.json'), provider, workspace });
-const settings = setupSettings({ root, isBusy: () => mock.status().activeTurns > 0, getCompatibility: () => compatibility });
+const settings = setupSettings({ root, platform, isBusy: () => mock.status().activeTurns > 0, getCompatibility: () => compatibility });
+const nativeSpeech = new NativeSpeech({ speech: settings.speech, log }); settings.speech.native = nativeSpeech;
 const installed = new WeakSet();
 const cacheReady = new WeakMap();
 const compatibility = { adaptedAssets: [], unsupportedAssets: [] };
@@ -40,13 +42,30 @@ async function route(request, passthrough, ses) {
   const url = new URL(request.url), endpoint = url.pathname.match(/\/api\/v\d+\/([^/]+)/)?.[1] || url.pathname.split('/').pop();
   const upstream = passthrough;
   passthrough = async req => {
-    const response = await upstream(req);
+    let response = await upstream(req);
+    if (nativeSpeech.enabled && nativeSpeech.endpoint && isNotion(url.hostname) && ['content-security-policy', 'content-security-policy-report-only'].some(name => response.headers.has(name))) {
+      const headers = new Headers(response.headers);
+      for (const name of ['content-security-policy', 'content-security-policy-report-only']) if (headers.has(name)) headers.set(name, loopbackCsp(headers.get(name), nativeSpeech.endpoint));
+      for (const name of ['content-length', 'content-encoding']) headers.delete(name);
+      response = new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+    }
     if (isNotion(url.hostname) && url.pathname.includes('/api/') && response.status >= 400) log({ type: 'notion-api-status', endpoint, status: response.status });
     if (isNotion(url.hostname) && ['createAgentServiceFileUploadURL', 'completeAgentServiceFileUpload'].includes(endpoint)) {
       try { const shape = describeUploadResponse(endpoint, await request.clone().json(), await response.clone().json()); if (shape) log({ type: 'native-image-upload-shape', ...shape }); } catch {}
     }
     return response;
   };
+  if (isNotion(url.hostname) && url.pathname.includes('/api/') && endpoint === 'getAudioProcessorAuthToken' && settings.speech.enabled) {
+    try { return json(await nativeSpeech.token()); }
+    catch (error) { return json({ message: error.message, status: 503 }, 503); }
+  }
+  if (isNotion(url.hostname) && url.pathname.includes('/api/') && endpoint === 'runMeetingNotesAgent' && settings.speech.enabled) {
+    return json({ name: 'NotionSwitchOfflineSpeech', message: '当前为离线转写模式，不自动连接云端总结。需要总结时，可在 AI 侧栏手动要求 DeepSeek 总结当前页。' }, 503);
+  }
+  if (isNotion(url.hostname) && endpoint === 'runInferenceTranscript' && settings.speech.enabled) {
+    const input = await request.clone().json();
+    if (input.transcript?.some(step => step.type === 'config' && step.value?.type === 'summarize-transcript')) return json({ name: 'NotionSwitchOfflineSpeech', message: '离线转写已完成；当前不自动连接云端生成会议总结。可在 AI 侧栏手动要求 DeepSeek 总结当前页。' }, 503);
+  }
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && endpoint === 'getAvailableModels' && provider.status().mode === 'deepseek') {
     const input = await request.clone().json();
     if (input.surface !== 'workspace_model_settings') {
@@ -69,13 +88,17 @@ async function route(request, passthrough, ses) {
     const input = await request.clone().json(), record = mock.record(input.threadId);
     if (record) return json(endpoint === 'getThreadSpaceId' ? { spaceId: record.space_id } : {});
   }
-  if (url.hostname === 'app.notion.com' && /^\/_assets\/(?:95271|96975|32453)-[^/]+\.js$/.test(url.pathname)) {
+  if (url.hostname === 'app.notion.com' && /^\/_assets\/(?:95271|96975|32453|17521)-[^/]+\.js$/.test(url.pathname)) {
     const compatAsset = url.pathname.split('/').pop();
     const response = await passthrough(request);
     if (!response.ok) return response;
     const source = await response.text();
     let patched;
-    try { patched = adaptClient(source, compatAsset); }
+    try {
+      if (nativeSpeech.enabled) await nativeSpeech.ready;
+      patched = adaptClient(source, compatAsset, { localSpeechEnabled: nativeSpeech.enabled, audioEndpoint: nativeSpeech.endpoint });
+      if (compatAsset.startsWith('17521-') && nativeSpeech.enabled && patched !== source) nativeSpeech.transportReady = true;
+    }
     catch {
       if (!compatibility.unsupportedAssets.includes(compatAsset)) { compatibility.unsupportedAssets.push(compatAsset); log({ type: 'local-provider-ui-unsupported', asset: compatAsset }); }
       return new Response(source, { status: response.status, headers: (() => { const h = new Headers(response.headers); for (const key of ['content-length', 'content-encoding']) h.delete(key); return h; })() });
@@ -168,7 +191,11 @@ const token = crypto.randomBytes(32).toString('hex');
 const server = http.createServer(async (req, res) => {
   if (req.headers.authorization !== `Bearer ${token}`) { res.writeHead(403).end(); return; }
   res.setHeader('content-type', 'application/json'); res.setHeader('cache-control', 'no-store');
-  if (req.url === '/status' && req.method === 'GET') res.end(JSON.stringify({ pid: process.pid, appReady: app.isReady(), windows: BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), minimized: win.isMinimized(), destroyed: win.isDestroyed() })), ...mock.status(), compatibility, notion: workspace.status(), settings: settings.status() }));
+  if (req.url === '/status' && req.method === 'GET') {
+    const state = mock.status(), speechBusy = settings.speech.provider.leases > 0 || settings.speech.provider.status().busy;
+    res.end(JSON.stringify({ pid: process.pid, appReady: app.isReady(), windows: BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), minimized: win.isMinimized(), destroyed: win.isDestroyed() })), ...state,
+      activeTurns: state.activeTurns + (speechBusy ? 1 : 0), compatibility, notion: workspace.status(), settings: settings.status(), speech: { ...settings.speech.status(), native: nativeSpeech.status() } }));
+  }
   else if (req.url === '/updates/status' && req.method === 'GET') res.end(JSON.stringify(await settings.updateStatus()));
   else if (req.url === '/settings/open' && req.method === 'POST') {
     try { await settings.open(); res.end(JSON.stringify({ opened: true })); }
@@ -186,5 +213,5 @@ server.listen(0, '127.0.0.1', () => {
   log({ type: 'control-ready', mode: provider.status().mode });
 });
 app.whenReady().then(() => { install(session.defaultSession); log({ type: 'native-app-ready', electron: process.versions.electron }); });
-app.on('will-quit', () => { server.close(); log({ type: 'prototype-quit' }); });
+app.on('will-quit', () => { nativeSpeech.close(); server.close(); log({ type: 'prototype-quit' }); });
 log({ type: 'hook-loaded', originalStartupContinues: true });

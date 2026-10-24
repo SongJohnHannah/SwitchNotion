@@ -6,6 +6,7 @@ const { uuid } = require('./native-context.cjs');
 const digest = value => createHash('sha256').update(value).digest('hex');
 const registryName = 'notion-connections.local.json';
 const { writeTools } = require('./notion-capabilities.cjs');
+const { definitelyNotWritten, notSubmitted } = require('./notion-errors.cjs');
 const listTool = { type: 'function', function: { name: 'list_workspaces', description: '列出本机已配置并经 API 校验的工作区及当前页面上下文，不返回密钥。跨工作区任务先确认这些范围。', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false } } };
 
 class NotionRouter {
@@ -149,7 +150,7 @@ class NotionRouter {
         if (id) remember(id, w.id);
         if (writeTools.has(name) && result.verified !== true) writeUncertain = true;
         return annotate(result, w);
-      } catch (error) { if (writeTools.has(name)) writeUncertain = true; throw error; }
+      } catch (error) { if (writeTools.has(name) && !definitelyNotWritten(error)) writeUncertain = true; throw error; }
     };
     const tools = definitions.filter(d => workspaces.length && (!writeTools.has(d.function.name) || workspaces.some(w => !w.cfg.readOnly))).map(d => {
       const copy = structuredClone(d);
@@ -157,7 +158,10 @@ class NotionRouter {
       copy.function.parameters.properties.workspace_id = { type: 'string', description: '工作区 UUID；省略或 current 为当前工作区。仅 search_pages/search_databases 支持 all，表示所有已配置工作区。' };
       return copy;
     });
-    return { definitions: [listTool, ...tools], context, execute };
+    return { definitions: [listTool, ...tools], context, execute: async (name, args) => {
+      try { return await execute(name, args); }
+      catch (error) { if (writeTools.has(name)) notSubmitted(error); throw error; }
+    } };
   }
 }
 function saveConnections(root, connections) {

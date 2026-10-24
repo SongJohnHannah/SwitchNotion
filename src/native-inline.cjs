@@ -12,6 +12,7 @@ function inlineMessages(input) {
     else if (['user', 'user-injected', 'agent-prebuilt-prompt'].includes(step.type)) {
       if (pendingSelection) {
         const context = threadContext({ threadContext: { currentBlockId: pageId, selectionPageId: pageId, selection: pendingSelection } }, input.spaceId);
+        if (!context.selection.text.trim()) throw Error('Notion 浮动文字预览无法读取整个表格或数据库，请在右侧 Agent 中针对当前选区提问；本次未修改页面。');
         if (context.selection.isPreviewTruncated) throw Error('Notion 浮动 AI 当前只提供了部分选区预览。请缩小选区后重试，或在侧边栏 Agent 中读取并处理完整内容；本次未修改页面。');
         messages.push(selectionMessage(context)); pendingSelection = null;
       }

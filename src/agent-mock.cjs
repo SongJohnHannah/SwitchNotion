@@ -112,7 +112,11 @@ class AgentMock {
     const previous = t.turns.at(-1);
     t.turns.push(turn);
     let selectedContext, selectionError;
-    try { selectedContext = threadContext(selectionInput, t.thread.space_id); } catch (error) { selectionError = error; }
+    try { selectedContext = threadContext(selectionInput, t.thread.space_id); } catch (error) {
+      selectionError = error;
+      const selection = selectionInput.threadContext?.selection;
+      this.log({ type: 'native-selection-rejected', reason: error.selectionReason || 'invalid_selection', selectionType: ['blocks', 'text'].includes(selection?.type) ? selection.type : 'other', previewCharacters: typeof selection?.text === 'string' ? selection.text.length : null, pointerCount: Array.isArray(selection?.value) ? selection.value.length : null });
+    }
     const promptText = textFrom(content);
     const user = this.entity(t, 'user_message', { text: [[selectionDisplay(promptText, selectedContext)]], ...(selectedContext?.selection ? { user_prompt_text: promptText } : {}), files: [], is_current_user: true, render_on_user_side: true, user_message_kind: 'direct', client_message_id: clientMessageId, ...(t.thread.created_by_id ? { sender_actor_kind: 'user', sender_actor_id: t.thread.created_by_id } : {}), ...(selectedContext ? { thread_context: selectedContext } : {}) });
     t.attachments ||= {};

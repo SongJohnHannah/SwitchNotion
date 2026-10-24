@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { inspectLogin, stageLogin, readStagedMetadata, applyStagedLogin, safeError } = require('../src/login-state.cjs');
+const platform = require('../src/platform/index.cjs').createDesktopPlatform();
 const project = path.resolve(__dirname, '..'), fixedRoot = path.join(project, '.notion-switch');
 function argumentsFor(values) {
   const action = values[0], options = {};
@@ -13,7 +14,7 @@ function argumentsFor(values) {
     options[key] = values[index + 1];
   }
   const root = path.resolve(options['--root'] || fixedRoot);
-  if (root.toLowerCase() !== fixedRoot.toLowerCase()) throw Error('Invalid helper root');
+  if (!platform.samePath(root, fixedRoot)) throw Error('Invalid helper root');
   return { action, root, stageId: options['--stage'], parentPid: Number(options['--parent-pid']) };
 }
 function reopenSettings() {

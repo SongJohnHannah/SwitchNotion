@@ -13,5 +13,11 @@ contextBridge.exposeInMainWorld('notionSwitch', Object.freeze({
   updateStatus: () => request('update.status'),
   updateNotion: () => request('update.apply'),
   rollbackNotion: () => request('update.rollback'),
+  speechStatus: () => request('speech.status'),
+  prepareSpeech: () => request('speech.prepare'),
+  probeSpeech: () => request('speech.probe'),
+  saveSpeech: input => request('speech.save', input),
+  testSpeech: () => request('speech.test'),
+  releaseSpeech: () => request('speech.release'),
   help: () => request('help.open')
 }));

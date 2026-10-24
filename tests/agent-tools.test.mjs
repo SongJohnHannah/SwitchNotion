@@ -99,7 +99,7 @@ test('ambiguous transport failure is not retried and prevents subsequent writes 
   await assert.rejects(session.execute('append_page', { page_id: B, revision: after.revision, content: 'May already be committed' }), /停止后续写入/);
   assert.equal(f.calls.filter(c => c.method === 'PATCH').length, 1);
   const record = JSON.parse(fs.readFileSync(path.join(f.root, 'write-journal', fs.readdirSync(path.join(f.root, 'write-journal'))[0]), 'utf8'));
-  assert.equal(record.status, 'pending');
+  assert.equal(record.status, 'uncertain');
 });
 
 test('fragmented tool calls drive native cross-page search, read A, read B, append B and verified answer', async t => {

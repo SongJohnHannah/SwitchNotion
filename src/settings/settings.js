@@ -10,7 +10,7 @@ async function operation(container, action) {
   busy = true; const buttons = [...container.querySelectorAll('button')]; buttons.forEach(b => { b.disabled = true; });
   try { return await action(); }
   catch { toast('操作未完成，请稍后重试。'); }
-  finally { busy = false; buttons.forEach(b => { b.disabled = false; }); }
+  finally { busy = false; buttons.forEach(b => { b.disabled = b.dataset.unavailable === 'true'; }); }
 }
 async function load() {
   const response = await api.state();
@@ -53,9 +53,11 @@ document.querySelectorAll('[data-view]').forEach(button => button.addEventListen
   document.querySelectorAll('[data-view]').forEach(item => item.classList.toggle('active', item === button));
   $('workspaces-view').hidden = button.dataset.view !== 'workspaces'; $('deepseek-view').hidden = button.dataset.view !== 'deepseek'; $('login-view').hidden = button.dataset.view !== 'login';
   $('updates-view').hidden = button.dataset.view !== 'updates';
+  $('speech-view').hidden = button.dataset.view !== 'speech';
   clearKey('deepseek-key'); result('provider-result', '');
   if (button.dataset.view === 'login') checkLogin();
   if (button.dataset.view === 'updates') checkUpdates();
+  if (button.dataset.view === 'speech') checkSpeech();
 }));
 document.querySelectorAll('[data-toggle]').forEach(button => button.addEventListener('click', () => { const input = $(button.dataset.toggle); input.type = input.type === 'password' ? 'text' : 'password'; button.textContent = input.type === 'password' ? '显示' : '隐藏'; }));
 $('add-workspace').addEventListener('click', () => openWorkspace());
@@ -81,8 +83,10 @@ $('deepseek-thinking').addEventListener('change', () => { $('deepseek-effort').d
 async function checkLogin() {
   const r = await api.loginStatus();
   if (!r.ok) { result('login-result', r.error, true); return; }
+  $('sync-login').dataset.unavailable = String(r.result.syncSupported === false);
+  $('sync-login').disabled = r.result.syncSupported === false;
   $('login-title').textContent = r.result.hasLogin ? '已检测到保存的登录信息' : '尚未检测到有效的本机登录信息';
-  $('login-description').textContent = r.result.hasLogin ? '无需重复复制。若 Notion 窗口仍要求登录，可以重新同步。' : r.result.message;
+  $('login-description').textContent = r.result.syncSupported === false ? r.result.message : r.result.hasLogin ? '无需重复复制。若 Notion 窗口仍要求登录，可以重新同步。' : r.result.message;
   result('login-result', r.result.lastSync?.message || '检查仅确认本机登录信息是否存在；是否仍有效，以 Notion 窗口为准。', !!r.result.lastSync && r.result.lastSync.status !== 'applied');
 }
 $('check-login').addEventListener('click', () => operation($('login-card'), checkLogin));
@@ -104,5 +108,28 @@ async function checkUpdates() {
 $('check-updates').addEventListener('click', () => operation($('updates-card'), checkUpdates));
 $('apply-update').addEventListener('click', () => operation($('updates-card'), async () => { const r = await api.updateNotion(); result('updates-result', r.ok ? r.result.message : r.error, !r.ok); }));
 $('rollback-update').addEventListener('click', () => operation($('updates-card'), async () => { const r = await api.rollbackNotion(); result('updates-result', r.ok ? r.result.message : r.error, !r.ok); }));
+async function checkSpeech() {
+  const response = await api.speechStatus(); if (!response.ok) { result('speech-result', response.error, true); return; }
+  const s = response.result;
+  $('speech-backend').textContent = `${s.engineName} · ${s.modelName} · ${s.hardwareLabel} · ${s.computeType}`;
+  $('speech-status').textContent = !s.supported ? '系统暂不支持' : s.ready ? '离线引擎就绪' : s.configured ? '已配置' : '尚未准备';
+  $('speech-enabled').checked = s.enabled;
+  $('speech-description').textContent = s.loaded ? `模型已载入 ${s.hardwareLabel}；空闲后自动释放，下一次使用会重新载入。` : s.configured ? '已发现本机 Medium 模型，下一次使用时载入。' : '尚未检测到本机组件，请点击“检测并准备”。';
+  $('speech-native-state').textContent = s.nativeMeetingAdapter ? '保存后重新打开 Notion 页面生效。' : '离线引擎可独立测试；原生速记接入尚未启用。';
+  $('speech-enabled').disabled = !s.nativeMeetingAdapter; $('save-speech').disabled = !s.nativeMeetingAdapter;
+  $('save-speech').dataset.unavailable = String(!s.nativeMeetingAdapter);
+}
+$('prepare-speech').addEventListener('click', () => operation($('speech-card'), async () => {
+  result('speech-result', '正在查找本机 Medium 模型并检测当前系统的离线引擎…');
+  const r = await api.prepareSpeech(); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) await checkSpeech();
+}));
+$('test-speech').addEventListener('click', () => operation($('speech-card'), async () => {
+  result('speech-result', '选择 WAV 录音后在本机转写…'); const r = await api.testSpeech();
+  if (r.ok && r.result.cancelled) { result('speech-result', ''); return; }
+  result('speech-result', r.ok ? r.result.message + ` 耗时 ${(r.result.elapsedMs / 1000).toFixed(2)} 秒。` : r.error, !r.ok);
+  if (r.ok) { $('speech-transcript').textContent = r.result.text || '未识别到人声。'; $('speech-transcript').hidden = false; } await checkSpeech();
+}));
+$('release-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.releaseSpeech(); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); await checkSpeech(); }));
+$('save-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.saveSpeech({ enabled: $('speech-enabled').checked }); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); await checkSpeech(); }));
 if (!api) result('load-error', '请通过“NotionSwitch 配置”快捷方式打开此窗口。', true);
 else load().then(async () => { const r = await api.updateStatus(); if (r.ok && r.result.openOnStartup) document.querySelector('[data-view="updates"]').click(); }).catch(() => result('load-error', '配置暂时无法加载，请关闭窗口后重新打开。', true));

@@ -15,6 +15,7 @@
     <nav aria-label="配置导航">
       <button class="nav-item active" data-view="workspaces"><span class="nav-icon">▦</span>Notion 工作区<span id="nav-count" class="nav-count">0</span></button>
       <button class="nav-item" data-view="deepseek"><span class="nav-icon">✧</span>DeepSeek</button>
+      <button class="nav-item" data-view="speech"><span class="nav-icon">◉</span>离线语音</button>
       <button class="nav-item" data-view="login"><span class="nav-icon">↔</span>Notion 登录</button>
       <button class="nav-item" data-view="updates"><span class="nav-icon">↻</span>版本与更新</button>
     </nav>
@@ -45,6 +46,18 @@
           <div class="form-actions"><button id="test-deepseek" type="button" class="button secondary">检测连接</button><button type="submit" class="button primary">保存设置</button></div>
         </form>
         <div class="note"><span class="local-dot"></span>保存后，下一轮 AI 对话自动生效。</div>
+      </section>
+      <section id="speech-view" hidden>
+        <div class="page-heading"><div><span class="eyebrow">OFFLINE SPEECH</span><h1>离线语音转写</h1><p id="speech-backend">faster-whisper · Medium 多语言模型</p></div><span id="speech-status" class="badge">尚未检测</span></div>
+        <div id="speech-card" class="provider-card">
+          <h2>中文和英文，均在本机识别</h2><p>自动使用这台电脑已有的 Medium 模型和离线运行环境，无需 API Key，也不依赖 Codex。停止使用后自动释放资源。</p>
+          <p id="speech-description" class="field-help">点击“检测并准备”，查找本机离线组件。</p>
+          <p class="field-help">Windows 使用 NVIDIA GPU；M1 等 Apple Silicon Mac 的独立转写模块使用 CPU，Mac 原生 Notion 接入仍待实机验证。语音按短片段识别；DeepSeek 总结需要联网。</p>
+          <label class="check-label"><input id="speech-enabled" type="checkbox"> 启用原生速记的离线转写</label><p id="speech-native-state" class="field-help">正在检查原生界面适配状态…</p>
+          <div class="form-actions"><button id="prepare-speech" class="button primary">检测并准备</button><button id="test-speech" class="button secondary">选择录音测试</button><button id="release-speech" class="button secondary">释放资源</button><button id="save-speech" class="button secondary">保存设置</button></div>
+          <div id="speech-result" class="inline-result" role="status" hidden></div>
+          <pre id="speech-transcript" class="inline-result" hidden></pre>
+        </div>
       </section>
       <section id="login-view" hidden>
         <div class="page-heading"><div><span class="eyebrow">LOCAL LOGIN</span><h1>Notion 登录状态</h1><p>登录信息保存在本机，平时一键启动会自动沿用。</p></div></div>

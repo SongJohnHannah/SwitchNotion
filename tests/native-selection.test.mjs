@@ -8,6 +8,7 @@ const require = createRequire(import.meta.url);
 const { AgentMock } = require('../src/agent-mock.cjs');
 const { compact } = require('../src/agent-context.cjs');
 const { threadContext, selectionMessage } = require('../src/native-selection.cjs');
+const { runAgent } = require('../src/agent-runtime.cjs');
 const SPACE = '11111111-1111-4111-8111-111111111111';
 const PAGE = '22222222-2222-4222-8222-222222222222';
 const BLOCK = '33333333-3333-4333-8333-333333333333';
@@ -30,6 +31,21 @@ test('selected block text is retained as native message context after sending, a
   assert.equal(requests[0].findLast(m => m.role === 'user').content, '请解释选中的内容。');
   assert.equal(requests[0].some(m => { try { return JSON.parse(m.content).text === selection.text; } catch { return false; } }), true);
   assert.equal(agent.status().failed, 0);
+});
+
+test('a native table block reference with an empty text preview reaches Agent as a selection that must be read', async () => {
+  const requests = [], tableSelection = { type: 'blocks', text: '', value: [pointer] };
+  const agent = new AgentMock({ provider: { config: () => ({ mode: 'deepseek' }), async* generate({ messages }) { requests.push(structuredClone(messages)); yield 'table reference received'; } } });
+  agent.create({ threadId: 'table-selection-fixture', spaceId: SPACE, threadContext: { ...context, selection: tableSelection }, content: [{ type: 'text', text: '这个表格里面时间的分段不太好，能否重构一下？' }] });
+  await waitFor(agent);
+  assert.equal(agent.status().failed, 0); assert.equal(requests.length, 1);
+  const quote = requests[0].find(m => { try { return JSON.parse(m.content).source === 'native-user-selection'; } catch { return false; } });
+  const value = JSON.parse(quote.content);
+  assert.equal(value.preview_available, false); assert.deepEqual(value.value, [pointer]);
+  assert.ok(value.instructions.includes('读取'));
+  const user = [...agent.threads.get('table-selection-fixture').entities.values()].find(e => e.kind === 'user_message');
+  assert.deepEqual(user.thread_context.selection, tableSelection);
+  assert.ok(user.text[0][0].includes('内容块引用'));
 });
 
 test('exact text ranges survive restart and continuation without becoming the new current selection', async t => {
@@ -63,4 +79,26 @@ test('malformed and cross-workspace selections do not silently fall back to answ
   assert.equal(requested, false); assert.equal(agent.status().failed, 1);
   const errors = [...agent.threads.get('bad-selection').entities.values()].filter(e => e.kind === 'error');
   assert.ok(errors[0].message.includes('选区格式无效'));
+});
+
+test('empty block previews retain pointer validation, while empty text ranges and oversized previews stay rejected', () => {
+  const valid = { ...context, selection: { ...selection, text: '' } };
+  assert.equal(threadContext({ threadContext: valid }, SPACE).selection.text, '');
+  for (const invalid of [
+    { ...valid, selection: { ...valid.selection, value: [] } },
+    { ...valid, selection: { ...valid.selection, value: [{ ...pointer, id: 'not-a-uuid' }] } },
+    { ...valid, selection: { ...valid.selection, value: [{ ...pointer, spaceId: PAGE }] } },
+    { ...valid, selection: { ...valid.selection, text: 'x'.repeat(200001) } },
+    { ...context, selection: { type: 'text', text: '', value: { start: { index: 0, pointer }, end: { index: 1, pointer } } } }
+  ]) assert.throws(() => threadContext({ threadContext: invalid }, SPACE), /选区格式无效/);
+});
+
+for (const status of [400, 404]) test('native summarize-current-page handles a database context returning HTTP ' + status, async () => {
+  const reads = []; let modelCalled = false;
+  const workspace = { open: () => ({ definitions: [{ function: { name: 'read_page' } }, { function: { name: 'read_database' } }], context: { current_page: { page_id: PAGE, workspace_id: SPACE } }, execute: async (name, args) => {
+    reads.push({ name, args }); if (name === 'read_page') { const error = Error('Notion API 拒绝了页面正文读取。'); error.status = status; error.apiCode = 'validation_error'; throw error; }
+    return { database_id: PAGE, title: '合成数据库', data_sources: [] };
+  } }) };
+  await runAgent({ workspace, provider: { async* generate() { modelCalled = true; yield 'database context received'; } }, config: { multiAgent: false }, messages: [{ role: 'system', content: '' }, { role: 'user', content: '总结此页面' }], nativeContext: { workspace_id: SPACE, page_id: PAGE }, signal: new AbortController().signal, onText: () => {} });
+  assert.equal(modelCalled, true); assert.deepEqual(reads, [{ name: 'read_page', args: { page_id: 'current' } }, { name: 'read_database', args: { database_id: 'current' } }]);
 });

@@ -1,16 +1,25 @@
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { app, BrowserWindow, ipcMain, Menu, MenuItem, Tray, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, MenuItem, Tray, shell, dialog } = require('electron');
 const { SettingsService } = require('./settings-service.cjs');
 const { LoginService } = require('./login-state.cjs');
 const { UpdateService } = require('./update-service.cjs');
+const { createDesktopPlatform } = require('./platform/index.cjs');
+const { SpeechSettings } = require('./speech/settings.cjs');
 const marker = '--notion-switch-settings';
 const settingsContents = new WeakSet();
 let constructingSettings = false;
 function isSettings(contents) { return constructingSettings || settingsContents.has(contents); }
-function setupSettings({ root, isBusy = () => false, getCompatibility = () => ({}) }) {
+function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () => false, getCompatibility = () => ({}), speech }) {
   const service = new SettingsService({ root });
-  const login = new LoginService({ root, isBusy, onRestart: () => setTimeout(() => app.quit(), 300), getTargetLoginStatus: async () => {
+  speech ||= new SpeechSettings({ root, isBusy, chooseWav: async () => {
+    const picked = await dialog.showOpenDialog({ title: '选择本机 WAV 录音进行离线转写测试', properties: ['openFile'], filters: [{ name: 'WAV 录音', extensions: ['wav'] }] });
+    return picked.canceled ? null : picked.filePaths[0];
+  } });
+  const isTaskBusy = isBusy;
+  isBusy = () => isTaskBusy() || speech.preparing || speech.provider.status().busy || speech.provider.leases > 0;
+  app.on('will-quit', () => speech.close());
+  const login = new LoginService({ root, platform, isBusy, onRestart: () => setTimeout(() => app.quit(), 300), getTargetLoginStatus: async () => {
     await app.whenReady();
     const { session } = require('electron');
     const sessions = [session.defaultSession, session.fromPartition('persist:notion')];
@@ -21,7 +30,7 @@ function setupSettings({ root, isBusy = () => false, getCompatibility = () => ({
     }
     return { hasLogin, targetLoginKnown: true };
   } });
-  const updates = new UpdateService({ root, getCompatibility, isBusy: () => isBusy() || login.syncing, onRestart: () => setTimeout(() => app.quit(), 300) });
+  const updates = new UpdateService({ root, platform, getCompatibility, isBusy: () => isBusy() || login.syncing, onRestart: () => setTimeout(() => app.quit(), 300) });
   const file = path.join(__dirname, 'settings', 'index.html'), url = pathToFileURL(file).href;
   let window, tray;
   async function openNotion() {
@@ -56,6 +65,7 @@ function setupSettings({ root, isBusy = () => false, getCompatibility = () => ({
   ipcMain.handle('notion-switch:settings', async (event, action, input = {}) => {
     if (!window || window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== url) return { ok: false, error: '此操作只能从 NotionSwitch 配置窗口执行。' };
     if (typeof action === 'string' && action.startsWith('update.')) return updates.request(action, input);
+    if (typeof action === 'string' && action.startsWith('speech.')) return speech.request(action, input);
     if (action === 'login.status' || action === 'login.sync') {
       if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length) return { ok: false, error: '无法识别这项操作。' };
       try { if (action === 'login.sync' && updates.updating) return { ok: false, error: '正在更新原型，请等待重启完成。' }; return { ok: true, result: await login[action === 'login.status' ? 'status' : 'sync']() }; }
@@ -85,7 +95,7 @@ function setupSettings({ root, isBusy = () => false, getCompatibility = () => ({
     } catch {}
     if (process.env.NOTION_SWITCH_OPEN_SETTINGS === '1') await open();
   }).catch(() => {});
-  return { open, openNotion, updateStatus: () => updates.request('update.status'), isLoginSyncing: () => login.syncing || updates.updating, status: () => {
+  return { open, openNotion, speech, updateStatus: () => updates.request('update.status'), isLoginSyncing: () => login.syncing || updates.updating, status: () => {
     const opened = !!window && !window.isDestroyed(), prefs = opened ? window.webContents.getLastWebPreferences() : null;
     return { available: true, open: opened, ...(prefs ? { contextIsolation: prefs.contextIsolation, sandbox: prefs.sandbox, nodeIntegration: prefs.nodeIntegration } : {}) };
   } };

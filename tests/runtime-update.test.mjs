@@ -7,6 +7,7 @@ import { inspectDesktop } from '../scripts/desktop-compat.mjs';
 import { sha256, readArchive } from '../scripts/asar.mjs';
 import { launchLock } from '../scripts/launch-lock.mjs';
 import { waitForRuntime } from '../scripts/runtime-health.mjs';
+import platformModule from '../src/platform/index.cjs';
 
 // Synthetic ASARs exercise the real archive parser and staging/swap behavior.
 // No Electron or Notion process is started by these tests.
@@ -80,4 +81,39 @@ test('startup validation requires the expected process and a ready isolated wind
   assert.equal(await waitForRuntime({ root: f.root, pid, fetchImpl }), true); assert.equal(calls, 1);
   assert.equal(await waitForRuntime({ root: f.root, pid, fetchImpl, alive: () => false }), false);
   assert.equal(await waitForRuntime({ root: f.root, pid: undefined, fetchImpl }), false);
+});
+
+test('shared updater stages a bundle layout and finalizes patched files before promotion; failed finalization preserves the working version', t => {
+  const f = fixture(t), windows = platformModule.createDesktopPlatform({ id: 'win32' });
+  // A synthetic enabled adapter exercises the common seam, not a claim that
+  // actual macOS binaries, symlinks, Keychain or signing have been validated.
+  const layout = appRoot => ({ appRoot, executable: path.join(appRoot, 'Contents/MacOS/Notion'), resources: path.join(appRoot, 'Contents/Resources'), archive: path.join(appRoot, 'Contents/Resources/app.asar') });
+  const runtimeLayout = root => layout(path.join(root, 'Notion.app'));
+  let finalized = 0, failSigning = false;
+  const platform = { ...windows, id: 'fixture-bundle', installationLayout: layout, runtimeLayout,
+    findInstallation: candidate => fs.existsSync(layout(candidate).archive) ? layout(candidate) : null,
+    stageInstallation({ source, container, copy }) { const target = runtimeLayout(container); copy(source.appRoot, target.appRoot); return target; },
+    finalizeRuntime(staged) {
+      assert.ok(staged.appRoot.endsWith('Notion.app'));
+      assert.ok(readArchive(fs.readFileSync(staged.archive)).read('.webpack/main/index.js').toString().startsWith('require(require('));
+      assert.equal(fs.existsSync(path.join(staged.resources, 'notion-switch/desktop-hook.cjs')), true);
+      finalized++; if (failSigning) throw Error('fixture signing failure');
+    }
+  };
+  function bundleBuild(version) {
+    const temp = path.join(f.sourceProject, 'build'); build(temp, version);
+    fs.mkdirSync(layout(f.source).resources, { recursive: true }); fs.mkdirSync(path.dirname(layout(f.source).executable), { recursive: true });
+    fs.copyFileSync(path.join(temp, 'resources/app.asar'), layout(f.source).archive);
+    fs.copyFileSync(path.join(temp, 'Notion.exe'), layout(f.source).executable);
+  }
+  const options = { ...f, platform };
+  bundleBuild('7.40.20'); assert.equal(prepareRuntime(options).platform, 'fixture-bundle'); acceptRuntime(options);
+  const archive = runtimeLayout(path.join(f.root, 'runtime')).archive, original = fs.readFileSync(archive);
+  assert.equal(prepareRuntime(options).updateStatus, 'current'); assert.equal(finalized, 1);
+  bundleBuild('7.40.21'); failSigning = true;
+  assert.equal(prepareRuntime(options).updateStatus, 'blocked'); assert.deepEqual(fs.readFileSync(archive), original);
+  assert.equal(fs.readdirSync(f.root).some(name => name.startsWith('runtime-staging-')), false);
+  failSigning = false; prepareRuntime({ ...options, force: true }); acceptRuntime(options);
+  assert.equal(updateStatus(options).prototypeVersion, '7.40.21'); rollbackRuntime(options);
+  assert.deepEqual(fs.readFileSync(archive), original);
 });

@@ -3,6 +3,8 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { stateRoot, rollbackRuntime } from './runtime-update.mjs';
+import platformModule from '../src/platform/index.cjs';
+platformModule.createDesktopPlatform().requireCapability('prepareRuntime');
 
 const mode = process.argv[2], parentPid = Number(process.argv[3]);
 if (!['update', 'rollback'].includes(mode) || !Number.isSafeInteger(parentPid) || parentPid <= 0 || parentPid === process.pid || !process.connected) throw Error('Invalid update helper invocation');

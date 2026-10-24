@@ -3,11 +3,13 @@ const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { spawn, execFile } = require('node:child_process');
 const { setTimeout: sleep } = require('node:timers/promises');
+const { createDesktopPlatform } = require('./platform/index.cjs');
 
 const PARTITIONS = ['Partitions/notion/Network/Cookies', 'Network/Cookies'];
 const SIDECARS = ['-wal', '-shm', '-journal'];
 const STAGE_ID = /^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i;
 const messages = {
+  platform_unsupported: '此平台尚不支持复制本机登录资料，请直接在隔离 Notion 窗口中登录。',
   source_missing: '未找到原版 Notion 的本机登录资料，请先安装并登录原版 Notion。',
   source_locked: '原版 Notion 正占用登录数据库。请保存内容并完全退出原版 Notion，再点击“同步登录”；不需要删除或迁移原版资料。',
   no_login: '未发现有效的 Notion 登录 Cookie。请先在原版 Notion 登录，再重试同步。',
@@ -84,7 +86,8 @@ function encryption(directory) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || !['encrypted_key', 'app_bound_encrypted_key'].some(key => typeof value[key] === 'string' && value[key].length)) throw failure('encryption_missing');
   return value;
 }
-function sourceDirectory() { if (!process.env.APPDATA) throw failure('source_missing'); return path.resolve(process.env.APPDATA, 'Notion'); }
+function requireLoginSync(platform) { if (!platform.capabilities.syncLogin || platform.login.strategy !== 'windows-local-copy') throw failure('platform_unsupported'); }
+function sourceDirectory(platform) { if (!platform.login.sourceRoot) throw failure('source_missing'); return platform.login.sourceRoot; }
 function inspectDirectory(directory, now) {
   const result = { available: fs.existsSync(directory), hasLogin: false, known: true, locked: false, encryptionAvailable: false };
   if (!result.available) return result;
@@ -102,8 +105,10 @@ function safeResult(root) {
     return { status, at: typeof saved.at === 'string' ? saved.at : undefined, message: status === 'applied' ? '本机登录资料已同步，仍需打开 Notion 确认会话是否有效。' : status === 'rolled-back' ? '本次同步失败，原有隔离登录资料已恢复。' : status === 'applying' ? '上次同步尚未记录完成，请重新同步或联系开发者。' : messages[saved.errorCode] || messages.apply_failed };
   } catch { return undefined; }
 }
-function inspectLogin({ root, sourceRoot = sourceDirectory(), now = Date.now() }) {
+function inspectLogin({ root, platform = createDesktopPlatform(), sourceRoot, now = Date.now() }) {
   root = checkedRoot(root);
+  if (!platform.capabilities.syncLogin) return { syncSupported: false, loginStrategy: platform.login.strategy, sourceAvailable: false, sourceHasLogin: null, hasLogin: null, targetLoginKnown: false, serverValidated: false };
+  sourceRoot ||= sourceDirectory(platform);
   const original = inspectDirectory(path.resolve(sourceRoot), now), target = inspectDirectory(within(root, 'profile'), now);
   return { sourceAvailable: original.available, sourceHasLogin: original.known ? original.hasLogin && original.encryptionAvailable : null, sourceLocked: original.locked, hasLogin: target.known ? target.hasLogin && target.encryptionAvailable : null, targetLoginKnown: target.known, serverValidated: false, lastSync: safeResult(root) };
 }
@@ -122,7 +127,8 @@ function writeCookieDatabase(file, content) {
   } catch (error) { try { database.exec('ROLLBACK'); } catch {} throw error; }
   finally { database.close(); if (fs.existsSync(file)) fs.chmodSync(file, 0o600); }
 }
-function stageLogin({ root, sourceRoot = sourceDirectory(), now = Date.now(), readCookieFile = readCookies }) {
+function stageLogin({ root, platform = createDesktopPlatform(), sourceRoot, now = Date.now(), readCookieFile = readCookies }) {
+  requireLoginSync(platform); sourceRoot ||= sourceDirectory(platform);
   root = checkedRoot(root); sourceRoot = path.resolve(sourceRoot);
   if (isWithin(root, sourceRoot) || isWithin(sourceRoot, root) || !fs.existsSync(sourceRoot)) throw failure('source_missing');
   const stageId = randomUUID(), directory = within(root, 'login-staging', stageId);
@@ -149,7 +155,8 @@ function stageLogin({ root, sourceRoot = sourceDirectory(), now = Date.now(), re
     throw safeError(error);
   }
 }
-function readStagedMetadata({ root, stageId }) {
+function readStagedMetadata({ root, stageId, platform = createDesktopPlatform() }) {
+  requireLoginSync(platform);
   root = checkedRoot(root);
   if (!STAGE_ID.test(stageId || '')) throw failure('stage_invalid');
   try {
@@ -182,9 +189,10 @@ function install(file, source, temporaryFiles) {
   const temporary = file + '.notion-switch-' + randomUUID() + '.tmp'; temporaryFiles.push(temporary);
   fs.copyFileSync(source, temporary, fs.constants.COPYFILE_EXCL); fs.renameSync(temporary, file);
 }
-async function applyStagedLogin({ root, stageId, parentPid, waitForExit = waitForProcessExit, beforeInstall = () => {} }) {
+async function applyStagedLogin({ root, stageId, parentPid, platform = createDesktopPlatform(), waitForExit = waitForProcessExit, beforeInstall = () => {} }) {
+  requireLoginSync(platform);
   root = checkedRoot(root);
-  const stage = readStagedMetadata({ root, stageId });
+  const stage = readStagedMetadata({ root, stageId, platform });
   await waitForExit(parentPid);
   const profile = within(root, 'profile'), backupId = randomUUID(), backup = within(root, 'login-backups', backupId), temporaryFiles = [];
   const targets = [...PARTITIONS.flatMap(relative => [relative, ...SIDECARS.map(suffix => relative + suffix)]), 'Local State'];
@@ -224,7 +232,8 @@ async function applyStagedLogin({ root, stageId, parentPid, waitForExit = waitFo
 }
 
 class LoginService {
-  constructor({ root, isBusy = () => false, onRestart = () => {}, getTargetLoginStatus, runHelper, launchApply, currentPid = process.pid, spawnImpl = spawn, execFileImpl = execFile } = {}) {
+  constructor({ root, platform = createDesktopPlatform(), isBusy = () => false, onRestart = () => {}, getTargetLoginStatus, runHelper, launchApply, currentPid = process.pid, spawnImpl = spawn, execFileImpl = execFile } = {}) {
+    this.platform = platform;
     this.root = checkedRoot(root); this.isBusy = isBusy; this.onRestart = onRestart; this.getTargetLoginStatus = getTargetLoginStatus; this.currentPid = currentPid; this.spawnImpl = spawnImpl; this.execFileImpl = execFileImpl; this.syncing = false;
     this.runHelper = runHelper || this.external.bind(this);
     this.launchApply = launchApply || this.startApplyWorker.bind(this);
@@ -232,13 +241,14 @@ class LoginService {
   runtime() {
     try {
       const file = within(this.root, 'launcher.local.json'), settings = readJson(file), executable = settings.nodeExecutable;
-      if (typeof executable !== 'string' || !path.isAbsolute(executable) || !/^(node|node\.exe)$/i.test(path.basename(executable)) || !fs.statSync(executable).isFile()) throw failure('helper_unavailable');
+      if (!this.platform.isNodeExecutable(executable)) throw failure('helper_unavailable');
       const project = path.dirname(this.root), helper = path.join(project, 'scripts', 'login-helper.cjs'), reopen = path.join(project, 'scripts', 'open-settings.mjs');
       if (!fs.statSync(helper).isFile() || !fs.statSync(reopen).isFile()) throw failure('helper_unavailable');
       return { executable, helper };
     } catch { throw failure('helper_unavailable'); }
   }
   external(action) {
+    requireLoginSync(this.platform);
     const { executable, helper } = this.runtime();
     return new Promise((resolve, reject) => {
       this.execFileImpl(executable, [helper, action, '--root', this.root], { windowsHide: true, timeout: 30000, maxBuffer: 65536, env: { ...process.env, NODE_NO_WARNINGS: '1' } }, (error, stdout) => {
@@ -248,6 +258,7 @@ class LoginService {
     });
   }
   startApplyWorker(stageId) {
+    requireLoginSync(this.platform);
     const { executable, helper } = this.runtime();
     return new Promise((resolve, reject) => {
       const child = this.spawnImpl(executable, [helper, 'apply-and-restart', '--root', this.root, '--stage', stageId, '--parent-pid', String(this.currentPid)], { windowsHide: true, detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: { ...process.env, NODE_NO_WARNINGS: '1' } });
@@ -264,16 +275,18 @@ class LoginService {
     });
   }
   async status() {
-    let data; try { data = await this.runHelper('status'); } catch (error) { return { sourceAvailable: false, sourceHasLogin: null, hasLogin: null, targetLoginKnown: false, syncing: this.syncing, serverValidated: false, message: safeError(error, 'helper_unavailable').message }; }
-    if (!data || typeof data !== 'object' || Array.isArray(data)) return { sourceAvailable: false, sourceHasLogin: null, hasLogin: null, targetLoginKnown: false, syncing: this.syncing, serverValidated: false, message: messages.helper_unavailable };
+    const support = { syncSupported: this.platform.capabilities.syncLogin, loginStrategy: this.platform.login.strategy };
+    let data; try { data = support.syncSupported ? await this.runHelper('status') : {}; } catch (error) { return { ...support, sourceAvailable: false, sourceHasLogin: null, hasLogin: null, targetLoginKnown: false, syncing: this.syncing, serverValidated: false, message: safeError(error, 'helper_unavailable').message }; }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return { ...support, sourceAvailable: false, sourceHasLogin: null, hasLogin: null, targetLoginKnown: false, syncing: this.syncing, serverValidated: false, message: messages.helper_unavailable };
     let hasLogin = typeof data.hasLogin === 'boolean' ? data.hasLogin : null;
     if (this.getTargetLoginStatus) { try { const current = await this.getTargetLoginStatus(); hasLogin = typeof current === 'boolean' ? current : typeof current?.hasLogin === 'boolean' ? current.hasLogin : null; } catch { hasLogin = null; } }
     const last = data.lastSync;
-    return { sourceAvailable: data.sourceAvailable === true, sourceHasLogin: typeof data.sourceHasLogin === 'boolean' ? data.sourceHasLogin : null, hasLogin, targetLoginKnown: hasLogin !== null, syncing: this.syncing, serverValidated: false,
+    return { ...support, sourceAvailable: data.sourceAvailable === true, sourceHasLogin: typeof data.sourceHasLogin === 'boolean' ? data.sourceHasLogin : null, hasLogin, targetLoginKnown: hasLogin !== null, syncing: this.syncing, serverValidated: false,
       ...(last && ['applied', 'rolled-back', 'failed', 'rollback-failed', 'applying'].includes(last.status) ? { lastSync: { status: last.status, at: typeof last.at === 'string' ? last.at : undefined, message: last.status === 'applied' ? '本机登录资料已同步，打开 Notion 确认会话是否有效。' : last.status === 'rolled-back' ? '同步失败，原有登录资料已恢复。' : messages.apply_failed } } : {}),
-      message: data.sourceLocked ? messages.source_locked : hasLogin ? '已检测到隔离原型的本机登录 Cookie；检测不代表服务器会话仍然有效。' : '可同步原版 Notion 的本机登录；不复制页面数据库或密码，也不向服务器发送登录资料。' };
+      message: !support.syncSupported ? messages.platform_unsupported : data.sourceLocked ? messages.source_locked : hasLogin ? '已检测到隔离原型的本机登录 Cookie；检测不代表服务器会话仍然有效。' : '可同步原版 Notion 的本机登录；不复制页面数据库或密码，也不向服务器发送登录资料。' };
   }
   async sync() {
+    requireLoginSync(this.platform);
     if (this.syncing) throw failure('syncing');
     if (await this.isBusy()) throw failure('busy');
     this.syncing = true;

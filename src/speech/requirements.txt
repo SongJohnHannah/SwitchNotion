@@ -1,0 +1,4 @@
+# Install in a dedicated native Python 3.11 environment, not the system Python.
+# Models and CUDA/cuDNN libraries are prepared separately; runtime never downloads.
+faster-whisper==1.2.1
+ctranslate2==4.8.1

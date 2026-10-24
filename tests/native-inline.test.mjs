@@ -35,6 +35,14 @@ test('the native floating writer entry streams DeepSeek preview text and include
   assert.equal(requested, true); assert.equal(writes, 0); assert.equal(native.status().activeTurns, 0);
 });
 
+test('a container-only selection directs floating text preview to Agent without inventing unavailable content', async () => {
+  let requested = false;
+  const native = new NativeMock({ provider: { status: () => ({ mode: 'deepseek' }), config: () => ({ mode: 'deepseek' }), async* generate() { requested = true; yield 'must not run'; } } });
+  const payload = input(); payload.transcript[2].value.blockSelection.text = '';
+  const response = await native.handle('runInferenceTranscript', payload);
+  const text = await response.text(); assert.equal(requested, false); assert.ok(text.includes('右侧 Agent'));
+});
+
 test('closing or stopping inline preview cancels the provider without applying text', async () => {
   let modelSignal;
   const native = new NativeMock({ provider: { status: () => ({ mode: 'deepseek' }), config: () => ({ mode: 'deepseek' }), async* generate({ signal }) { modelSignal = signal; yield 'partial'; await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true })); signal.throwIfAborted(); } } });

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 const { definitions, writeTools, createSession } = createRequire(import.meta.url)('../src/notion-blocks.cjs');
+const { AgentMock } = createRequire(import.meta.url)('../src/agent-mock.cjs');
 const P = '11111111-1111-4111-8111-111111111111', A = '22222222-2222-4222-8222-222222222222', B = '33333333-3333-4333-8333-333333333333', OTHER = '44444444-4444-4444-8444-444444444444';
 const rich = content => [{ type: 'text', text: { content } }];
 const para = content => ({ type: 'paragraph', paragraph: { rich_text: rich(content) } });
@@ -38,9 +39,10 @@ function fixture(extra = {}) {
       }
       assert.equal(method, 'PATCH');
       const added = body.children.map(input => create(input, id)), ids = children.get(id) || [];
-      const at = body.after ? ids.indexOf(body.after) + 1 : ids.length;
+      const after = body.position?.after_block?.id;
+      const at = after ? ids.indexOf(after) + 1 : ids.length;
       ids.splice(at, 0, ...added.map(item => item.id)); children.set(id, ids);
-      return { object: 'list', results: added, has_more: false, next_cursor: null };
+      return { object: 'list', results: extra.echoFollowing ? ids.slice(at).map(child => structuredClone(blocks.get(child))) : added, has_more: !!extra.echoHasMore, next_cursor: extra.echoHasMore ? 'echo-tail' : null };
     }
     if (method === 'PATCH') {
       for (const [key, value] of Object.entries(body)) {
@@ -103,7 +105,17 @@ test('after insertion only accepts a direct child of the same container', async 
   assert.equal(f.mutations.length, 0);
   const result = await f.session.execute('append_blocks', { block_id: P, after: A, blocks: [para('插入中间')] });
   assert.equal(result.verified, true);
+  assert.deepEqual(f.mutations[0].body.position, { type: 'after_block', after_block: { id: A } });
+  assert.equal('after' in f.mutations[0].body, false);
   assert.deepEqual(f.children.get(P), [A, result.created_block_ids[0], B]);
+});
+
+test('insertion responses may include following existing siblings without counting them as newly created', async () => {
+  const f = fixture({ echoFollowing: true, echoHasMore: true }), existing = structuredClone(f.blocks.get(B));
+  const result = await f.session.execute('append_blocks', { block_id: P, after: A, blocks: [para('真正新增的中间段落')] });
+  assert.equal(result.verified, true); assert.equal(result.created_block_ids.length, 1);
+  assert.deepEqual(f.children.get(P), [A, result.created_block_ids[0], B]);
+  assert.deepEqual(f.blocks.get(B), existing);
 });
 
 test('editing without a read, stale revisions and block type conversion never submit a write', async () => {
@@ -191,4 +203,26 @@ test('authorized references retain their specific resource kinds and repeated me
   ] });
   assert.equal(result.verified, true);
   assert.deepEqual(f.authorizations.filter(item => item.kind !== 'block'), [{ id: A, kind: 'page' }, { id: B, kind: 'database' }]);
+});
+
+test('native table selection with no preview reads rows and updates only the selected table', async () => {
+  const f = fixture(), created = await f.session.execute('append_blocks', { block_id: P, blocks: [{ type: 'table', table: { table_width: 2, has_column_header: false, has_row_header: false, children: [{ type: 'table_row', table_row: { cells: [rich('时间'), rich('09:00–10:00')] } }] } }] });
+  const id = created.created_block_ids[0], preserved = structuredClone(f.blocks.get(A)); let round = 0;
+  const provider = { config: () => ({ mode: 'deepseek', multiAgent: false }), async* generate({ messages, onToolCalls }) {
+    const quote = messages.find(m => { try { return JSON.parse(m.content).source === 'native-user-selection'; } catch { return false; } });
+    assert.equal(JSON.parse(quote.content).value[0].id, id); round++;
+    const call = (name, args) => onToolCalls([{ id: 'table-selection-' + round, type: 'function', function: { name, arguments: JSON.stringify(args) } }]);
+    if (round === 1) call('read_block', { block_id: id });
+    else if (round === 2) call('read_block_children', { block_id: id });
+    else if (round === 3) {
+      const row = JSON.parse(messages.filter(m => m.role === 'tool').at(-1).content).results[0];
+      call('update_block', { block_id: row.id, block_revision: row.block_revision, block: { type: 'table_row', table_row: { cells: [rich('时间'), rich('09:00–09:30')] } } });
+    } else yield 'done';
+  } };
+  const agent = new AgentMock({ provider, workspace: { open: () => ({ definitions, execute: f.session.execute }) } });
+  agent.create({ threadId: 'native-selected-table', spaceId: P, threadContext: { currentBlockId: P, selectionPageId: P, selection: { type: 'blocks', text: '', value: [{ table: 'block', id, spaceId: P }] } }, content: [{ type: 'text', text: '仅将选中表格的时间改为09:00–09:30。' }] });
+  for (let i = 0; agent.status().active && i < 200; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(agent.status().failed, 0); assert.equal(agent.status().active, 0);
+  assert.equal(f.blocks.get(f.children.get(id)[0]).table_row.cells[1][0].text.content, '09:00–09:30');
+  assert.deepEqual(f.blocks.get(A), preserved); assert.equal(f.mutations.length, 2);
 });

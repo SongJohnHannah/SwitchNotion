@@ -2,8 +2,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { spawn } = require('node:child_process');
+const { createDesktopPlatform } = require('./platform/index.cjs');
 class UpdateService {
-  constructor({ root, isBusy = () => false, getCompatibility = () => ({}), onRestart = () => {}, spawnImpl = spawn, load } = {}) {
+  constructor({ root, platform = createDesktopPlatform(), isBusy = () => false, getCompatibility = () => ({}), onRestart = () => {}, spawnImpl = spawn, load } = {}) {
+    this.platform = platform;
     this.root = root; this.isBusy = isBusy; this.getCompatibility = getCompatibility; this.onRestart = onRestart; this.spawnImpl = spawnImpl; this.updating = false;
     this.load = load || (() => import(pathToFileURL(path.join(root, '..', 'scripts', 'runtime-update.mjs')).href));
   }
@@ -12,11 +14,12 @@ class UpdateService {
     try {
       const module = await this.load();
       if (action === 'update.status') {
-        const value = module.updateStatus({ root: this.root }), ui = this.getCompatibility();
+        const value = module.updateStatus({ root: this.root, platform: this.platform }), ui = this.getCompatibility();
         return { ok: true, result: { ...value, openOnStartup: process.env.NOTION_SWITCH_UPDATE_VIEW === '1', clientCompatible: !ui.unsupportedAssets?.length, ...(value.compatible && ui.unsupportedAssets?.length ? { message: 'Notion 网页接入模块已变化，当前适配器暂不支持。客户端版本回退未必能恢复网页 AI，需要兼容此协议的新版 NotionSwitch。' } : {}) } };
       }
+      this.platform.requireCapability('prepareRuntime');
       if (this.updating || this.isBusy()) throw Error('AI 或登录同步正在进行，请等待完成或停止后再更新。');
-      const status = module.updateStatus({ root: this.root });
+      const status = module.updateStatus({ root: this.root, platform: this.platform });
       if (action === 'update.apply' && !status.compatible) throw Error(status.message);
       if (action === 'update.rollback' && !status.previousVersion) throw Error('尚无可恢复的上一个版本。');
       this.updating = true;
@@ -27,8 +30,9 @@ class UpdateService {
     } catch (error) { return { ok: false, error: /(?:sk-|ntn_|secret_)[\w-]{8}/.test(error.message || '') ? '更新未完成，已保留现有原型。' : error.message }; }
   }
   startWorker(mode) {
+    this.platform.requireCapability('prepareRuntime');
     const { nodeExecutable } = JSON.parse(fs.readFileSync(path.join(this.root, 'launcher.local.json'), 'utf8'));
-    if (!path.isAbsolute(nodeExecutable || '') || !/^node(?:\.exe)?$/i.test(path.basename(nodeExecutable)) || !fs.statSync(nodeExecutable).isFile()) throw Error('Node unavailable');
+    if (!this.platform.isNodeExecutable(nodeExecutable)) throw Error('Node unavailable');
     const script = path.resolve(this.root, '..', 'scripts', 'update-helper.mjs');
     return new Promise((resolve, reject) => {
       const child = this.spawnImpl(nodeExecutable, [script, mode, String(process.pid)], { windowsHide: true, detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });

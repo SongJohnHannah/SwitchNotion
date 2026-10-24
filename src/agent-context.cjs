@@ -35,7 +35,7 @@ function reference(result = {}) {
   const data = {};
   for (const [key, value] of Object.entries(result)) {
     if (key === 'same_result_as_tool_call_id') continue;
-    if (/^(?:id|object|.*_id|url|title|name|.*revision|verified|duplicate|changed|error|has_more|next_cursor|next_offset|complete|incomplete|truncated)$/.test(key) && ['string', 'number', 'boolean'].includes(typeof value)) {
+    if (/^(?:id|object|.*_id|url|title|name|.*revision|verified|duplicate|changed|error|write_outcome|api_status|api_code|has_more|next_cursor|next_offset|complete|incomplete|truncated)$/.test(key) && ['string', 'number', 'boolean'].includes(typeof value)) {
       if (['title', 'name', 'error'].includes(key)) data[key] = shorten(value, 250);
       else if (typeof value !== 'string' || value.length <= 8000) data[key] = value;
       else data[key + '_omitted'] = true;
@@ -47,7 +47,7 @@ function reference(result = {}) {
   return data;
 }
 function receipt(name, args, result) {
-  return { name, arguments_hash: digest(args), verified: result.verified === true, uncertain: !!result.error || result.verified !== true,
+  return { name, arguments_hash: digest(args), verified: result.verified === true, uncertain: !['not_submitted', 'rejected'].includes(result.write_outcome) && (!!result.error || result.verified !== true),
     arguments: args, result: reference(result) };
 }
 function publicReceipt(item) {

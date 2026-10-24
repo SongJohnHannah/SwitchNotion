@@ -4,6 +4,7 @@ const { createHash } = require('node:crypto');
 const { setTimeout: sleep } = require('node:timers/promises');
 const capabilities = require('./notion-capabilities.cjs');
 const { createMutator } = require('./notion-mutations.cjs');
+const { apiError, definitelyNotWritten, notSubmitted, uncertain, failureInfo } = require('./notion-errors.cjs');
 const hash = value => createHash('sha256').update(value).digest('hex');
 const pageTitle = page => Object.values(page.properties || {}).filter(p => p.type === 'title').flatMap(p => p.title || []).map(t => t.plain_text || t.text?.content || '').join('');
 const text = (value, name, max = 20000) => {
@@ -76,9 +77,7 @@ class NotionWorkspace {
     try { response = await this.fetchImpl(`https://api.notion.com/v1/${endpoint}`, { method, headers: { authorization: `Bearer ${cfg.key}`, 'Notion-Version': '2026-03-11', 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: combined, redirect: 'error' }); }
     catch (error) { if (signal?.aborted) throw error; const mutation = !['GET', 'HEAD'].includes(method) && endpoint !== 'search' && !endpoint.endsWith('/query'); throw Error(`Notion API 连接失败；${mutation ? '写入结果未确定，必须先读取核对，不能盲目重试。' : '请检查网络后重试。'}`); }
     if (!response.ok) {
-      await response.body?.cancel();
-      const extra = response.status === 429 ? `，请等待 ${response.headers.get('retry-after') || '稍后'} 秒后重试` : response.status === 403 || response.status === 404 ? '，请检查页面授权和连接的读写权限' : '';
-      throw Error(`Notion API 返回 HTTP ${response.status}${extra}。`);
+      throw await apiError(response);
     }
     const raw = await response.text();
     const data = raw.trim() ? JSON.parse(raw) : {};
@@ -87,9 +86,12 @@ class NotionWorkspace {
   }
   open({ operationScope = 'local', signal, config } = {}) {
     const cfg = config || this.config(), seen = new Map(), running = new Set();
-    let writeUncertain = false;
+    let writeUncertain = false, writeAttempts = 0;
     const allowed = new Set(cfg.pageIds || []);
-    const request = (method, endpoint, body) => this.request(cfg, method, endpoint, body, signal);
+    const request = (method, endpoint, body) => {
+      if (!['GET', 'HEAD'].includes(method) && endpoint !== 'search' && !endpoint.endsWith('/query')) writeAttempts++;
+      return this.request(cfg, method, endpoint, body, signal);
+    };
     const authorize = async (value, kind = 'page') => {
       const id = pageId(value);
       if (!cfg.pageIds?.length || allowed.has(id)) return id;
@@ -187,14 +189,17 @@ class NotionWorkspace {
       if (fs.existsSync(recordFile)) {
         const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
         if (record.status === 'verified') return { ...record.result, duplicate: true };
+        if (record.status === 'rejected') throw notSubmitted(Error('Notion 此前同一请求已被拒绝，请修正参数后再提交。'));
         throw Error('此前同一写入的结果未确定，请先读取页面核对；不能自动重复提交。');
       }
       running.add(id);
       fs.writeFileSync(recordFile, JSON.stringify({ status: 'pending', workspace_id: cfg.workspaceId, page_id: id, name, before: before.markdown, before_revision: before.revision, intended: args, startedAt: new Date().toISOString() }), { mode: 0o600 });
       this.log({ type: 'notion-write-started', operation: name });
+      let submitted = false;
       try {
         // Never automatically retry a write, even after timeout or cancellation.
-        const updated = await this.request(cfg, 'PATCH', `pages/${id}/markdown`, body, signal);
+        const updated = await request('PATCH', `pages/${id}/markdown`, body);
+        submitted = true;
         const after = await getMarkdown(id);
         const target = expected.trim();
         const count = source => source.split(target).length - 1;
@@ -208,10 +213,25 @@ class NotionWorkspace {
         if (verified) this.verifiedWrites++;
         this.log({ type: 'notion-write-ended', operation: name, verified });
         return result;
-      } catch (error) { writeUncertain = true; this.log({ type: 'notion-write-uncertain', operation: name }); throw error; }
+      } catch (error) {
+        const rejected = !submitted && definitelyNotWritten(error);
+        if (!rejected) { writeUncertain = true; uncertain(error); }
+        const record = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+        fs.writeFileSync(recordFile, JSON.stringify({ ...record, status: rejected ? 'rejected' : 'uncertain', error: failureInfo(error), finishedAt: new Date().toISOString() }));
+        this.log({ type: rejected ? 'notion-write-rejected' : 'notion-write-uncertain', operation: name }); throw error;
+      }
       finally { running.delete(id); }
     };
-    return { definitions: !cfg.enabled || !cfg.key ? [] : definitions.filter(d => !cfg.readOnly || !capabilities.writeTools.has(d.function.name)), execute };
+    return { definitions: !cfg.enabled || !cfg.key ? [] : definitions.filter(d => !cfg.readOnly || !capabilities.writeTools.has(d.function.name)), execute: async (name, args) => {
+      const attemptsBefore = writeAttempts;
+      try { return await execute(name, args); }
+      catch (error) {
+        if (capabilities.writeTools.has(name) || ['append_page', 'replace_page_text'].includes(name)) {
+          if (writeAttempts === attemptsBefore) notSubmitted(error); else if (!error.writeOutcome) uncertain(error);
+        }
+        throw error;
+      }
+    } };
   }
 }
 module.exports = { NotionWorkspace, pageId, pageTitle, definitions };

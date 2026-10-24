@@ -1,18 +1,19 @@
 import path from 'node:path';
 import vm from 'node:vm';
 import { readArchive, sha256 } from './asar.mjs';
+import windowsModule from '../src/platform/windows.cjs';
+import platformModule from '../src/platform/index.cjs';
 
-export const reviewedBuilds = Object.freeze({
-  '7.40.0': 'afb4684fa08d12d7ccd3c89e2ad195de7047859d437e721689a5cbfc69403549',
-  '7.40.1': '36cc65c5d17811f6bbe90aa0444be3f3f267f3151ea59988411e8f94dba9ff73'
-});
+export const reviewedBuilds = windowsModule.reviewedBuilds;
 export function assertReviewedBuild(version, hash) {
   if (!reviewedBuilds[version] || reviewedBuilds[version] !== hash) throw Error('Unreviewed Notion build.');
 }
-export function inspectDesktop(original) {
+export function inspectDesktop(original, policy = platformModule.createDesktopPlatform().compatibility) {
+  if (!policy.enabled) throw Error('此平台的 Notion 安装校验尚未审核，保留现有运行文件。');
+  const reviewed = policy.reviewedBuilds;
   const hash = sha256(original), archive = readArchive(original), pkg = JSON.parse(archive.read('package.json'));
-  if (reviewedBuilds[pkg.version] && reviewedBuilds[pkg.version] !== hash) throw Error('已识别版本的安装文件校验不一致，保留现有原型。');
-  if (pkg.name !== 'Notion' || pkg.productName !== 'Notion' || !/^7\.\d+\.\d+$/.test(pkg.version || '')) throw Error('Notion 主版本或安装结构已变化，保留现有原型。');
+  if (reviewed[pkg.version] && reviewed[pkg.version] !== hash) throw Error('已识别版本的安装文件校验不一致，保留现有原型。');
+  if (pkg.name !== 'Notion' || pkg.productName !== 'Notion' || !policy.versionPattern.test(pkg.version || '')) throw Error('Notion 主版本或安装结构已变化，保留现有原型。');
   const main = pkg.main?.replaceAll('\\', '/').replace(/^\.\//, '');
   if (!main || path.posix.isAbsolute(main) || main.split('/').includes('..') || !main.startsWith('.webpack/main')) throw Error('Notion 启动入口已变化，保留现有原型。');
   const entry = [main, main + '.js', main + '/index.js'].find(name => archive.entry(name)?.size && !archive.entry(name).files);
@@ -23,7 +24,7 @@ export function inspectDesktop(original) {
   for (const token of ['"electron"', 'session-created', 'web-contents-created', 'protocol.handle', 'session.fromPartition', 'whenReady', 'notion.com']) {
     if (!source.includes(token)) throw Error('Notion 所需接入点已变化，保留现有原型。');
   }
-  if (!/^44\./.test(pkg.devDependencies?.electron || '')) throw Error('Notion Electron 主版本已变化，保留现有原型。');
+  if (!policy.electronPattern.test(pkg.devDependencies?.electron || '')) throw Error('Notion Electron 主版本已变化，保留现有原型。');
   new vm.Script(source, { filename: entry });
-  return { version: pkg.version, hash, entry, compatibility: reviewedBuilds[pkg.version] ? 'reviewed' : 'structural' };
+  return { version: pkg.version, hash, entry, compatibility: reviewed[pkg.version] ? 'reviewed' : 'structural' };
 }

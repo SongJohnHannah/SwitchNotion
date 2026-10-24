@@ -1,12 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { prepare, runtime, stateRoot } from './prepare-desktop.mjs';
 import { acceptRuntime, rollbackRuntime } from './runtime-update.mjs';
 import { waitForRuntime } from './runtime-health.mjs';
 import { launchLock } from './launch-lock.mjs';
+import platformModule from '../src/platform/index.cjs';
 
+const platform = platformModule.createDesktopPlatform();
+platform.requireCapability('launchRuntime');
 const control = path.join(stateRoot, 'control.json');
 fs.mkdirSync(stateRoot, { recursive: true });
 const releaseLaunch = launchLock(stateRoot); process.once('exit', releaseLaunch);
@@ -23,9 +25,8 @@ console.log(JSON.stringify(prepared));
 function launch() {
  const stdout = fs.openSync(path.join(stateRoot, 'desktop-stdout.log'), 'a');
  const stderr = fs.openSync(path.join(stateRoot, 'desktop-stderr.log'), 'a');
- const child = spawn(path.join(runtime, 'Notion.exe'), ['--enable-logging=stderr'], {
-  cwd: runtime, detached: true, windowsHide: true,
-  env: { ...process.env, NOTION_SWITCH_ROOT: stateRoot, ...(['blocked', 'held'].includes(prepared.updateStatus) ? { NOTION_SWITCH_OPEN_SETTINGS: '1', NOTION_SWITCH_UPDATE_VIEW: '1' } : {}) },
+ const child = platform.launchRuntime({ container: runtime, stateRoot,
+  env: { ...process.env, ...(['blocked', 'held'].includes(prepared.updateStatus) ? { NOTION_SWITCH_OPEN_SETTINGS: '1', NOTION_SWITCH_UPDATE_VIEW: '1' } : {}) },
   stdio: ['ignore', stdout, stderr],
  });
  fs.closeSync(stdout); fs.closeSync(stderr);

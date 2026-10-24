@@ -2,9 +2,34 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 const { createSession, definitions, writeTools } = createRequire(import.meta.url)('../src/notion-databases.cjs');
+const { AgentMock } = createRequire(import.meta.url)('../src/agent-mock.cjs');
 const PARENT = '11111111-1111-4111-8111-111111111111', DB = '22222222-2222-4222-8222-222222222222', SOURCE = '33333333-3333-4333-8333-333333333333', ENTRY = '44444444-4444-4444-8444-444444444444', OTHER = '55555555-5555-4555-8555-555555555555';
 const clone = value => structuredClone(value);
 const spans = content => [{ type: 'text', plain_text: content, text: { content } }];
+for (const kind of ['database', 'record']) test('native ' + kind + ' selection without a preview reads fields before updating only the authorized record', async () => {
+  const f = fixture(), session = f.session();
+  await session.execute('create_database_entry', { data_source_id: SOURCE, properties: { '词汇': '合成词', '解释': '原始解释' } });
+  const other = { ...clone(f.pages.get(ENTRY)), id: OTHER }; f.pages.set(OTHER, other);
+  const baseline = clone(other), baselineWrites = f.mutations.length; let round = 0;
+  const provider = { config: () => ({ mode: 'deepseek', multiAgent: false }), async* generate({ messages, onToolCalls }) {
+    const quote = messages.find(m => { try { return JSON.parse(m.content).source === 'native-user-selection'; } catch { return false; } });
+    const selected = JSON.parse(quote.content); assert.equal(selected.preview_available, false);
+    const id = selected.value[0].id; round++;
+    const call = (name, args) => onToolCalls([{ id: 'db-selection-' + round, type: 'function', function: { name, arguments: JSON.stringify(args) } }]);
+    if (round === 1) call(kind === 'database' ? 'read_database' : 'read_database_entry', kind === 'database' ? { database_id: id } : { page_id: id });
+    else if (round === 2 && kind === 'database') call('query_database', { data_source_id: JSON.parse(messages.filter(m => m.role === 'tool').at(-1).content).data_source_id });
+    else if (round === (kind === 'database' ? 3 : 2)) {
+      const read = JSON.parse(messages.filter(m => m.role === 'tool').at(-1).content), row = read.results?.find(r => r.page_id === ENTRY) || read;
+      call('update_database_entry', { page_id: row.page_id, property_revision: row.property_revision, properties: { '解释': '核对后的解释' } });
+    } else yield 'done';
+  } };
+  const agent = new AgentMock({ provider, workspace: { open: () => ({ definitions, execute: session.execute }) } });
+  agent.create({ threadId: 'db-selection-' + kind, spaceId: PARENT, threadContext: { currentBlockId: PARENT, selectionPageId: PARENT, selection: { type: 'blocks', text: '', value: [{ table: 'block', id: kind === 'database' ? DB : ENTRY, spaceId: PARENT }] } }, content: [{ type: 'text', text: '仅将合成词记录的解释改为“核对后的解释”，其他记录保持原样。' }] });
+  for (let i = 0; agent.status().active && i < 200; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(agent.status().failed, 0); assert.equal(agent.status().active, 0);
+  assert.equal(f.pages.get(ENTRY).properties['解释'].rich_text[0].text.content, '核对后的解释');
+  assert.deepEqual(f.pages.get(OTHER), baseline); assert.equal(f.mutations.length, baselineWrites + 1);
+});
 function fixture() {
   const sources = new Map(), databases = new Map(), pages = new Map(), propertyResponses = new Map(), calls = [], mutations = [], authorized = [], denied = new Set();
   const normalizeProperties = properties => Object.fromEntries(Object.entries(properties).map(([name, field], index) => { const type = field.type || Object.keys(field)[0]; return [name, { id: type === 'title' ? 'title' : 'field-' + index, name, type, [type]: clone(field[type]) }]; }));
