@@ -1,5 +1,5 @@
-// Pausing also requests an automatic summary. Offline transcription deliberately
-// does not send the meeting to a cloud model; a skipped summary is not HTTP 503.
+// Used when the user disables automatic DeepSeek summaries. A deliberately
+// skipped summary must not turn a successfully drained recording into HTTP 503.
 function isMeetingSummary(endpoint, input) {
   return endpoint === 'runMeetingNotesAgent' || endpoint === 'runInferenceTranscript' &&
     Array.isArray(input?.transcript) && input.transcript.some(step => step?.type === 'config' && step.value?.type === 'summarize-transcript');

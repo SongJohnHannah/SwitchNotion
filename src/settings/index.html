@@ -56,6 +56,7 @@
           <p id="speech-description" class="field-help">点击“检测并准备”；缺少组件时自动下载到本地。首次模型约 1.5 GB，Windows GPU 还需额外运行库。</p>
           <p class="field-help">Windows 使用 NVIDIA GPU；M1 等 Apple Silicon Mac 的独立转写模块使用 CPU，Mac 原生 Notion 接入仍待实机验证。语音按短片段识别；DeepSeek 总结需要联网。</p>
           <label class="check-label"><input id="speech-enabled" type="checkbox"> 启用原生速记的离线转写</label><p id="speech-native-state" class="field-help">正在检查原生界面适配状态…</p>
+            <label class="check-label"><input id="speech-summary" type="checkbox" checked> 停止录音后用 DeepSeek 自动生成摘要</label><p class="field-help">开启后会将转录文字和手写笔记发送给 DeepSeek，摘要需要联网；原始音频在本机转写。关闭后只转录，不自动生成摘要。</p>
           <div class="form-actions"><button id="prepare-speech" class="button primary">检测并准备</button><button id="test-speech" class="button secondary">录音测试</button><button id="release-speech" class="button secondary">释放资源</button><button id="save-speech" class="button secondary">保存设置</button></div>
           <div id="speech-result" class="inline-result" role="status" hidden></div>
           <pre id="speech-transcript" class="inline-result" hidden></pre>

@@ -115,7 +115,7 @@ async function checkSpeech() {
   const s = response.result;
   $('speech-backend').textContent = `${s.engineName} · ${s.modelName} · ${s.hardwareLabel} · ${s.computeType}`;
   $('speech-status').textContent = !s.supported ? '系统暂不支持' : s.ready ? '离线引擎就绪' : s.configured ? '已配置' : '尚未准备';
-  if (!speechDirty) { $('speech-enabled').checked = s.enabled; $('speech-model').value = s.model || 'medium'; }
+  if (!speechDirty) { $('speech-enabled').checked = s.enabled; $('speech-model').value = s.model || 'medium'; $('speech-summary').checked = s.autoSummary !== false; }
   if (s.preparing && s.progress?.message) {
     const percentage = s.progress.total ? ` ${Math.min(100, Math.floor(s.progress.received / s.progress.total * 100))}%` : '';
     result('speech-result', s.progress.message + percentage);
@@ -142,7 +142,7 @@ speechRecorder = new window.SpeechRecorder(api, value => {
 $('test-speech').addEventListener('click', () => { if (speechRecorder.state === 'recording') speechRecorder.stop(); else if (speechRecorder.state === 'idle' && !busy) void speechRecorder.start(); });
 window.addEventListener('pagehide', () => { clearInterval(speechPoll); void speechRecorder.cancel(); });
 $('release-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.releaseSpeech(); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); await checkSpeech(); }));
-for (const id of ['speech-model', 'speech-enabled']) $(id).addEventListener('change', () => { speechDirty = true; });
-$('save-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.saveSpeech({ enabled: $('speech-enabled').checked, model: $('speech-model').value }); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) speechDirty = false; await checkSpeech(); }));
+for (const id of ['speech-model', 'speech-enabled', 'speech-summary']) $(id).addEventListener('change', () => { speechDirty = true; });
+$('save-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.saveSpeech({ enabled: $('speech-enabled').checked, model: $('speech-model').value, autoSummary: $('speech-summary').checked }); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) speechDirty = false; await checkSpeech(); }));
 if (!api) result('load-error', '请通过“NotionSwitch 配置”快捷方式打开此窗口。', true);
 else load().then(async () => { const r = await api.updateStatus(); if (r.ok && r.result.openOnStartup) document.querySelector('[data-view="updates"]').click(); }).catch(() => result('load-error', '配置暂时无法加载，请关闭窗口后重新打开。', true));

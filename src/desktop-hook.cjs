@@ -13,6 +13,9 @@ const { setupSettings, isSettings } = require('./settings-window.cjs');
 const { createNativeImageAdapter, describeUploadResponse } = require('./native-images.cjs');
 const { NativeSpeech, loopbackCsp } = require('./speech/native.cjs');
 const { isMeetingSummary, offlineSummaryResponse } = require('./speech/summary.cjs');
+const { MeetingNativeBridge } = require('./meeting-summary-native.cjs');
+const { MeetingSummaryService } = require('./meeting-summary.cjs');
+const { uuid } = require('./native-context.cjs');
 const platform = require('./platform/index.cjs').createDesktopPlatform();
 
 const root = process.env.NOTION_SWITCH_ROOT;
@@ -30,9 +33,12 @@ app.removeAsDefaultProtocolClient = () => false;
 platform.configureAppIdentity(app);
 
 const provider = new ProviderRouter({ root });
+const meetingBridge = new MeetingNativeBridge();
+const meetingSummaries = new MeetingSummaryService({ root, provider, log,
+  storeFactory: (info, meta) => meta.store || meetingBridge.forRequest(meta.request, meta.session, info.spaceId) });
 const workspace = new NotionRouter({ root, log });
 const mock = new NativeMock({ log, stateFile: path.join(root, 'conversations.local.json'), provider, workspace });
-const settings = setupSettings({ root, platform, isBusy: () => mock.status().activeTurns > 0, getCompatibility: () => compatibility });
+const settings = setupSettings({ root, platform, isBusy: () => mock.status().activeTurns > 0 || meetingSummaries.active > 0, getCompatibility: () => compatibility });
 const nativeSpeech = new NativeSpeech({ speech: settings.speech, log }); settings.speech.native = nativeSpeech;
 const installed = new WeakSet();
 const cacheReady = new WeakMap();
@@ -41,6 +47,7 @@ const endpoints = new Set(['runInferenceTranscript', 'createAgentThread', 'creat
 function isNotion(hostname) { return hostname === 'notion.so' || hostname.endsWith('.notion.so') || hostname === 'notion.com' || hostname.endsWith('.notion.com'); }
 async function route(request, passthrough, ses) {
   const url = new URL(request.url), endpoint = url.pathname.match(/\/api\/v\d+\/([^/]+)/)?.[1] || url.pathname.split('/').pop();
+  meetingBridge.observe(request, ses);
   const upstream = passthrough;
   passthrough = async req => {
     let response = await upstream(req);
@@ -61,8 +68,9 @@ async function route(request, passthrough, ses) {
     catch (error) { return json({ message: error.message, status: 503 }, 503); }
   }
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && settings.speech.enabled && ['runMeetingNotesAgent', 'runInferenceTranscript'].includes(endpoint)) {
-    const input = endpoint === 'runMeetingNotesAgent' ? null : await request.clone().json();
-    if (isMeetingSummary(endpoint, input)) return offlineSummaryResponse(endpoint, log);
+    const input = await request.clone().json();
+    if (isMeetingSummary(endpoint, input)) return settings.speech.autoSummary === false ? offlineSummaryResponse(endpoint, log) :
+      meetingSummaries.handle(endpoint, input, request.signal, { request, session: ses });
   }
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && endpoint === 'getAvailableModels' && provider.status().mode === 'deepseek') {
     const input = await request.clone().json();
@@ -192,7 +200,37 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/status' && req.method === 'GET') {
     const state = mock.status(), speechBusy = settings.speech.provider.leases > 0 || settings.speech.provider.status().busy;
     res.end(JSON.stringify({ pid: process.pid, appReady: app.isReady(), windows: BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), minimized: win.isMinimized(), destroyed: win.isDestroyed() })), ...state,
-      activeTurns: state.activeTurns + (speechBusy ? 1 : 0), compatibility, notion: workspace.status(), settings: settings.status(), speech: { ...settings.speech.status(), native: nativeSpeech.status() } }));
+      activeTurns: state.activeTurns + (speechBusy ? 1 : 0) + meetingSummaries.active, meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
+      compatibility, notion: workspace.status(), settings: settings.status(), speech: { ...settings.speech.status(), native: nativeSpeech.status() } }));
+  }
+  else if (['/meetings/inspect', '/meetings/summarize'].includes(req.url) && req.method === 'POST') {
+    const abort = new AbortController(); res.on('close', () => { if (!res.writableEnded) abort.abort(); });
+    let counted = false;
+    try {
+      let text = ''; for await (const chunk of req) { text += chunk; if (text.length > 4096) throw Error('会议操作参数过长。'); }
+      const input = JSON.parse(text), pageId = uuid(input.pageId);
+      if (!pageId || input.summaryTabId !== undefined && !uuid(input.summaryTabId) || Object.keys(input).some(k => !['pageId', 'meetingId', 'summaryTabId'].includes(k))) throw Error('请提供有效的会议页面链接。');
+      const store = await meetingBridge.forPage(pageId, abort.signal), ids = await store.findMeetings(pageId, abort.signal);
+      if (req.url === '/meetings/inspect') {
+        const meetings = [];
+        for (const id of ids.slice(0, 20)) {
+          const snapshot = await store.load(id, abort.signal), pending = [];
+          for (const job of meetingSummaries.jobs.values()) if (job.scope === `${store.spaceId}:${id}` && ['submitted', 'uncertain'].includes(job.status)) {
+            const records = await store.records(job.plan.blocks.map(b => b.id), abort.signal);
+            pending.push({ key: job.key, existingPlannedRecords: records.size, linked: snapshot.meeting.format?.transcription_summary_id === job.plan.tabId });
+          }
+          meetings.push({ meetingId: id, hasSummary: !!snapshot.meeting.format?.transcription_summary_id, notesChars: snapshot.notes.length, transcriptChars: snapshot.transcript.length, pending });
+        }
+        res.end(JSON.stringify({ workspaceId: store.spaceId, meetings }));
+      } else {
+        const meetingId = input.meetingId ? uuid(input.meetingId) : ids.length === 1 ? ids[0] : null;
+        if (!meetingId || !ids.includes(meetingId)) throw Error('页面中有多个会议，请指定其中一场会议后再生成。');
+        meetingSummaries.active++; counted = true;
+        const result = await meetingSummaries.run({ spaceId: store.spaceId, meetingId, tabId: uuid(input.summaryTabId) || crypto.randomUUID(), language: 'auto', template: 'auto' }, abort.signal, { store });
+        res.end(JSON.stringify({ verified: result.ok, reused: !!result.reused, summaryTabId: result.tabId, recordCount: Object.keys(result.recordMap.block || {}).length }));
+      }
+    } catch (error) { res.writeHead(400).end(JSON.stringify({ error: /^(?:会议|此前会议|该摘要|当前|页面|同一摘要|生成|无法读取|所选|暂不支持|请先|请提供|DeepSeek)/.test(error.message || '') ? error.message : '会议笔记操作未完成，请在原型中打开该页面后重试。' })); }
+    finally { if (counted) meetingSummaries.active--; }
   }
   else if (req.url === '/updates/status' && req.method === 'GET') res.end(JSON.stringify(await settings.updateStatus()));
   else if (req.url === '/settings/open' && req.method === 'POST') {
@@ -211,5 +249,5 @@ server.listen(0, '127.0.0.1', () => {
   log({ type: 'control-ready', mode: provider.status().mode });
 });
 app.whenReady().then(() => { install(session.defaultSession); log({ type: 'native-app-ready', electron: process.versions.electron }); });
-app.on('will-quit', () => { nativeSpeech.close(); server.close(); log({ type: 'prototype-quit' }); });
+app.on('will-quit', () => { meetingSummaries.close(); nativeSpeech.close(); server.close(); log({ type: 'prototype-quit' }); });
 log({ type: 'hook-loaded', originalStartupContinues: true });

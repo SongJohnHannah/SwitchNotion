@@ -103,7 +103,7 @@ Windows 迁移包构建产物保存在 `dist/`，不创建桌面文件。配置�
 
 本机聊天记录不会同步到 Notion 云端或其他设备。目前仅接入 DeepSeek。
 
-Windows 新增本机 faster-whisper Medium / NVIDIA GPU 离线转写适配，在配置的“离线语音”中检测现有组件并测试 WAV。原生速记连接、尾段处理和去重已实现并通过协议测试，麦克风控件的实录体验仍待验收；这是按短片段更新的识别，并非逐字实时流式。音频不发送给云端识别，写入 Notion 的文字仍按 Notion 自身规则同步。离线模式不自动调用云端会议总结，需要时可在既有侧栏 Agent 手动要求 DeepSeek 总结页面。转写模块已独立封装：Windows 使用 CUDA FP16，M1 等 Apple Silicon Mac 使用 CPU INT8；M1 和完整 Mac Notion 桌面版尚未实机验收。`npm run package:speech` 可导出不包含模型、运行环境或用户资料的独立模块。详见 [跨平台转写接口](docs/SPEECH-INTERFACE.md) 和 [原生速记适配](docs/OFFLINE-SPEECH.md)。
+配置的“离线语音”支持 Medium / Large-v3 Turbo 模型选择、缺失组件自动下载和直接麦克风录音测试。Windows 使用 NVIDIA CUDA FP16，M1 等 Apple Silicon Mac 使用 CPU INT8；M1 和完整 Mac Notion 桌面版尚未实机验收。原生录音按片段离线识别，支持尾段收尾和去重。停止后默认把转录文字与手写笔记交给 DeepSeek，生成原生“摘要”标签并读回核验；原转录、手写笔记保留。可在配置关闭自动摘要，仅使用本机转写。`npm run package:speech` 可导出不包含模型、运行环境或用户资料的独立转写模块。详见 [跨平台转写接口](docs/SPEECH-INTERFACE.md)、[原生速记适配](docs/OFFLINE-SPEECH.md) 和 [摘要接口](docs/MEETING-SUMMARY-INTERFACE.md)。
 
 ## 许可证
 

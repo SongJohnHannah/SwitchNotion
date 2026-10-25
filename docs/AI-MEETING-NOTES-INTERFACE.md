@@ -1,6 +1,6 @@
 # Notion 原生 AI 速记接口调查
 
-检查日期：2026-10-24。依据本项目缓存及本次下载的 Notion 官方公开前端资源进行静态分析。未执行下载代码，未启动录音，未取得音频令牌，未上传音频或修改页面；以下不是一次实录抓包结果。
+原始调查日期：2026-10-24，下面的协议调查基于 Notion 官方公开前端资源，不是一次实录抓包结果。2026-10-25 已实现本机转写与 DeepSeek 原生摘要写回，并在 Windows 上完成一次真实摘要生成与服务器读回；当前实现见 [离线语音](OFFLINE-SPEECH.md) 和 [摘要接口](MEETING-SUMMARY-INTERFACE.md)。
 
 ## 结论
 
@@ -41,7 +41,7 @@ wss://audioprocessor.app.notion.com/primus-v8?...会话参数...
 
 ## 对 NotionSwitch 的影响
 
-现有接管主要覆盖侧栏 Agent 和浮动文字编辑。`runInferenceTranscript` 当前仅对 writer 分支使用 DeepSeek，尚未实现 `summarize-transcript`；`runMeetingNotesAgent` 和 AudioProcessor 也尚未接入。
+原始调查时，接管主要覆盖侧栏 Agent 和浮动文字编辑。目前 AudioProcessor 已接入本机识别，`runMeetingNotesAgent` 与 `runInferenceTranscript/summarize-transcript` 已接入 DeepSeek 摘要。原生“笔记”是手写区域；AI 生成后新增“摘要”标签，而不是覆盖手写笔记或转录。
 
 保留原生速记界面的替代实现需要独立适配：音频采集 → 自选语音识别 → 原生转写事件和记录 → DeepSeek 会议总结 → 摘要记录写回。录音、停止收尾、会话取消、说话人信息及写入核验均需验证，不能仅替换一个模型地址就宣称支持。
 
