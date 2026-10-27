@@ -5,9 +5,10 @@ import path from 'node:path';
 import { inflateRawSync } from 'node:zlib';
 import { stageMac } from '../scripts/package-macos.mjs';
 import { zipDirectory } from '../scripts/portable-zip.mjs';
+import { verifyPackagedImagePreview } from './helpers/packaged-image-preview.mjs';
 const project = path.resolve(import.meta.dirname, '..');
 
-test('Mac package is relocatable, reuses Notion icon and preserves double-click executable bits without bundling private data', t => {
+test('Mac package is relocatable, reuses Notion icon and preserves double-click executable bits without bundling private data', async t => {
   const dist = path.join(project, 'dist'); fs.mkdirSync(dist, { recursive: true });
   const base = fs.mkdtempSync(path.join(dist, 'test-mac-package-'));
   t.after(() => { assert.equal(path.dirname(base), dist); fs.rmSync(base, { recursive: true, force: true }); });
@@ -26,6 +27,7 @@ test('Mac package is relocatable, reuses Notion icon and preserves double-click 
   assert.ok(entry.includes('../Resources/project')); assert.ok(entry.includes('$HOME/Library/Application Support/Switch Notion'));
   assert.ok(!entry.includes(project));
   assert.deepEqual(fs.readFileSync(path.join(result.app, 'Contents/Resources/project/src/runtime-bootstrap.cjs')), fs.readFileSync(path.join(project, 'src/runtime-bootstrap.cjs')));
+  await verifyPackagedImagePreview(path.join(result.app, 'Contents/Resources/project/src'), path.join(base, 'Mac 用户资料', 'Application Support', 'Switch Notion'));
   const archive = path.join(base, 'mac.zip'); zipDirectory({ directory: result.directory, output: archive });
   const bytes = fs.readFileSync(archive), end = bytes.length - 22, start = bytes.readUInt32LE(end + 16), count = bytes.readUInt16LE(end + 10);
   let at = start; const modes = new Map();

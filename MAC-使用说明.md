@@ -34,6 +34,10 @@
 
 不要把 Windows 的 `.notion-switch/` 直接复制到 Mac。API Key 在新电脑的配置窗口重新填写；M1 的 Python、语音依赖也需使用本机 ARM64 版本。
 
+## 图片聊天
+
+选择 DeepSeek Flash 后，可从原生输入框上传 PNG、JPEG、GIF 或 WebP 图片。发送后，图片保留在聊天记录中，可查看缩略图和打开预览；升级前已保存的图片消息也会恢复展示。图片文件保存在上述本机资料目录的 `image-attachments` 中，应用包移动后仍从原资料位置读取。Mac 与 Windows 使用同一套图片逻辑，两种分发包均有上传、预览和重启读取测试。
+
 ## 离线语音
 
 M1 使用 faster-whisper Medium / CPU INT8，尚未开启 Apple GPU 加速。下载 Node 和使用 DeepSeek、加载及同步 Notion 页面需要网络；离线语音识别本身不联网。语音模型及 Python 不包含在桌面启动包中，接入准备见项目 `docs/SPEECH-INTERFACE.md`。

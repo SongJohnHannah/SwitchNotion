@@ -46,7 +46,7 @@ class LocalImageUploads {
     return new Response(null, { status: 200 });
   }
   hasPending(id) { return this.pending.has(id); }
-  hasFile(id) { return !!uuid(id) && fs.existsSync(path.join(this.directory, id + '.json')); }
+  hasFile(id) { const fileId = uuid(id); return !!fileId && fs.existsSync(path.join(this.directory, fileId + '.json')); }
   complete(input, userId) {
     const item = this.pending.get(input.fileId);
     if (!item || !item.data || Date.now() - item.created > 30 * 60 * 1000 || item.userId !== userId || item.spaceId !== input.spaceId ||
@@ -63,7 +63,8 @@ class LocalImageUploads {
     return { id: item.id, filename: item.filename, media_type: item.mediaType, size_bytes: item.sizeBytes, sha256: hash };
   }
   read({ fileId, spaceId, threadId, userId }) {
-    if (!uuid(fileId)) return null;
+    // Use one disk name on case-sensitive Mac volumes and Windows alike.
+    fileId = uuid(fileId); if (!fileId) return null;
     const base = path.join(this.directory, fileId); let meta;
     try { meta = JSON.parse(fs.readFileSync(base + '.json', 'utf8')); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     if (!this.owns({ threadId }) || this.record(threadId)?.space_id !== spaceId || meta.spaceId !== spaceId || meta.userId !== userId || meta.threadId && meta.threadId !== threadId) throw Error('图片附件不属于当前对话。');
@@ -74,9 +75,9 @@ class LocalImageUploads {
     return data;
   }
   resolve(input, userId, origin) {
-    const scope = { fileId: input.fileId, spaceId: input.spaceId, threadId: input.threadId, userId };
+    const scope = { fileId: uuid(input.fileId), spaceId: input.spaceId, threadId: input.threadId, userId };
     if (!this.read(scope)) throw Error('图片附件不存在。');
-    const meta = JSON.parse(fs.readFileSync(path.join(this.directory, input.fileId + '.json'), 'utf8'));
+    const meta = JSON.parse(fs.readFileSync(path.join(this.directory, scope.fileId + '.json'), 'utf8'));
     for (const [token, item] of this.previews) if (item.expires < Date.now()) this.previews.delete(token);
     if (this.previews.size >= 256) this.previews.delete(this.previews.keys().next().value);
     const token = randomBytes(32).toString('hex');

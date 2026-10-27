@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { stageWindows } from '../scripts/package-windows.mjs';
-test('the portable package uses an allowlist, carries its runtime and licenses, and excludes private state and Notion binaries', t => {
+import { verifyPackagedImagePreview } from './helpers/packaged-image-preview.mjs';
+test('the portable package uses an allowlist, carries its runtime and licenses, and excludes private state and Notion binaries', async t => {
   const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-package-')), project = path.join(root, 'project');
   fs.mkdirSync(project); t.after(() => { assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
   for (const folder of ['src', 'scripts']) fs.cpSync(path.resolve(folder), path.join(project, folder), { recursive: true });
@@ -19,5 +20,6 @@ test('the portable package uses an allowlist, carries its runtime and licenses, 
   assert.equal(manifest.requiresOfficialNotion, true); assert.equal(manifest.includesUserData, false); assert.equal(manifest.license, 'MIT');
   assert.ok(manifest.files.some(item => item.file === 'NotionSwitch.exe'));
   assert.equal(manifest.files.some(item => /Notion\.exe|private\.txt|deepseek-api-key\.txt/.test(item.file)), false);
+  await verifyPackagedImagePreview(path.join(destination, 'src'), path.join(root, 'Windows 用户资料', 'image state'));
   assert.throws(() => stageWindows({ sourceProject: project, destination: path.join(root, 'outside') }), /dist/);
 });

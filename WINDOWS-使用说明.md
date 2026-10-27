@@ -23,6 +23,10 @@
 
 所有运行资料保存在解压目录的 `.notion-switch` 中。不要把该目录当成干净安装包公开发送。跨电脑搬运 Cookie 不受支持，请在新电脑重新登录。
 
+## 图片聊天
+
+选择 DeepSeek Flash 后，可从原生输入框上传 PNG、JPEG、GIF 或 WebP 图片。发送后，图片保留在聊天记录中，可查看缩略图和打开预览；升级前已保存的图片消息也会恢复展示。图片文件保存在本机资料目录的 `image-attachments` 中，与 Mac 使用同一套展示和读取逻辑。Windows 分发包已通过上传、预览和重启读取的自动测试，桌面界面仍需 Windows 实机复核。
+
 ## 许可
 
 NotionSwitch 自写代码采用 `LICENSE` 中的 MIT 许可证。第三方组件及 Notion 客户端不由该许可证重新授权；见 `THIRD-PARTY-NOTICES.md`。Node.js 的完整许可位于 `licenses/NODE-LICENSE.txt`。
