@@ -43,6 +43,16 @@ test('a container-only selection directs floating text preview to Agent without 
   const text = await response.text(); assert.equal(requested, false); assert.ok(text.includes('右侧 Agent'));
 });
 
+test('floating writer never silently drops additional page or file references', async () => {
+  let requested = false;
+  const native = new NativeMock({ provider: { status: () => ({ mode: 'deepseek' }), config: () => ({}), async* generate() { requested = true; yield 'bad'; } } });
+  for (const pointers of [[{ table: 'block', id: BLOCK, spaceId: SPACE }], 'invalid']) {
+    const payload = input(); payload.transcript[2].value.pointers = pointers;
+    const response = await native.handle('runInferenceTranscript', payload);
+    assert.ok((await response.text()).includes('右侧 Agent')); assert.equal(requested, false);
+  }
+});
+
 test('closing or stopping inline preview cancels the provider without applying text', async () => {
   let modelSignal;
   const native = new NativeMock({ provider: { status: () => ({ mode: 'deepseek' }), config: () => ({ mode: 'deepseek' }), async* generate({ signal }) { modelSignal = signal; yield 'partial'; await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true })); signal.throwIfAborted(); } } });

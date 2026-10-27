@@ -8,7 +8,12 @@ function inlineMessages(input) {
   let pageId, pendingSelection, userSeen = false;
   for (const step of input.transcript) {
     if (step.type === 'context') pageId = step.value?.peekBlockId || step.value?.blockId || pageId;
-    else if (step.type === 'user-specified-context') pendingSelection = step.value?.textSelection || step.value?.blockSelection;
+    else if (step.type === 'user-specified-context') {
+      // The text-only writer has no resolver for additional @page/file sources.
+      // Ignoring these would send an incomplete question to the model.
+      if (step.value?.pointers !== undefined && (!Array.isArray(step.value.pointers) || step.value.pointers.length)) throw Error('Notion 浮动 AI 暂不能读取附加的页面或文件引用，请在右侧 Agent 中引用并读取；本次未修改页面。');
+      pendingSelection = step.value?.textSelection || step.value?.blockSelection;
+    }
     else if (['user', 'user-injected', 'agent-prebuilt-prompt'].includes(step.type)) {
       if (pendingSelection) {
         const context = threadContext({ threadContext: { currentBlockId: pageId, selectionPageId: pageId, selection: pendingSelection } }, input.spaceId);

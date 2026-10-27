@@ -6,6 +6,7 @@ import { inflateRawSync } from 'node:zlib';
 import { stageMac } from '../scripts/package-macos.mjs';
 import { zipDirectory } from '../scripts/portable-zip.mjs';
 import { verifyPackagedImagePreview } from './helpers/packaged-image-preview.mjs';
+import { verifyPackagedReferences } from './helpers/packaged-references.mjs';
 const project = path.resolve(import.meta.dirname, '..');
 
 test('Mac package is relocatable, reuses Notion icon and preserves double-click executable bits without bundling private data', async t => {
@@ -28,6 +29,7 @@ test('Mac package is relocatable, reuses Notion icon and preserves double-click 
   assert.ok(!entry.includes(project));
   assert.deepEqual(fs.readFileSync(path.join(result.app, 'Contents/Resources/project/src/runtime-bootstrap.cjs')), fs.readFileSync(path.join(project, 'src/runtime-bootstrap.cjs')));
   await verifyPackagedImagePreview(path.join(result.app, 'Contents/Resources/project/src'), path.join(base, 'Mac 用户资料', 'Application Support', 'Switch Notion'));
+  await verifyPackagedReferences(path.join(result.app, 'Contents/Resources/project/src'), path.join(base, 'Mac 用户资料', '引用 state'));
   const archive = path.join(base, 'mac.zip'); zipDirectory({ directory: result.directory, output: archive });
   const bytes = fs.readFileSync(archive), end = bytes.length - 22, start = bytes.readUInt32LE(end + 16), count = bytes.readUInt16LE(end + 10);
   let at = start; const modes = new Map();
