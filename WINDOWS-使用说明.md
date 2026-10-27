@@ -2,6 +2,8 @@
 
 这是 Windows x64 包，附带 Node.js 运行环境。无需安装 Node.js、修改配置文件或运行命令。Mac 使用独立的 Apple Silicon 版本，见 `MAC-使用说明.md`。
 
+接手验证和修复请使用 [Windows 待验证与修复清单](docs/WINDOWS-VALIDATION-CHECKLIST.md)，逐项记录实机结果。
+
 ## 第一次启动
 
 1. 将 ZIP 完整解压到一个可写文件夹；不要直接在压缩包中运行。
