@@ -2,7 +2,7 @@
 
 这是 Windows x64 包，附带 Node.js 运行环境。无需安装 Node.js、修改配置文件或运行命令。Mac 使用独立的 Apple Silicon 版本，见 `MAC-使用说明.md`。
 
-接手验证和修复请使用 [Windows 待验证与修复清单](docs/WINDOWS-VALIDATION-CHECKLIST.md)，逐项记录实机结果。
+接手验证、修复和后续实现请使用 [Windows 待验证与修复清单](docs/WINDOWS-VALIDATION-CHECKLIST.md)。清单已包含最新引用修复、Mac 原生验收证据、Windows 引用逐项矩阵及尚未对接的 AI 功能待办；请分别记录待实现和实机验收结果。
 
 ## 第一次启动
 
