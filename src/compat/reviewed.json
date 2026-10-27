@@ -1,0 +1,247 @@
+{
+  "schema": 1,
+  "modules": {
+    "60217": {
+      "kind": "provider",
+      "fingerprint": "1d1e4ba8dad199e33ca9ee41c9061cff449f23dcd18b3b4b05045901b269588b",
+      "selectors": {
+        "replace": [
+          "body",
+          "0",
+          "expression",
+          "properties",
+          "0",
+          "value",
+          "body",
+          "body",
+          "12",
+          "body",
+          "body",
+          "0",
+          "declarations",
+          "2",
+          "init",
+          "arguments",
+          "0",
+          "body",
+          "alternate",
+          "elements",
+          "0",
+          "properties",
+          "1",
+          "value",
+          "body",
+          "arguments",
+          "1",
+          "properties",
+          "2",
+          "value",
+          "consequent"
+        ]
+      }
+    },
+    "241978": {
+      "kind": "connection",
+      "fingerprint": "70f6dc933647e95e014b488bf14576b337bd7912eca385306aef23c8620a9058",
+      "selectors": {}
+    },
+    "328616": {
+      "kind": "audio",
+      "fingerprint": "eca9ed67b7a2215c035f8a64c46fa3b338988ed499cfde04993becc45b3f717a",
+      "selectors": {
+        "replace": [
+          "body",
+          "0",
+          "expression",
+          "properties",
+          "0",
+          "value",
+          "body",
+          "body",
+          "5",
+          "body",
+          "body",
+          "2",
+          "declarations",
+          "0",
+          "init"
+        ]
+      }
+    },
+    "331787": {
+      "kind": "recording",
+      "fingerprint": "d4aa04fe0a8ccc46f09ba6e36583cdd89c34c1ae49252592b0a413c3ef071f5a",
+      "selectors": {
+        "start": [
+          "body",
+          "0",
+          "expression",
+          "properties",
+          "0",
+          "value",
+          "body",
+          "body",
+          "77",
+          "body",
+          "body",
+          "12"
+        ],
+        "recorder": [
+          "body",
+          "0",
+          "expression",
+          "properties",
+          "0",
+          "value",
+          "body",
+          "body",
+          "77",
+          "body",
+          "body",
+          "10"
+        ],
+        "stop": [
+          "body",
+          "0",
+          "expression",
+          "properties",
+          "0",
+          "value",
+          "body",
+          "body",
+          "77",
+          "body",
+          "body",
+          "16"
+        ],
+        "require": [
+          "body",
+          "0",
+          "expression",
+          "properties",
+          "0",
+          "value",
+          "params",
+          "2"
+        ],
+        "drain": [
+          "body",
+          "0",
+          "expression",
+          "properties",
+          "0",
+          "value",
+          "body",
+          "body",
+          "77",
+          "body",
+          "body",
+          "12",
+          "value",
+          "body",
+          "body",
+          "4",
+          "block",
+          "body",
+          "5",
+          "test",
+          "expressions",
+          "1",
+          "right",
+          "properties",
+          "1",
+          "value"
+        ]
+      }
+    },
+    "459724": {
+      "kind": "models",
+      "fingerprint": "b70f2f9a69e629ddc4d9235bd45528a46193e007e467ec5f3a5d507a2e651b51",
+      "selectors": {
+        "replace": [
+          "body",
+          "0",
+          "expression",
+          "properties",
+          "0",
+          "value",
+          "body",
+          "body",
+          "298",
+          "body",
+          "body",
+          "13",
+          "declarations",
+          "2",
+          "init"
+        ]
+      }
+    },
+    "811656": {
+      "kind": "availability",
+      "fingerprint": "1391d5e7eb50500c14d0b0216a91d425ccb97cefdf4b02aeac517ea7e9f879c4",
+      "selectors": {
+        "insertBefore": [
+          "body",
+          "0",
+          "expression",
+          "properties",
+          "0",
+          "value",
+          "body",
+          "body",
+          "1",
+          "body",
+          "body",
+          "3"
+        ],
+        "feature": [
+          "body",
+          "0",
+          "expression",
+          "properties",
+          "0",
+          "value",
+          "body",
+          "body",
+          "1",
+          "body",
+          "body",
+          "3",
+          "declarations",
+          "0",
+          "init",
+          "left",
+          "test",
+          "right",
+          "right",
+          "object",
+          "right",
+          "property"
+        ],
+        "context": [
+          "body",
+          "0",
+          "expression",
+          "properties",
+          "0",
+          "value",
+          "body",
+          "body",
+          "1",
+          "body",
+          "body",
+          "3",
+          "declarations",
+          "0",
+          "init",
+          "left",
+          "alternate",
+          "arguments",
+          "1",
+          "object"
+        ]
+      }
+    }
+  }
+}

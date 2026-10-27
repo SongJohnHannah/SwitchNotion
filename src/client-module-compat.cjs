@@ -3,7 +3,9 @@ const reviewed = {
   '95271': ['811656', 'f2be3eb51416adf2699c8fd44fdf7cdecfb53ab21b299dbf77e57acafe74d801'],
   '96975': ['459724', '6ab3eed179a1e223dfe221d164c59774bb0b3a3a38e7e6090e2359e44c50b332'],
   '32453': ['60217', '38a7afc2235c70aebd54da1792dfcdc9c0278d3c2a58a0167a91feeef61a4329'],
-  '17521': ['328616', '8899023157d4755e66eaaf959bd7d76a755505b7a938f311a8b7ad1eb0a042d7']
+  '17521': ['328616', '8899023157d4755e66eaaf959bd7d76a755505b7a938f311a8b7ad1eb0a042d7'],
+  '89269': ['331787', 'ab86f11d59a12b5741999825de7cd33993d762d8a23f13a51a93ec8e6e3ddfc2', 'bca0ae2d158c332bb481a7756f2ac054ec4bf57bfea896ba93cf00fdbdde8dfc'],
+  '17048': ['241978', 'ac822dea14dcffa0a1c3ae952afb9c8038ea7feb87f15d1a4d406c987e49071e']
 };
 const digest = source => createHash('sha256').update(source).digest('hex');
 function stableAvailability(module) {
@@ -22,7 +24,7 @@ function stableAvailability(module) {
 // change is byte-identical. Surrounding modules are never patched or trusted
 // as evidence that a changed permission/availability module is compatible.
 function compatibleModule(source, asset) {
-  const match = /^(95271|96975|32453|17521)-[a-f\d]{16}\.js$/.exec(asset), expected = match && reviewed[match[1]];
+  const match = /^(95271|96975|32453|17521|89269|17048)-[a-f\d]{16}\.js$/.exec(asset), expected = match && reviewed[match[1]];
   if (!expected || typeof source !== 'string' || source.length > 2 * 1024 * 1024) return false;
   const boundaries = [...source.matchAll(/(?:^|[,{])(\d+)\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\)\{/g)];
   const positions = boundaries.map((entry, index) => entry[1] === expected[0] ? index : -1).filter(index => index >= 0);
@@ -30,6 +32,6 @@ function compatibleModule(source, asset) {
   const index = positions[0], start = boundaries[index].index + (boundaries[index][0].startsWith(expected[0]) ? 0 : 1), end = boundaries[index + 1]?.index ?? source.lastIndexOf('}]);');
   if (end <= start) return false;
   const module = source.slice(start, end);
-  return digest(module) === expected[1] || match[1] === '95271' && stableAvailability(module);
+  return expected.slice(1).includes(digest(module)) || match[1] === '95271' && stableAvailability(module);
 }
 module.exports = { compatibleModule };

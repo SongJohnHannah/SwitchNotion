@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { prepareRuntime, acceptRuntime, rollbackRuntime, updateStatus } from '../scripts/runtime-update.mjs';
 import { inspectDesktop } from '../scripts/desktop-compat.mjs';
 import { sha256, readArchive } from '../scripts/asar.mjs';
@@ -58,6 +60,16 @@ test('failed staging and incompatible releases keep the current runtime and orig
   assert.deepEqual(fs.readFileSync(path.join(f.root, 'runtime/resources/app.asar')), before);
   assert.equal(fs.readdirSync(f.root).some(name => name.startsWith('runtime-staging-')), false);
 });
+
+test('isolated runtimes omit the official installer feed so they cannot replace ordinary Notion shortcuts', t => {
+  const f = fixture(t); build(f.source, '7.40.20');
+  const feed = path.join(f.source, 'resources/app-update.yml');
+  fs.writeFileSync(feed, 'provider: generic\nurl: https://fixture.invalid/official-installer');
+  const before = fs.readFileSync(feed);
+  prepareRuntime(f);
+  assert.equal(fs.existsSync(path.join(f.root, 'runtime/resources/app-update.yml')), false);
+  assert.deepEqual(fs.readFileSync(feed), before);
+});
 test('an interrupted validation rolls back once and prevents automatic reinstallation of the rejected build', t => {
   const f = fixture(t); build(f.source, '7.40.20'); prepareRuntime(f); acceptRuntime(f);
   build(f.source, '7.40.21'); prepareRuntime(f);
@@ -73,6 +85,32 @@ test('live prototypes and concurrent launchers are never overwritten', t => {
   const f = fixture(t); build(f.source, '7.40.20'); fs.writeFileSync(path.join(f.root, 'control.json'), JSON.stringify({ pid: process.pid }));
   assert.throws(() => prepareRuntime(f), /尚未退出/); assert.equal(fs.existsSync(path.join(f.root, 'runtime')), false);
   const release = launchLock(f.root); assert.throws(() => launchLock(f.root), /正在准备启动/); release(); launchLock(f.root)();
+});
+
+test('an untracked Windows runtime process blocks the swap with recovery guidance and updates resume after it exits', { skip: process.platform !== 'win32' }, async t => {
+  const f = fixture(t); build(f.source, '7.40.20'); prepareRuntime(f); acceptRuntime(f);
+  const runtime = path.join(f.root, 'runtime');
+  const archive = fs.readFileSync(path.join(runtime, 'resources/app.asar'));
+  const prepared = fs.readFileSync(path.join(f.root, 'prepared.json'));
+  // Desktop launches use the runtime as cwd. A surviving process keeps it
+  // locked on Windows even when the old control.json process has exited.
+  const worker = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000); process.send({ ready: true });'], { cwd: runtime, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+  try {
+    await once(worker, 'message');
+    build(f.source, '7.40.21');
+    const blocked = prepareRuntime(f);
+    assert.equal(blocked.updateStatus, 'blocked');
+    assert.match(blocked.message, /运行目录.*占用.*退出/s);
+    assert.doesNotMatch(blocked.message, /EBUSY|EPERM|EACCES/);
+    assert.deepEqual(fs.readFileSync(path.join(runtime, 'resources/app.asar')), archive);
+    assert.deepEqual(fs.readFileSync(path.join(f.root, 'prepared.json')), prepared);
+    assert.equal(fs.readdirSync(f.root).some(name => name.startsWith('runtime-staging-')), false);
+  } finally {
+    if (worker.exitCode === null) { const exited = once(worker, 'exit'); worker.kill(); await exited; }
+  }
+  assert.equal(prepareRuntime(f).updateStatus, 'prepared');
+  acceptRuntime(f);
+  assert.equal(updateStatus(f).prototypeVersion, '7.40.21');
 });
 test('startup validation requires the expected process and a ready isolated window', async t => {
   const f = fixture(t), pid = process.pid; fs.writeFileSync(path.join(f.root, 'control.json'), JSON.stringify({ pid, port: 12345, token: 'fixture-only' }));

@@ -12,6 +12,38 @@
 *.pfx
 Cookies*
 Local State
+Login Data*
+Web Data*
+profile/
+profiles/
+User Data/
+IndexedDB/
+Session Storage/
+Local Storage/
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-*
+
+# Local recordings and exported meeting media
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.ogg
+*.opus
+*.flac
+*.aif
+*.aiff
+*.caf
+*.pcm
+*.webm
+*.mp4
+*.m4v
+*.mov
+*.mkv
 
 # Generated files
 node_modules/

@@ -2,8 +2,10 @@
 class SpeechRecorder {
   constructor(api, onState) { this.api = api; this.onState = onState; this.state = 'idle'; this.generation = 0; }
   setState(state, message) { this.state = state; this.onState({ state, message }); }
+  clearPlayback() { if (this.playbackUrl) URL.revokeObjectURL(this.playbackUrl); this.playbackUrl = null; }
   async start() {
     if (this.state !== 'idle') return;
+    this.clearPlayback();
     const generation = ++this.generation; this.setState('preparing', '正在准备本机麦克风…');
     try {
       const result = await this.api.startSpeechRecording(); if (!result.ok) throw Error(result.error);
@@ -36,10 +38,12 @@ class SpeechRecorder {
     if (generation !== this.generation) return;
     try {
       const data = new Blob(this.parts, { type: 'audio/webm;codecs=opus' });
+      this.playbackUrl = URL.createObjectURL(data);
+      this.onState({ state: 'transcribing', playbackUrl: this.playbackUrl });
       const result = await this.api.finishSpeechRecording({ recordingId: this.recordingId, audio: new Uint8Array(await data.arrayBuffer()), mimeType: data.type });
       if (generation !== this.generation) return;
       if (!result.ok) throw Error(result.error);
-      this.onState({ state: 'complete', result: result.result });
+      this.onState({ state: 'complete', result: result.result, playbackUrl: this.playbackUrl });
     } catch (error) { if (generation === this.generation) this.onState({ state: 'error', message: error.message || '本机转写未完成。' }); }
     finally { if (generation === this.generation) await this.cancel(); }
   }

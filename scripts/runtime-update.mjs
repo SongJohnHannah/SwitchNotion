@@ -25,7 +25,11 @@ function move(root, from, to) {
   const source = local(root, from), target = local(root, to);
   for (let attempt = 0; ; attempt++) {
     try { fs.renameSync(source, target); return; }
-    catch (error) { if (attempt >= 20 || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100); }
+    catch (error) {
+      if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error;
+      if (attempt >= 20) throw Object.assign(Error('运行目录仍被占用或无法访问，未能完成更新或回退。请完全退出 NotionSwitch，并关闭使用该目录的终端或程序后重试。', { cause: error }), { code: error.code });
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
   }
 }
 function copyTree(source, target) {
@@ -105,6 +109,9 @@ export function prepareRuntime({ root = stateRoot, platform = createDesktopPlatf
     stage = 'runtime-staging-' + randomUUID(); const target = local(root, stage);
     const staged = platform.stageInstallation({ source: sourceLayout, container: target, copy });
     copy(path.join(sourceProject, 'src'), path.join(staged.resources, 'notion-switch'));
+    // The official installer can rewrite normal Notion shortcuts and install
+    // into the clone. Only our own updater may replace this isolated runtime.
+    fs.rmSync(path.join(staged.resources, 'app-update.yml'), { force: true });
     const prefix = 'require(require("node:path").join(process.resourcesPath,"notion-switch","desktop-hook.cjs"));\n';
     fs.writeFileSync(staged.archive, prependToEntry(original, build.entry, prefix));
     platform.finalizeRuntime(staged);

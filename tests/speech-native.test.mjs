@@ -13,6 +13,7 @@ function fixture(t) {
     transcribe: async ({ pcm }) => { calls.push(pcm); return '离线中英文转写'; } };
   const speech = { enabled: true, provider };
   const service = new native.NativeSpeech({ speech, originAllowed: origin => origin === undefined }); service.transportReady = true;
+  service.lifecycleReady = true; service.drainTransportReady = true;
   t.after(() => service.close()); return { service, calls, leases: () => leases };
 }
 async function client(service) {
@@ -38,6 +39,13 @@ test('native start returns its token and accepts a microphone connection while t
   const c = await client(f.service); t.after(() => c.ws.close());
   c.send('transcriptionInfo', 'fast-context', { rootBlockId: B, spaceId: W });
   await c.wait(m => event(m)?.requestId === 'fast-context'); assert.equal(f.leases(), 1); finish();
+});
+
+test('native recording cannot start when an unknown client has no verified stop-and-drain adaptation', async t => {
+  const f = fixture(t); f.service.lifecycleReady = false;
+  await assert.rejects(f.service.token(), /录音收尾适配/);
+  f.service.lifecycleReady = true; f.service.drainTransportReady = false;
+  await assert.rejects(f.service.token(), /录音收尾适配/);
 });
 test('background model failure is explicit and releases the native recording rather than leaving a false running state', async t => {
   const f = fixture(t); let fail;

@@ -2,9 +2,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { app, session, BrowserWindow } = require('electron');
+const { app, session, BrowserWindow, dialog } = require('electron');
+const platform = require('./platform/index.cjs').createDesktopPlatform();
+const { initializeRuntime, disableBuiltinUpdates } = require('./runtime-bootstrap.cjs');
+const root = initializeRuntime({ app, dialog, platform });
+if (!root) return;
+disableBuiltinUpdates(root);
 const { NativeMock, json } = require('./native-mock.cjs');
-const { adaptClient } = require('./client-compat.cjs');
+const { adaptResponse } = require('./compat/response.cjs');
 const { localRecords } = require('./local-records.cjs');
 const { ProviderRouter } = require('./provider.cjs');
 const { NotionRouter } = require('./notion-routing.cjs');
@@ -16,10 +21,6 @@ const { isMeetingSummary, offlineSummaryResponse } = require('./speech/summary.c
 const { MeetingNativeBridge } = require('./meeting-summary-native.cjs');
 const { MeetingSummaryService } = require('./meeting-summary.cjs');
 const { uuid } = require('./native-context.cjs');
-const platform = require('./platform/index.cjs').createDesktopPlatform();
-
-const root = process.env.NOTION_SWITCH_ROOT;
-if (!root || !path.isAbsolute(root) || !fs.existsSync(path.join(root, 'prepared.json'))) throw new Error('Start the isolated prototype using npm start');
 const logFile = path.join(root, 'events.jsonl');
 const log = event => fs.appendFileSync(logFile, JSON.stringify({ time: new Date().toISOString(), ...event }) + '\n');
 for (const [name, dir] of [['userData', 'profile'], ['sessionData', 'profile'], ['crashDumps', 'crashDumps']]) {
@@ -42,7 +43,7 @@ const settings = setupSettings({ root, platform, isBusy: () => mock.status().act
 const nativeSpeech = new NativeSpeech({ speech: settings.speech, log }); settings.speech.native = nativeSpeech;
 const installed = new WeakSet();
 const cacheReady = new WeakMap();
-const compatibility = { adaptedAssets: [], unsupportedAssets: [] };
+const compatibility = { adaptedAssets: [], automaticAssets: [], unsupportedAssets: [] };
 const endpoints = new Set(['runInferenceTranscript', 'createAgentThread', 'createCalendarAgentThread', 'sendEventToAgentThread', 'sendEventToLegacyThread', 'listenToThreadTranscript', 'stopWorkflowAutomationRunThread']);
 function isNotion(hostname) { return hostname === 'notion.so' || hostname.endsWith('.notion.so') || hostname === 'notion.com' || hostname.endsWith('.notion.com'); }
 async function route(request, passthrough, ses) {
@@ -94,27 +95,30 @@ async function route(request, passthrough, ses) {
     const input = await request.clone().json(), record = mock.record(input.threadId);
     if (record) return json(endpoint === 'getThreadSpaceId' ? { spaceId: record.space_id } : {});
   }
-  if (url.hostname === 'app.notion.com' && /^\/_assets\/(?:95271|96975|32453|17521)-[^/]+\.js$/.test(url.pathname)) {
+  if (url.hostname === 'app.notion.com' && /^\/_assets\/\d+-[a-f\d]{16}\.js$/.test(url.pathname)) {
     const compatAsset = url.pathname.split('/').pop();
     const response = await passthrough(request);
     if (!response.ok) return response;
-    const source = await response.text();
-    let patched;
+    let adapted;
     try {
-      if (nativeSpeech.enabled) await nativeSpeech.ready;
-      patched = adaptClient(source, compatAsset, { localSpeechEnabled: nativeSpeech.enabled, audioEndpoint: nativeSpeech.endpoint });
-      if (compatAsset.startsWith('17521-') && nativeSpeech.enabled && patched !== source) nativeSpeech.transportReady = true;
+      adapted = await adaptResponse(response, compatAsset, { localSpeechEnabled: nativeSpeech.enabled, audioEndpoint: nativeSpeech.endpoint, inputMode: settings.speech.inputMode,
+        prepare: async () => { if (nativeSpeech.enabled) await nativeSpeech.ready; } });
+      if (adapted === null) return response;
+      if (adapted.kinds.includes('audio') && nativeSpeech.enabled && adapted.changed) nativeSpeech.transportReady = true;
+      if (adapted.kinds.includes('recording') && nativeSpeech.enabled && adapted.changed) nativeSpeech.lifecycleReady = true;
+      if (adapted.kinds.includes('connection') && nativeSpeech.enabled) nativeSpeech.drainTransportReady = true;
     }
     catch {
+      nativeSpeech.lifecycleReady = false;
       if (!compatibility.unsupportedAssets.includes(compatAsset)) { compatibility.unsupportedAssets.push(compatAsset); log({ type: 'local-provider-ui-unsupported', asset: compatAsset }); }
-      return new Response(source, { status: response.status, headers: (() => { const h = new Headers(response.headers); for (const key of ['content-length', 'content-encoding']) h.delete(key); return h; })() });
+      return response;
     }
-    const headers = new Headers(response.headers);
-    for (const header of ['content-length', 'content-encoding', 'etag', 'content-md5']) headers.delete(header);
-    headers.set('cache-control', 'no-store');
     log({ type: 'local-provider-ui-adapted', asset: compatAsset });
     if (!compatibility.adaptedAssets.includes(compatAsset)) compatibility.adaptedAssets.push(compatAsset);
-    return new Response(patched, { status: response.status, headers });
+    if (adapted.automatic.length && !compatibility.automaticAssets.includes(compatAsset)) {
+      compatibility.automaticAssets.push(compatAsset); log({ type: 'local-provider-ui-auto-adapted', asset: compatAsset, modules: adapted.automatic });
+    }
+    return adapted.response;
   }
   const localRead = ['getThreadTranscript', 'getThreadQueuedMessages', 'listenToThreadTranscript'].includes(endpoint);
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && (localRead || endpoints.has(endpoint) || /^(runInference|create.*Agent.*Thread|sendEventTo.*Thread)/.test(endpoint))) {
@@ -198,7 +202,7 @@ const server = http.createServer(async (req, res) => {
   if (req.headers.authorization !== `Bearer ${token}`) { res.writeHead(403).end(); return; }
   res.setHeader('content-type', 'application/json'); res.setHeader('cache-control', 'no-store');
   if (req.url === '/status' && req.method === 'GET') {
-    const state = mock.status(), speechBusy = settings.speech.provider.leases > 0 || settings.speech.provider.status().busy;
+    const state = mock.status(), speechBusy = settings.speech.provider.leases > 0 || settings.speech.provider.status().busy || nativeSpeech.connections.size > 0;
     res.end(JSON.stringify({ pid: process.pid, appReady: app.isReady(), windows: BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), minimized: win.isMinimized(), destroyed: win.isDestroyed() })), ...state,
       activeTurns: state.activeTurns + (speechBusy ? 1 : 0) + meetingSummaries.active, meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
       compatibility, notion: workspace.status(), settings: settings.status(), speech: { ...settings.speech.status(), native: nativeSpeech.status() } }));

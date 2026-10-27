@@ -19,3 +19,24 @@ test('the Git guard inspects staged blobs, rejects local key values and blocks f
   git(['add', 'app.js']); fs.writeFileSync(path.join(root, '.env'), 'CONFIG=fixture'); git(['add', '-f', '.env']);
   assert.throws(() => checkStagedSecrets(root), /停止提交/);
 });
+
+test('recordings and login databases are rejected even when force-added or renamed without their usual extension', t => {
+  const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-git-private-media-'));
+  t.after(() => { assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
+  const git = args => execFileSync('git', args, { cwd: root, windowsHide: true, stdio: 'pipe' });
+  git(['init', '-q']);
+  for (const [file, contents] of [
+    ['meeting.WAV', 'fixture'], ['meeting.webm', 'fixture'], ['session.sqlite-wal', 'fixture'],
+    ['Login Data', 'fixture'], ['profiles/session', 'fixture'],
+    ['renamed-audio.bin', Buffer.from('RIFF0000WAVEfmt ')],
+    ['renamed-recording.bin', Buffer.from([0x1a, 0x45, 0xdf, 0xa3])],
+    ['renamed-login.bin', Buffer.from('SQLite format 3\0')]
+  ]) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true }); fs.writeFileSync(path.join(root, file), contents);
+    git(['add', '-f', '--', file]);
+    assert.throws(() => checkStagedSecrets(root), /停止提交/, file);
+    git(['rm', '--cached', '-q', '--', file]);
+  }
+  fs.writeFileSync(path.join(root, 'adapter.cjs'), 'module.exports = {};'); git(['add', 'adapter.cjs']);
+  assert.equal(checkStagedSecrets(root).privateFilesFound, false);
+});

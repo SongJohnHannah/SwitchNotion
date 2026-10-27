@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src blob:; connect-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>NotionSwitch 配置</title>
   <link rel="stylesheet" href="settings.css">
@@ -51,15 +51,17 @@
       <section id="speech-view" hidden>
         <div class="page-heading"><div><span class="eyebrow">OFFLINE SPEECH</span><h1>离线语音转写</h1><p id="speech-backend">faster-whisper · Medium 多语言模型</p></div><span id="speech-status" class="badge">尚未检测</span></div>
         <div id="speech-card" class="provider-card">
-            <h2>中文和英文，均在本机识别</h2><p>自动检测本机环境，缺少的组件会下载到本地。模型约 1.5～1.6 GB，Windows 还可能需要 GPU 运行库；无需 API Key，不依赖 Codex。停止使用后自动释放资源。</p>
+              <h2>中文和英文，均在本机识别</h2><p>像双语语音输入：说中文出中文，说英文出英文，自动识别，不翻译或润色原话。自动检测本机环境，缺少的组件会下载到本地。模型约 1.5～1.6 GB，Windows 还可能需要 GPU 运行库；无需 API Key，不依赖 Codex。停止使用后自动释放资源。</p>
             <label for="speech-model">录音识别模型</label><select id="speech-model"><option value="large-v3-turbo">Whisper Large-v3 Turbo · 约 1.6 GB</option><option value="medium">Whisper Medium · 约 1.5 GB</option></select><p class="field-help">修改后点“保存设置”，缺少模型会自动下载；麦克风、系统音频和录音测试统一使用所选模型。已有模型会保留。</p>
           <p id="speech-description" class="field-help">点击“检测并准备”；缺少组件时自动下载到本地。首次模型约 1.5 GB，Windows GPU 还需额外运行库。</p>
           <p class="field-help">Windows 使用 NVIDIA GPU；M1 等 Apple Silicon Mac 的独立转写模块使用 CPU，Mac 原生 Notion 接入仍待实机验证。语音按短片段识别；DeepSeek 总结需要联网。</p>
           <label class="check-label"><input id="speech-enabled" type="checkbox"> 启用原生速记的离线转写</label><p id="speech-native-state" class="field-help">正在检查原生界面适配状态…</p>
+          <label class="check-label"><input id="speech-system-audio" type="checkbox" checked> 转写系统播放声音</label><p class="field-help">默认开启：同时转写麦克风和电脑播放的声音。视频、网页和提示音中的讲话也会被转写，保留系统音频标注；关闭后只录麦克风。更改后请刷新 Notion 页面。</p>
             <label class="check-label"><input id="speech-summary" type="checkbox" checked> 停止录音后用 DeepSeek 自动生成摘要</label><p class="field-help">开启后会将转录文字和手写笔记发送给 DeepSeek，摘要需要联网；原始音频在本机转写。关闭后只转录，不自动生成摘要。</p>
           <div class="form-actions"><button id="prepare-speech" class="button primary">检测并准备</button><button id="test-speech" class="button secondary">录音测试</button><button id="release-speech" class="button secondary">释放资源</button><button id="save-speech" class="button secondary">保存设置</button></div>
           <div id="speech-result" class="inline-result" role="status" hidden></div>
           <pre id="speech-transcript" class="inline-result" hidden></pre>
+          <audio id="speech-playback" controls hidden aria-label="回听本次麦克风录音"></audio><p class="field-help">录音测试只用麦克风，可回听原音并对照文字。测试录音仅保留在本窗口内存，关闭窗口后丢弃，不上传云端。</p>
         </div>
       </section>
       <section id="login-view" hidden>
@@ -75,8 +77,8 @@
         <div class="page-heading"><div><span class="eyebrow">UPDATES</span><h1>版本与更新</h1><p>更新原版 Notion 后，退出并重新启动 NotionSwitch，即可自动同步兼容版本。</p></div></div>
         <div id="updates-card" class="provider-card">
           <h2 id="updates-title">正在检查版本…</h2><p id="updates-versions" class="dialog-description"></p>
-          <p id="updates-message"></p><p class="field-help">更新在项目内的临时副本中准备，启动失败时自动恢复上一个版本。登录、API Key 和本机对话历史继续保留。</p>
-          <p class="field-help">原型正在运行时不会自动重启。点“更新并重启”前，请确认页面编辑已经同步。网页 AI 协议变化时可能需要新版 NotionSwitch；这里只同步本机已安装的 Notion。</p>
+          <p id="updates-message"></p><p id="updates-web" class="field-help">网页模块自动检查与适配已开启。</p><p class="field-help">客户端在每次启动时自动同步兼容更新；更新在项目内的临时副本中准备，启动失败时恢复上一个版本。登录、API Key 和本机对话历史继续保留。</p>
+          <p class="field-help">网页模块加载时自动检查：文件名、变量名或排版变化而逻辑一致时自动适配，无需修改代码。权限、接口或录音流程实质变化时暂停相关接管并在此显示，需新版 Switch Notion。运行中不会强制重启；点“更新并重启”前请确认页面编辑已同步。</p>
           <div class="form-actions"><button id="check-updates" class="button secondary">检查更新</button><button id="rollback-update" class="button secondary" hidden>恢复上一个版本</button><button id="apply-update" class="button primary">更新并重启</button></div>
           <div id="updates-result" class="inline-result" role="status" hidden></div>
         </div>

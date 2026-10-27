@@ -52,7 +52,9 @@ try {
 
 应用配置页现已支持选择模型和自动准备：优先复用已有环境，缺少时下载独立 Python、固定版本的 faster-whisper/CTranslate2 和固定 revision 的所选模型；Windows 仅在缺少可用运行库时下载 CUDA 依赖。准备阶段联网，所有安装、缓存和模型保存在传入的本机状态目录。底层 `SpeechProvider.probe()` 继续保持不联网的约定，自动下载由 `src/speech/install.cjs` 的 `install({root,platform,onProgress,signal})` 完成。独立调用时用 `new SpeechProvider({root,model:'large-v3-turbo'})` 或 `createSpeechPlatform({model:'large-v3-turbo'})` 选择 Turbo，省略则保持 Medium 兼容默认值。
 
-上下文只能来自同一会议的同一音源，切换会议后应清空。语言和上下文会传入识别器，不调用文本模型修写录音，不做固定单词替换。模型名称、来源和 revision 在 `src/speech/models.json` 中固定；Turbo 的原始模型说明见 [OpenAI 发布说明](https://github.com/openai/whisper/discussions/2363)，CTranslate2 权重见 [模型仓库](https://huggingface.co/dropbox-dash/faster-whisper-large-v3-turbo)。识别准确率仍取决于实际录音，短测试样本不代表全部会议。
+默认 `language:'auto'` 按双语语音输入处理，中文和英文保留原语言，任务始终为 `transcribe`。每段按 20 毫秒小窗检测停顿，满 4 秒且静音约 0.8 秒时分段，连续讲话最多 20 秒一段，所有采样及尾段完整保留；规则集中在 `src/speech/segmentation.json`。批量音频与会议流使用相同规则，音频传输包边界不影响声学分段。
+
+自动模式不把 `context` 或中文书写提示用于下一段解码，避免上一句中文干扰下一句英文；显式 `zh` / `en` 请求仍传入限定语言及最多 120 字的可靠上下文。上下文只能来自同一会议的同一音源，切换会议后应清空。不调用文本模型修写录音，不做固定单词替换。模型名称、来源和 revision 在 `src/speech/models.json` 中固定；Turbo 的原始模型说明见 [OpenAI 发布说明](https://github.com/openai/whisper/discussions/2363)，CTranslate2 权重见 [模型仓库](https://huggingface.co/dropbox-dash/faster-whisper-large-v3-turbo)。识别准确率仍取决于实际录音，短测试样本不代表全部会议。
 
 M1 端准备原生 ARM64 Node 22+、原生 ARM64 Python 3.11 独立环境，以及 `src/speech/requirements.txt` 中的依赖。不要在 Rosetta 的 x64 Node/Python 下运行。依赖安装属于准备阶段，可在联网电脑准备相应 ARM64 安装包后离线安装；识别阶段不联网。
 

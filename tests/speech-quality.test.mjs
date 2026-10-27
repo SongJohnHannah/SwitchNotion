@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const blockId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', spaceId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-test('all native recording segments preserve requested language and bounded reliable context, separately for each audio source', async () => {
+test('native recording auto-detects bilingual speech and keeps reliable context separate for each audio source', async () => {
   const calls = []; let id = 0;
   const provider = { async transcribe({ ...args }) { calls.push(args); return 'previous meeting sentence'; },
     async transcribeDetailed(args) { calls.push(args); return { text: 'previous meeting sentence', context: 'previous meeting sentence' }; } };
@@ -24,8 +24,8 @@ test('all native recording segments preserve requested language and bounded reli
   await segment('microphone', 'zh-CN');
   await segment('microphone', 'en-US');
   await segment('system_audio', 'auto');
-  assert.equal(calls[0].language, 'zh');
-  assert.equal(calls[1].language, 'en');
+  assert.equal(calls[0].language, 'auto');
+  assert.equal(calls[1].language, 'auto');
   assert.equal(calls[0].context, '');
   assert.equal(calls[1].context, 'previous meeting sentence');
   assert.equal(calls[2].context, '', 'System audio must not inherit microphone text');

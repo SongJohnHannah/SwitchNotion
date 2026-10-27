@@ -15,7 +15,8 @@ function tree(root) {
   } } visit(root); return result.sort((a, b) => a.file.localeCompare(b.file));
 }
 export function prepareRootLaunchers({ sourceProject = project, host = process.platform,
-  nodeExecutable = process.execPath, nodeLicense = path.join(path.dirname(nodeExecutable), 'LICENSE'), compile } = {}) {
+  nodeExecutable = fs.existsSync(path.join(sourceProject, 'bin/node.exe')) ? path.join(sourceProject, 'bin/node.exe') : process.execPath,
+  nodeLicense = path.resolve(nodeExecutable) === path.resolve(sourceProject, 'bin/node.exe') ? path.join(sourceProject, 'licenses/NODE-LICENSE.txt') : path.join(path.dirname(nodeExecutable), 'LICENSE'), compile } = {}) {
   const root = fs.realpathSync(sourceProject), state = path.join(root, '.notion-switch'), dist = path.join(root, 'dist');
   for (const dir of [state, dist]) if (fs.lstatSync(dir, { throwIfNoEntry: false })?.isSymbolicLink()) throw Error('启动准备目录含链接，未生成。');
   fs.mkdirSync(state, { recursive: true }); fs.mkdirSync(dist, { recursive: true });
@@ -38,7 +39,7 @@ export function prepareRootLaunchers({ sourceProject = project, host = process.p
     assertDistributionFiles(staging, [built], keys);
     fs.mkdirSync(path.join(root, 'bin'), { recursive: true }); fs.mkdirSync(path.join(root, 'licenses'), { recursive: true });
     if (!fs.existsSync(path.join(root, 'bin/node.exe'))) fs.copyFileSync(nodeExecutable, path.join(root, 'bin/node.exe'));
-    fs.copyFileSync(nodeLicense, path.join(root, 'licenses/NODE-LICENSE.txt'));
+    if (path.resolve(nodeLicense) !== path.join(root, 'licenses/NODE-LICENSE.txt')) fs.copyFileSync(nodeLicense, path.join(root, 'licenses/NODE-LICENSE.txt'));
     if (fs.existsSync(exe)) fs.renameSync(exe, path.join(staging, 'previous.exe'));
     try { fs.renameSync(built, exe); } catch (error) { if (fs.existsSync(path.join(staging, 'previous.exe'))) fs.renameSync(path.join(staging, 'previous.exe'), exe); throw error; }
   }

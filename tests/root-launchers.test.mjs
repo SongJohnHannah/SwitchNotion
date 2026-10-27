@@ -21,6 +21,10 @@ test('uncompressed root launchers include both systems, keep code current and pr
   assert.ok(entry.includes('adjacent=')); assert.ok(entry.includes('.notion-switch/mac-arm64')); assert.ok(entry.includes('Application Support/Switch Notion'));
   assert.equal(fs.existsSync(path.join(result.mac, 'Contents/Resources/project/.notion-switch')), false);
   prepareRootLaunchers(options); assert.equal(fs.readFileSync(path.join(root, '.notion-switch/private.txt'), 'utf8'), 'untouched private state');
+  prepareRootLaunchers({ sourceProject: root, host: 'win32', compile: options.compile });
+  assert.equal(fs.readFileSync(path.join(root, 'bin/node.exe'), 'utf8'), 'fixture Node');
+  assert.equal(fs.readFileSync(path.join(root, 'licenses/NODE-LICENSE.txt'), 'utf8'), 'fixture license');
+  assert.equal(fs.existsSync(path.join(result.mac, 'Contents/Resources/project/src/runtime-bootstrap.cjs')), true);
   fs.writeFileSync(path.join(result.mac, 'Contents/Resources/user-added.txt'), 'do not destroy');
   assert.throws(() => prepareRootLaunchers(options), /被修改过/); assert.equal(fs.existsSync(path.join(result.mac, 'Contents/Resources/user-added.txt')), true);
 });

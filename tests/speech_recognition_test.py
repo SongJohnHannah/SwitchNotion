@@ -20,7 +20,7 @@ class RecognitionPolicy(unittest.TestCase):
         model.transcribe.return_value = ([segment], types.SimpleNamespace(language='zh'))
         return model, segment
 
-    def test_automatic_language_has_multilingual_decode_bounded_context_and_confidence_fallback(self):
+    def test_automatic_bilingual_decode_does_not_bias_audio_with_previous_text(self):
         model, _ = self.model()
         result = transcribe(model, self.sample(context='前文' * 100))
         options = model.transcribe.call_args.kwargs
@@ -29,7 +29,7 @@ class RecognitionPolicy(unittest.TestCase):
         self.assertEqual(options['task'], 'transcribe')
         self.assertEqual(options['temperature'], [0, .2, .4])
         self.assertTrue(options['vad_filter'])
-        self.assertLess(len(options['initial_prompt']), 160)
+        self.assertIsNone(options['initial_prompt'])
         self.assertIn('English', result['contextText'])
 
     def test_explicit_english_is_respected_and_low_confidence_is_never_reused_as_context(self):
@@ -48,6 +48,26 @@ class RecognitionPolicy(unittest.TestCase):
         data = base64.b64encode(np.zeros(16000, dtype='<f4').tobytes()).decode()
         self.assertEqual(transcribe(model, {'audio': data})['text'], '')
         model.transcribe.assert_not_called()
+
+    def test_bilingual_recording_decodes_each_acoustic_phrase_without_translation(self):
+        model, english = self.model()
+        english.text = 'Please keep the English sentence.'
+        chinese = types.SimpleNamespace(**vars(english))
+        chinese.text = '中文保持中文。'
+        samples = np.concatenate([np.full(5 * 16000, .1), np.zeros(16000), np.full(6 * 16000, .2)]).astype('<f4')
+        model.transcribe.side_effect = [([english], types.SimpleNamespace(language='en')),
+                                        ([chinese], types.SimpleNamespace(language='zh'))]
+        result = transcribe(model, {'audio': base64.b64encode(samples.tobytes()).decode()})
+        self.assertIn(english.text, result['text'])
+        self.assertIn(chinese.text, result['text'])
+        self.assertEqual(model.transcribe.call_count, 2)
+        calls = model.transcribe.call_args_list
+        self.assertEqual([len(c.args[0]) for c in calls], [92800, 99200])
+        np.testing.assert_array_equal(np.concatenate([c.args[0] for c in calls]), samples)
+        for call in calls:
+            self.assertIsNone(call.kwargs['language'])
+            self.assertEqual(call.kwargs['task'], 'transcribe')
+        self.assertEqual(result['segments'][1]['start'], 5.8)
 
 if __name__ == '__main__':
     unittest.main()

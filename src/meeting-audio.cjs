@@ -1,9 +1,12 @@
 const { randomUUID } = require('node:crypto');
 const { uuid } = require('./native-context.cjs');
+const { PcmSegmenter } = require('./speech/segmentation.cjs');
 const FRAME_LIMIT = 16000 * 4 * 2;
-const languageOf = value => /^(?:zh|cmn)(?:[-_].*)?$/i.test(value || '') ? 'zh' : /^en(?:[-_].*)?$/i.test(value || '') ? 'en' : 'auto';
+const QUEUE_LIMIT = 16000 * 4 * 600;
 class MeetingAudioSession {
-  constructor({ root, provider, emit, authorize = async () => {}, onActivity = () => {}, onTranscript = () => {} }) {
+  constructor({ root, provider, emit, inputMode = 'meeting', authorize = async () => {}, onActivity = () => {}, onTranscript = () => {} }) {
+    if (!['microphone', 'meeting'].includes(inputMode)) throw Error('录音来源设置无效。');
+    this.inputMode = inputMode;
     this.root = root; this.provider = provider; this.emit = emit; this.authorize = authorize; this.onActivity = onActivity; this.onTranscript = onTranscript;
     this.id = randomUUID(); this.context = null; this.sources = new Map(); this.seen = new Map(); this.jobs = Promise.resolve(); this.queuedBytes = 0; this.closed = false; this.failure = null; this.abort = new AbortController(); this.drained = false;
   }
@@ -41,34 +44,34 @@ class MeetingAudioSession {
       if (typeof input.base64Audio !== 'string' || input.base64Audio.length > Math.ceil(FRAME_LIMIT / 3) * 4 || !/^[A-Za-z\d+/]+={0,2}$/.test(input.base64Audio)) throw Error('音频帧格式无效。');
       const bytes = Buffer.from(input.base64Audio, 'base64');
       if (!bytes.length || bytes.length > FRAME_LIMIT || bytes.length % 4 || bytes.toString('base64') !== input.base64Audio) throw Error('音频帧格式无效。');
-      let energy = 0;
-      for (let i = 0; i < bytes.length; i += 4) { const n = bytes.readFloatLE(i); if (!Number.isFinite(n) || Math.abs(n) > 1.01) throw Error('音频采样格式无效。'); energy += n * n; }
+      for (let i = 0; i < bytes.length; i += 4) { const n = bytes.readFloatLE(i); if (!Number.isFinite(n) || Math.abs(n) > 1.01) throw Error('音频采样格式无效。'); }
       const source = input.audioSource || 'microphone'; if (!['microphone', 'system_audio'].includes(source)) throw Error('音频来源无效。');
-      const state = this.sources.get(source) || { parts: [], bytes: 0, offset: 0, silence: 0, context: '' };
-      if (!state.bytes) state.language = languageOf(input.language);
-      this.sources.set(source, state); state.parts.push(bytes); state.bytes += bytes.length;
-      state.silence = Math.sqrt(energy / (bytes.length / 4)) < .006 ? state.silence + bytes.length / (16000 * 4) : 0;
-      if (state.bytes >= 16000 * 4 * 20 || state.bytes >= 16000 * 4 * 4 && state.silence >= .8) this.enqueue(source, state);
+      if (this.inputMode === 'microphone' && source === 'system_audio') return {};
+      const buffered = [...this.sources.values()].reduce((sum, state) => sum + state.segmenter.bytes, 0);
+      if (this.queuedBytes + buffered + bytes.length > QUEUE_LIMIT) throw Error('转写积压超过十分钟，请停止录音并等待处理完成；已接收的音频会继续转写。');
+      const state = this.sources.get(source) || { segmenter: new PcmSegmenter(), offset: 0, context: '' };
+      this.sources.set(source, state);
+      state.segmenter.push(bytes, pcm => this.enqueue(source, state, pcm));
       return {};
     }
     if (['drainTranscription', 'audioFinished', 'destroySession'].includes(method)) {
-      for (const [source, state] of this.sources) this.enqueue(source, state);
+      for (const [source, state] of this.sources) state.segmenter.flush(pcm => this.enqueue(source, state, pcm));
       await this.jobs; this.drained = true; this.onActivity(false); if (this.failure) throw this.failure;
       return {};
     }
     throw Error('尚未支持此音频操作。');
   }
-  enqueue(source, state) {
-    if (!state.bytes) return;
-    const pcm = Buffer.concat(state.parts), language = state.language, duration = pcm.length / (16000 * 4), start = state.offset, audioSessionId = randomUUID();
-    state.parts = []; state.bytes = 0; state.silence = 0; state.offset += duration;
-    if (this.queuedBytes + pcm.length > 16000 * 4 * 120) throw Error('转写速度暂时跟不上录音，请停止并等待处理完成。');
+  enqueue(source, state, pcm) {
+    const duration = pcm.length / (16000 * 4), start = state.offset, audioSessionId = randomUUID();
+    state.offset += duration;
     this.queuedBytes += pcm.length; const id = randomUUID();
     const frame = (status, text = '') => ({ type: 'transcription', audioSessionId, segmentId: id, isAudioSessionComplete: status !== 'pending', isSegmentComplete: status !== 'pending', audioSource: source, segmentSortkey: start * 1000, hasUnreliableTranscriptTiming: true, serverSentAtMs: Date.now(), transcription: { id, status, audioDuration: duration, ...(status === 'complete' ? { text, audioStartMs: start * 1000, audioEndMs: (start + duration) * 1000 } : {}) } });
     this.emit(frame('pending'));
     this.jobs = this.jobs.then(async () => {
       if (this.closed || this.failure) return;
-      const options = { pcm, language, context: state.context || '', signal: this.abort.signal };
+      // Notion's preferred dictation language can default to English even
+      // when the speaker is Chinese. Native meeting input is always bilingual.
+      const options = { pcm, language: 'auto', context: state.context || '', signal: this.abort.signal };
       const result = this.provider.transcribeDetailed ? await this.provider.transcribeDetailed(options) : { text: await this.provider.transcribe(options) };
       if (this.closed) return;
       const text = result.text; state.context = typeof result.context === 'string' ? result.context.slice(-120) : '';

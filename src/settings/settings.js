@@ -104,6 +104,8 @@ async function checkUpdates() {
   const r = await api.updateStatus(); if (!r.ok) { result('updates-result', r.error, true); return; }
   const info = r.result; $('updates-title').textContent = info.available ? '检测到本机 Notion 更新' : '每次启动自动检查';
   $('updates-versions').textContent = '本机原版 ' + info.originalVersion + ' · 当前原型 ' + info.prototypeVersion;
+  const automatic = info.automaticCompatibility;
+  $('updates-web').textContent = automatic ? '网页自动适配已开启 · 本次已检查 ' + automatic.checked + ' 个脚本 · 自动适配 ' + automatic.adapted + ' 个 · 不兼容 ' + automatic.blocked + ' 个' : '网页模块加载时自动检查。';
   $('updates-message').textContent = info.message; $('rollback-update').hidden = !info.previousVersion;
   result('updates-result', info.lastResult || '', !info.compatible || !info.clientCompatible);
 }
@@ -115,7 +117,7 @@ async function checkSpeech() {
   const s = response.result;
   $('speech-backend').textContent = `${s.engineName} · ${s.modelName} · ${s.hardwareLabel} · ${s.computeType}`;
   $('speech-status').textContent = !s.supported ? '系统暂不支持' : s.ready ? '离线引擎就绪' : s.configured ? '已配置' : '尚未准备';
-  if (!speechDirty) { $('speech-enabled').checked = s.enabled; $('speech-model').value = s.model || 'medium'; $('speech-summary').checked = s.autoSummary !== false; }
+  if (!speechDirty) { $('speech-enabled').checked = s.enabled; $('speech-model').value = s.model || 'medium'; $('speech-summary').checked = s.autoSummary !== false; $('speech-system-audio').checked = s.inputMode !== 'microphone'; }
   if (s.preparing && s.progress?.message) {
     const percentage = s.progress.total ? ` ${Math.min(100, Math.floor(s.progress.received / s.progress.total * 100))}%` : '';
     result('speech-result', s.progress.message + percentage);
@@ -134,15 +136,17 @@ speechRecorder = new window.SpeechRecorder(api, value => {
   $('test-speech').disabled = ['preparing', 'transcribing'].includes(value.state);
   if (value.message) result('speech-result', value.message, value.state === 'error');
   if (value.state === 'preparing') $('speech-transcript').hidden = true;
+  if (value.state === 'preparing') { $('speech-playback').hidden = true; $('speech-playback').removeAttribute('src'); }
+  if (value.playbackUrl) { $('speech-playback').src = value.playbackUrl; $('speech-playback').hidden = false; }
   if (value.result) {
     result('speech-result', value.result.message + ` 耗时 ${(value.result.elapsedMs / 1000).toFixed(2)} 秒。`);
     $('speech-transcript').textContent = value.result.text || '未检测到清晰人声。'; $('speech-transcript').hidden = false;
   }
 });
 $('test-speech').addEventListener('click', () => { if (speechRecorder.state === 'recording') speechRecorder.stop(); else if (speechRecorder.state === 'idle' && !busy) void speechRecorder.start(); });
-window.addEventListener('pagehide', () => { clearInterval(speechPoll); void speechRecorder.cancel(); });
+window.addEventListener('pagehide', () => { clearInterval(speechPoll); speechRecorder.clearPlayback(); void speechRecorder.cancel(); });
 $('release-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.releaseSpeech(); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); await checkSpeech(); }));
-for (const id of ['speech-model', 'speech-enabled', 'speech-summary']) $(id).addEventListener('change', () => { speechDirty = true; });
-$('save-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.saveSpeech({ enabled: $('speech-enabled').checked, model: $('speech-model').value, autoSummary: $('speech-summary').checked }); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) speechDirty = false; await checkSpeech(); }));
+for (const id of ['speech-model', 'speech-enabled', 'speech-summary', 'speech-system-audio']) $(id).addEventListener('change', () => { speechDirty = true; });
+$('save-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.saveSpeech({ enabled: $('speech-enabled').checked, model: $('speech-model').value, autoSummary: $('speech-summary').checked, inputMode: $('speech-system-audio').checked ? 'meeting' : 'microphone' }); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) speechDirty = false; await checkSpeech(); }));
 if (!api) result('load-error', '请通过“NotionSwitch 配置”快捷方式打开此窗口。', true);
 else load().then(async () => { const r = await api.updateStatus(); if (r.ok && r.result.openOnStartup) document.querySelector('[data-view="updates"]').click(); }).catch(() => result('load-error', '配置暂时无法加载，请关闭窗口后重新打开。', true));

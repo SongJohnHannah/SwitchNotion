@@ -17,7 +17,9 @@ class UpdateService {
       const module = await this.load();
       if (action === 'update.status') {
         const value = module.updateStatus({ root: this.root, platform: this.platform }), ui = this.getCompatibility();
-        return { ok: true, result: { ...value, openOnStartup: process.env.NOTION_SWITCH_UPDATE_VIEW === '1', clientCompatible: !ui.unsupportedAssets?.length, ...(value.compatible && ui.unsupportedAssets?.length ? { message: 'Notion 网页接入模块已变化，当前适配器暂不支持。客户端版本回退未必能恢复网页 AI，需要兼容此协议的新版 NotionSwitch。' } : {}) } };
+        return { ok: true, result: { ...value, openOnStartup: process.env.NOTION_SWITCH_UPDATE_VIEW === '1', clientCompatible: !ui.unsupportedAssets?.length,
+          automaticCompatibility: { enabled: true, checked: ui.adaptedAssets?.length || 0, adapted: ui.automaticAssets?.length || 0, blocked: ui.unsupportedAssets?.length || 0 },
+          ...(value.compatible && ui.unsupportedAssets?.length ? { message: '检测到网页模块的实质变化，已暂停不兼容的接管。请更新 Switch Notion；客户端回退不一定能恢复独立更新的网页模块。' } : {}) } };
       }
       this.platform.requireCapability('prepareRuntime');
       if (this.updating || this.isBusy()) throw Error('AI 或登录同步正在进行，请等待完成或停止后再更新。');
@@ -37,7 +39,9 @@ class UpdateService {
     if (!this.platform.isNodeExecutable(nodeExecutable)) throw Error('Node unavailable');
     const script = path.join(this.projectDirectory, 'scripts', 'update-helper.mjs');
     return new Promise((resolve, reject) => {
-      const child = this.spawnImpl(nodeExecutable, [script, mode, String(process.pid)], { windowsHide: true, detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+      // The desktop cwd is inside runtime. Inheriting it would make this
+      // surviving worker lock the directory it is about to replace on Windows.
+      const child = this.spawnImpl(nodeExecutable, [script, mode, String(process.pid)], { cwd: this.projectDirectory, windowsHide: true, detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
       let done = false;
       const finish = ok => { if (done) return; done = true; clearTimeout(timer); child.removeAllListeners('message'); child.removeAllListeners('exit'); child.on('error', () => {}); if (child.connected) child.disconnect(); child.unref(); ok ? resolve() : reject(Error('helper unavailable')); };
       const timer = setTimeout(() => finish(false), 10000);

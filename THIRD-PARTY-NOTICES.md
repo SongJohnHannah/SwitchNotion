@@ -8,5 +8,6 @@ NotionSwitch 自写源代码采用根目录的 MIT 许可证。
 - 仓库研究目录中缓存的公开 Notion 前端脚本属于第三方材料，不纳入项目 MIT 授权，也不放入迁移包。
 - API Key、Notion 登录资料、本机聊天历史和运行日志属于本机用户数据，不放入干净的迁移包。
 - 可选的离线语音适配使用本机安装的 faster-whisper、CTranslate2 和 Whisper 模型；Windows GPU 后端还需要 NVIDIA 运行库，Apple Silicon 后端使用 CPU。这些组件不随当前源码包分发，项目 MIT 许可证不替代各组件、模型和 NVIDIA 库的原有许可。
+- 网页自动兼容检查内置 Acorn 8.16.0（MIT）、eslint-scope 8.4.0、esrecurse 4.3.0 和 estraverse 5.3.0（BSD-2-Clause）；完整许可位于 `src/compat/VENDOR-LICENSES.txt`。构建依赖不随运行包分发。解析与作用域检查在本机执行，不执行待检查的脚本，不上传账号或页面内容。
 
 项目不附带任何 Notion AI 或 DeepSeek 服务额度。

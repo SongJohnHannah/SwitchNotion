@@ -36,7 +36,7 @@ test('microphone permission is limited to the active test in the exact configura
   }
 });
 function renderer(t, getMedia) {
-  let stops = 0, recorded = 0; const events = [], calls = [];
+  let stops = 0, recorded = 0; const events = [], calls = [], revoked = [], blobs = [];
   const stream = { getTracks: () => [{ stop: () => stops++ }] };
   class MediaRecorder {
     constructor() { this.state = 'inactive'; recorded++; }
@@ -47,10 +47,11 @@ function renderer(t, getMedia) {
     cancelSpeechRecording: async value => { calls.push({ type: 'cancel', ...value }); return { ok: true }; },
     finishSpeechRecording: async value => { calls.push({ type: 'finish', ...value }); return { ok: true, result: { text: 'real test transcript', elapsedMs: 5 } }; } };
   const context = { window: {}, navigator: { mediaDevices: { getUserMedia: getMedia || (async constraints => { assert.equal(constraints.video, false); return stream; }) } },
+    URL: { createObjectURL(blob) { blobs.push(blob); return 'blob:local-test-' + blobs.length; }, revokeObjectURL(url) { revoked.push(url); } },
     MediaRecorder, Blob, Uint8Array, Date, setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask };
   vm.runInNewContext(fs.readFileSync(new URL('../src/settings/speech-recorder.js', import.meta.url), 'utf8'), context);
-  const recorder = new context.window.SpeechRecorder(api, value => events.push(value)); t.after(() => recorder.cancel());
-  return { recorder, events, calls, stream, stops: () => stops, recorded: () => recorded };
+  const recorder = new context.window.SpeechRecorder(api, value => events.push(value)); t.after(() => { recorder.clearPlayback(); return recorder.cancel(); });
+  return { recorder, events, calls, stream, blobs, revoked, stops: () => stops, recorded: () => recorded };
 }
 test('configuration recording captures the microphone directly and stops every track before local transcription', async t => {
   const f = renderer(t); await f.recorder.start(); assert.equal(f.recorder.state, 'recording');
@@ -62,4 +63,12 @@ test('late microphone permission after cancellation cannot start a hidden record
   let release; const f = renderer(t, () => new Promise(resolve => { release = resolve; }));
   const starting = f.recorder.start(); await delay(0); await f.recorder.cancel(); release(f.stream); await starting;
   assert.equal(f.recorded(), 0); assert.equal(f.stops(), 1); assert.equal(f.calls.some(c => c.type === 'finish'), false);
+});
+
+test('test audio can be replayed locally, is not sent as a URL, and is released before the next recording', async t => {
+  const f = renderer(t); await f.recorder.start(); f.recorder.stop(); await delay(10);
+  assert.equal(f.blobs.length, 1); assert.match(f.events.find(e => e.state === 'complete').playbackUrl, /^blob:local-test-/);
+  assert.ok(!JSON.stringify(f.calls).includes('blob:'));
+  assert.equal(f.revoked.length, 0, 'Finishing keeps a replay of this test in window memory');
+  await f.recorder.start(); assert.deepEqual(f.revoked, ['blob:local-test-1']);
 });

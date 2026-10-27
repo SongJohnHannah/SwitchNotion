@@ -6,7 +6,7 @@ const allowedOrigin = origin => { try { const u = new URL(origin); return u.prot
 class NativeSpeech {
   constructor({ speech, log = () => {}, originAllowed = allowedOrigin } = {}) {
     this.speech = speech; this.log = log; this.originAllowed = originAllowed; this.tickets = new Map(); this.connections = new Set(); this.port = null; this.transportReady = false;
-    this.warming = null; this.warmError = null; this.closed = false;
+    this.warming = null; this.warmError = null; this.closed = false; this.lifecycleReady = false; this.drainTransportReady = false;
     this.server = http.createServer((_req, res) => res.writeHead(404).end());
     this.server.on('upgrade', (req, socket, head) => this.connect(req, socket, head));
     this.ready = new Promise((resolve, reject) => { this.server.once('error', reject); this.server.listen(0, '127.0.0.1', () => { this.port = this.server.address().port; resolve(); }); });
@@ -16,7 +16,7 @@ class NativeSpeech {
   get enabled() { return this.speech.enabled && !!this.speech.provider.runtime; }
   async token() {
     await this.ready;
-    if (!this.enabled || !this.transportReady) throw Error('本机离线语音或原生连接适配尚未准备，本次录音没有连接云端。');
+    if (!this.enabled || !this.transportReady || !this.lifecycleReady || !this.drainTransportReady) throw Error('本机离线语音或原生录音收尾适配尚未准备，请重新打开会议页面；本次录音没有连接云端。');
     if (this.speech.recording) throw Error('本机录音测试正在进行，请先停止测试。');
     for (const [token, ticket] of this.tickets) if (ticket.expires < Date.now()) this.tickets.delete(token);
     if (this.tickets.size >= 64) throw Error('本机录音连接过多，请停止后重新打开速记。');
@@ -56,7 +56,7 @@ class NativeSpeech {
       });
     } });
     if (!peer) return;
-    session = new MeetingAudioSession({ provider: this.speech.provider, emit: send, onActivity: value => {
+    session = new MeetingAudioSession({ provider: this.speech.provider, inputMode: this.speech.inputMode || 'meeting', emit: send, onActivity: value => {
       if (active === value) return; active = value;
       if (value) this.speech.provider.retain(); else this.speech.provider.release();
     } });
@@ -67,7 +67,7 @@ class NativeSpeech {
     const { provider, device, platform, architecture } = this.speech.provider.status?.() || {};
     this.log({ type: 'offline-audio-connected', provider, device, platform, architecture });
   }
-  status() { return { available: !!this.port, enabled: this.enabled, transportReady: this.transportReady, connections: this.connections.size, warming: !!this.warming }; }
+  status() { return { available: !!this.port, enabled: this.enabled, transportReady: this.transportReady, lifecycleReady: this.lifecycleReady, drainTransportReady: this.drainTransportReady, connections: this.connections.size, warming: !!this.warming }; }
   close() { this.closed = true; for (const c of this.connections) c.close(); this.connections.clear(); this.tickets.clear(); this.server.close(); }
 }
 function loopbackCsp(policy, endpoint) {

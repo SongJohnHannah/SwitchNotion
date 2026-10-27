@@ -19,6 +19,7 @@ test('Mac package is relocatable, reuses Notion icon and preserves double-click 
   const entry = fs.readFileSync(path.join(result.app, 'Contents/MacOS/SwitchNotion'), 'utf8');
   assert.ok(entry.includes('../Resources/project')); assert.ok(entry.includes('$HOME/Library/Application Support/Switch Notion'));
   assert.ok(!entry.includes(project));
+  assert.deepEqual(fs.readFileSync(path.join(result.app, 'Contents/Resources/project/src/runtime-bootstrap.cjs')), fs.readFileSync(path.join(project, 'src/runtime-bootstrap.cjs')));
   const archive = path.join(base, 'mac.zip'); zipDirectory({ directory: result.directory, output: archive });
   const bytes = fs.readFileSync(archive), end = bytes.length - 22, start = bytes.readUInt32LE(end + 16), count = bytes.readUInt16LE(end + 10);
   let at = start; const modes = new Map();

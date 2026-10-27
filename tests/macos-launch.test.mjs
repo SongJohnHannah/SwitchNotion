@@ -5,7 +5,7 @@ import path from 'node:path';
 import platformModule from '../src/platform/index.cjs';
 import runtimeModule from '../src/platform/macos-runtime.cjs';
 import { ensureMacInstallation } from '../scripts/launch-macos.mjs';
-import { prepareRuntime, acceptRuntime } from '../scripts/runtime-update.mjs';
+import { prepareRuntime, acceptRuntime, rollbackRuntime, updateStatus } from '../scripts/runtime-update.mjs';
 import { inspectDesktop } from '../scripts/desktop-compat.mjs';
 import { readArchive, sha256 } from '../scripts/asar.mjs';
 const { createDesktopPlatform } = platformModule;
@@ -49,6 +49,7 @@ function fixture(t) {
   fs.writeFileSync(source.executable, macho);
   function install(version) {
     const bytes = archive(version); fs.writeFileSync(source.archive, bytes);
+    fs.writeFileSync(path.join(source.resources, 'app-update.yml'), 'provider: generic\nurl: https://fixture.invalid/official-installer');
     fs.writeFileSync(path.join(source.appRoot, 'Contents/Info.plist'), JSON.stringify({ CFBundleName: 'Notion', CFBundleIdentifier: 'notion.id', CFBundleDisplayName: 'Notion',
       CFBundleURLTypes: ['notion'], ElectronTeamID: 'LBQJ96FQ8D', CFBundleIconFile: 'electron.icns',
       ElectronAsarIntegrity: { 'Resources/app.asar': { algorithm: 'SHA256', hash: runtimeModule.headerHash(bytes) } } }));
@@ -66,6 +67,8 @@ test('M1 launch prepares a separate bundle, updates ASAR integrity and identity,
   const info = JSON.parse(fs.readFileSync(path.join(staged.appRoot, 'Contents/Info.plist'), 'utf8'));
   assert.equal(info.CFBundleDisplayName, 'Switch Notion'); assert.equal(info.CFBundleIdentifier, 'com.notionswitch.desktop');
   assert.equal(info.CFBundleIconFile, 'electron.icns'); assert.equal(info.CFBundleURLTypes, undefined);
+  assert.equal(fs.existsSync(path.join(staged.resources, 'app-update.yml')), false);
+  assert.equal(fs.existsSync(path.join(f.source.resources, 'app-update.yml')), true);
   assert.equal(info.ElectronAsarIntegrity['Resources/app.asar'].hash, runtimeModule.headerHash(fs.readFileSync(staged.archive)));
   assert.ok(readArchive(fs.readFileSync(staged.archive)).read('.webpack/main/index.js').toString().startsWith('require(require('));
   assert.deepEqual(fs.readFileSync(f.source.archive), original); assert.deepEqual(fs.readFileSync(path.join(f.source.appRoot, 'Contents/Info.plist')), beforePlist);
@@ -81,6 +84,34 @@ test('signature failure preserves the working Mac runtime and never changes the 
   const next = f.install('7.40.21'); f.failSign();
   assert.equal(prepareRuntime(options).updateStatus, 'blocked');
   assert.deepEqual(fs.readFileSync(app.archive), before); assert.equal(sha256(fs.readFileSync(f.source.archive)), sha256(next));
+});
+
+test('M1 updates and rollback preserve signed bundle metadata and local state across full runtime swaps', t => {
+  const f = fixture(t), options = { ...f, source: f.source.appRoot };
+  prepareRuntime(options); acceptRuntime(options);
+  const runtime = f.platform.runtimeLayout(path.join(f.root, 'runtime'));
+  const previous = f.platform.runtimeLayout(path.join(f.root, 'runtime-previous'));
+  const original = fs.readFileSync(runtime.archive);
+  const local = path.join(f.root, 'profile', 'fixture-session');
+  fs.mkdirSync(path.dirname(local)); fs.writeFileSync(local, 'fixture local state');
+  const next = f.install('7.40.21');
+  assert.equal(prepareRuntime(options).pendingValidation, true);
+  assert.deepEqual(fs.readFileSync(previous.archive), original);
+  assert.equal(fs.existsSync(previous.executable), true);
+  const info = JSON.parse(fs.readFileSync(path.join(runtime.appRoot, 'Contents/Info.plist'), 'utf8'));
+  assert.equal(info.CFBundleIdentifier, 'com.notionswitch.desktop');
+  assert.equal(info.ElectronAsarIntegrity['Resources/app.asar'].hash, runtimeModule.headerHash(fs.readFileSync(runtime.archive)));
+  acceptRuntime(options);
+  assert.equal(updateStatus(options).prototypeVersion, '7.40.21');
+  assert.equal(updateStatus(options).previousVersion, '7.40.20');
+  rollbackRuntime(options);
+  assert.deepEqual(fs.readFileSync(runtime.archive), original);
+  assert.equal(updateStatus(options).prototypeVersion, '7.40.20');
+  assert.equal(prepareRuntime(options).updateStatus, 'held');
+  assert.equal(prepareRuntime({ ...options, force: true }).version, '7.40.21');
+  acceptRuntime(options);
+  assert.equal(fs.readFileSync(local, 'utf8'), 'fixture local state');
+  assert.deepEqual(fs.readFileSync(f.source.archive), next);
 });
 
 test('a corrupt source integrity header is rejected before copying the Mac bundle', t => {
