@@ -45,6 +45,7 @@ function fixture(t) {
   const platform = createDesktopPlatform({ id: 'darwin', arch: 'arm64', home: directory, env: {}, execFileSync });
   const source = platform.installationLayout(path.join(directory, 'Applications/Notion.app'));
   fs.mkdirSync(source.resources, { recursive: true }); fs.mkdirSync(path.dirname(source.executable), { recursive: true });
+  fs.mkdirSync(path.join(source.resources, 'zh_CN.lproj'));
   const macho = Buffer.alloc(32); macho.writeUInt32LE(0xfeedfacf); macho.writeUInt32LE(0x0100000c, 4);
   fs.writeFileSync(source.executable, macho);
   function install(version) {
@@ -65,7 +66,9 @@ test('M1 launch prepares a separate bundle, updates ASAR integrity and identity,
   const staged = f.platform.runtimeLayout(path.join(f.root, 'runtime'));
   assert.equal(result.pendingValidation, true); assert.equal(result.platform, 'darwin');
   const info = JSON.parse(fs.readFileSync(path.join(staged.appRoot, 'Contents/Info.plist'), 'utf8'));
-  assert.equal(info.CFBundleDisplayName, 'Switch Notion'); assert.equal(info.CFBundleName, 'Notion'); assert.equal(info.CFBundleIdentifier, 'com.notionswitch.desktop');
+  assert.equal(path.basename(staged.appRoot), 'SwitchNotion.app');
+  assert.equal(info.CFBundleDisplayName, 'SwitchNotion'); assert.equal(info.CFBundleName, 'Notion'); assert.equal(info.CFBundleIdentifier, 'com.notionswitch.desktop');
+  assert.match(fs.readFileSync(path.join(staged.resources, 'zh_CN.lproj/InfoPlist.strings'), 'utf8'), /CFBundleName" = "SwitchNotion"/);
   assert.equal(info.CFBundleIconFile, 'electron.icns'); assert.equal(info.CFBundleURLTypes, undefined);
   assert.equal(fs.existsSync(path.join(staged.resources, 'app-update.yml')), false);
   assert.equal(fs.existsSync(path.join(f.source.resources, 'app-update.yml')), true);
@@ -84,6 +87,21 @@ test('signature failure preserves the working Mac runtime and never changes the 
   const next = f.install('7.40.21'); f.failSign();
   assert.equal(prepareRuntime(options).updateStatus, 'blocked');
   assert.deepEqual(fs.readFileSync(app.archive), before); assert.equal(sha256(fs.readFileSync(f.source.archive)), sha256(next));
+});
+
+test('renamed runtime can roll back to an existing legacy Notion.app without changing the profile', t => {
+  const f = fixture(t), options = { ...f, source: f.source.appRoot };
+  prepareRuntime(options); acceptRuntime(options);
+  const container = path.join(f.root, 'runtime');
+  fs.renameSync(path.join(container, 'SwitchNotion.app'), path.join(container, 'Notion.app'));
+  const local = path.join(f.root, 'profile', 'fixture-session');
+  fs.mkdirSync(path.dirname(local)); fs.writeFileSync(local, 'preserved');
+  assert.equal(f.platform.runtimeLayout(container).appRoot, path.join(container, 'Notion.app'));
+  assert.equal(prepareRuntime({ ...options, force: true }).pendingValidation, true);
+  assert.equal(path.basename(f.platform.runtimeLayout(container).appRoot), 'SwitchNotion.app');
+  rollbackRuntime(options);
+  assert.equal(path.basename(f.platform.runtimeLayout(container).appRoot), 'Notion.app');
+  assert.equal(fs.readFileSync(local, 'utf8'), 'preserved');
 });
 
 test('M1 updates and rollback preserve signed bundle metadata and local state across full runtime swaps', t => {

@@ -47,8 +47,10 @@ test('macOS discovery uses app bundles without Windows commands or Windows archi
   assert.deepEqual(platform.discoverInstallation(root), source);
   assert.deepEqual(platform.findInstallation(source.executable, root), source);
   const layout = platform.runtimeLayout(path.join(root, 'runtime'));
-  assert.equal(layout.appRoot, path.join(root, 'runtime', 'Notion.app'));
+  assert.equal(layout.appRoot, path.join(root, 'runtime', 'SwitchNotion.app'));
   assert.equal(layout.archive, path.join(layout.appRoot, 'Contents', 'Resources', 'app.asar'));
+  fs.mkdirSync(path.join(root, 'legacy', 'Notion.app'), { recursive: true });
+  assert.equal(platform.runtimeLayout(path.join(root, 'legacy')).appRoot, path.join(root, 'legacy', 'Notion.app'));
   assert.equal(platform.login.strategy, 'macos-keychain-copy'); assert.equal(platform.capabilities.syncLogin, true);
   assert.equal(platform.compatibility.reviewedBuilds['7.40.1'], '48154144947412453a987b55cc1725c5a4dbf66f7b90ea919384d061cde2716f');
   assert.notEqual(platform.compatibility.reviewedBuilds['7.40.1'], createDesktopPlatform({ id: 'win32' }).compatibility.reviewedBuilds['7.40.1']);

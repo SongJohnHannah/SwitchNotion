@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { createInterface } = require('node:readline');
 const { createHash } = require('node:crypto');
 const { download } = require('./download.cjs');
 const { createSpeechPlatform } = require('./platform.cjs');
@@ -10,15 +11,27 @@ const UV = Object.freeze({
   win32: { archive: 'uv-x86_64-pc-windows-msvc.zip', digest: 'a38b8d1902b7cfbc76b423ba1bb456f623f42064cdc72628b6075b89afd1019a', executable: 'uv.exe' },
   darwin: { archive: 'uv-aarch64-apple-darwin.tar.gz', digest: '743f85035a1996ecb350659e01cd9faea9709829be09b1b4b03c73eaf3c9cd73', executable: 'uv-aarch64-apple-darwin/uv' }
 });
-function run(executable, args, { env, signal, spawnImpl = spawn } = {}) {
+function run(executable, args, { env, signal, spawnImpl = spawn, onProgress } = {}) {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = spawnImpl(executable, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env, signal });
     let bytes = 0;
     const consume = chunk => { bytes += chunk.length; if (bytes > 8 * 1024 * 1024) child.kill(); };
     child.stdout?.on('data', consume); child.stderr?.on('data', consume);
+    if (child.stdout && onProgress) {
+      const lines = createInterface({ input: child.stdout });
+      lines.on('line', line => {
+        if (!line.startsWith('SWITCH_NOTION_PROGRESS ')) return;
+        try {
+          const value = JSON.parse(line.slice('SWITCH_NOTION_PROGRESS '.length));
+          if (Number.isFinite(value.received) && value.received >= 0 &&
+              (value.total === null || (Number.isFinite(value.total) && value.total > 0 && value.received <= value.total)) &&
+              Number.isFinite(value.bytesPerSecond) && value.bytesPerSecond >= 0) onProgress(value);
+        } catch {}
+      });
+    }
     child.once('error', () => reject(Error('本机语音准备进程未能启动。')));
-    child.once('exit', code => code === 0 ? resolve() : reject(Error('本机语音组件准备失败，请检查网络后重新准备；已下载的缓存会保留。')));
+    child.once('close', code => code === 0 ? resolve() : reject(Error('本机语音组件准备失败，请检查网络后重新准备；已下载的缓存会保留。')));
   });
 }
 async function install({ root, platform = createSpeechPlatform(), onProgress = () => {}, signal,
@@ -62,8 +75,10 @@ async function install({ root, platform = createSpeechPlatform(), onProgress = (
   phase('正在下载 faster-whisper 和本地依赖，首次准备需要联网…');
   await runImpl(uv, ['--no-config', 'pip', 'install', '--python', python, '--only-binary=:all:', '-r', path.join(__dirname, 'requirements.txt')], { env, signal });
   const model = models[platform.profile.model];
-  phase(`正在下载或续传 ${model.name} 中英文模型（约 ${model.size}）…`);
-  await runImpl(python, [path.join(__dirname, 'managed_prepare.py'), '--root', root, '--model', platform.profile.model], { env, signal });
+  const modelMessage = `正在下载或续传 ${model.name} 中英文模型（约 ${model.size}）…`;
+  phase(modelMessage);
+  await runImpl(python, [path.join(__dirname, 'managed_prepare.py'), '--root', root, '--model', platform.profile.model],
+    { env, signal, onProgress: value => onProgress({ message: modelMessage, ...value, updatedAt: Date.now() }) });
   phase('正在验证本机离线环境…');
   try { return await discoverImpl(root, { platform }); }
   catch (error) { if (platform.profile.platform !== 'win32' || error.code !== 'SPEECH_RUNTIME_NOT_FOUND') throw error; }

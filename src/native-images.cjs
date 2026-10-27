@@ -116,7 +116,7 @@ async function readImage(response, maxBytes, signal) {
  * Neither callback result, signed URL, nor response headers are returned in
  * provider content. The adapter has no filesystem or generic HTTP capability.
  */
-function createNativeImageAdapter({ resolveFile, fetchImage, limits: requestedLimits = {} } = {}) {
+function createNativeImageAdapter({ resolveFile, fetchImage, readLocalFile, limits: requestedLimits = {} } = {}) {
   const limits = { ...VISION_LIMITS };
   for (const key of Object.keys(requestedLimits)) {
     if (!Object.hasOwn(limits, key) || !Number.isInteger(requestedLimits[key]) || requestedLimits[key] < 1 || requestedLimits[key] > limits[key]) fail('图片输入限制配置无效。');
@@ -154,9 +154,13 @@ function createNativeImageAdapter({ resolveFile, fetchImage, limits: requestedLi
       const combined = AbortSignal.any([signal || new AbortController().signal, AbortSignal.timeout(limits.imageTimeoutMs)]);
       try {
         combined.throwIfAborted();
-        const file = await resolveFile({ spaceId, threadId, fileId, includeFileMetadata: true, signal: combined });
-        combined.throwIfAborted();
-        const bytes = await download(file?.url, combined, Math.min(limits.maxImageBytes, limits.maxTotalBytes - totalBytes));
+        let bytes = await readLocalFile?.({ spaceId, threadId, fileId, signal: combined });
+        if (!bytes) {
+          const file = await resolveFile({ spaceId, threadId, fileId, includeFileMetadata: true, signal: combined });
+          combined.throwIfAborted();
+          bytes = await download(file?.url, combined, Math.min(limits.maxImageBytes, limits.maxTotalBytes - totalBytes));
+        }
+        if (!Buffer.isBuffer(bytes) || bytes.length > limits.maxImageBytes || bytes.length > limits.maxTotalBytes - totalBytes) fail('图片文件过大，请压缩后重新上传。');
         combined.throwIfAborted();
         const info = inspectImage(bytes, limits.maxDimension);
         totalBytes += bytes.length;

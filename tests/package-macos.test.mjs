@@ -14,7 +14,13 @@ test('Mac package is relocatable, reuses Notion icon and preserves double-click 
   const result = stageMac({ destination: path.join(base, 'Switch Notion M1') });
   assert.equal(result.includesNotion, false); assert.equal(result.includesUserData, false); assert.equal(result.notarized, false);
   const plist = fs.readFileSync(path.join(result.app, 'Contents/Info.plist'), 'utf8');
-  assert.ok(plist.includes('<string>Switch Notion</string>')); assert.ok(plist.includes('notion.icns'));
+  assert.equal(path.basename(result.app), 'SwitchNotion.app');
+  assert.match(plist, /<key>CFBundleName<\/key><string>SwitchNotion<\/string>/);
+  assert.match(plist, /<key>CFBundleDisplayName<\/key><string>SwitchNotion<\/string>/); assert.ok(plist.includes('notion.icns'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(result.directory, 'package-manifest.json'))).name, 'SwitchNotion');
+  for (const name of ['Switch Notion 启动.command', 'Switch Notion 配置.command']) {
+    assert.ok(fs.readFileSync(path.join(result.directory, name), 'utf8').includes('/SwitchNotion.app/Contents/Resources/project'));
+  }
   assert.deepEqual(fs.readFileSync(path.join(result.app, 'Contents/Resources/notion.icns')), fs.readFileSync(path.join(project, 'assets/notion.icns')));
   const entry = fs.readFileSync(path.join(result.app, 'Contents/MacOS/SwitchNotion'), 'utf8');
   assert.ok(entry.includes('../Resources/project')); assert.ok(entry.includes('$HOME/Library/Application Support/Switch Notion'));
@@ -36,5 +42,6 @@ test('Mac package is relocatable, reuses Notion icon and preserves double-click 
   }
   for (const [name, mode] of modes) if (/\.command$|\.sh$|Contents\/MacOS\//.test(name)) assert.equal(mode, 0o755, name);
   assert.ok([...modes.keys()].some(name => name.endsWith('/Switch Notion 启动.command')));
+  assert.ok([...modes.keys()].some(name => name.includes('/SwitchNotion.app/Contents/Info.plist')));
   assert.throws(() => stageMac({ destination: result.directory }), /新目录/);
 });

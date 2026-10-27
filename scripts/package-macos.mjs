@@ -24,7 +24,8 @@ export function stageMac({ sourceProject = project, destination, projectAware = 
     ...descendants(path.join(sourceProject, 'src')).map(f => path.relative(sourceProject, f))];
   const keys = localDeepSeekKeys(sourceProject);
   assertDistributionFiles(sourceProject, sources.map(f => path.join(sourceProject, f)), keys);
-  const app = path.join(target, 'Switch Notion.app'), resources = path.join(app, 'Contents/Resources'), payload = path.join(resources, 'project');
+  // Keep the existing project-root launcher filename, but name distributed apps consistently with the installed app.
+  const app = path.join(target, projectAware ? 'Switch Notion.app' : 'SwitchNotion.app'), resources = path.join(app, 'Contents/Resources'), payload = path.join(resources, 'project');
   for (const file of sources) {
     const out = path.join(payload, file); fs.mkdirSync(path.dirname(out), { recursive: true }); fs.copyFileSync(path.join(sourceProject, file), out);
     if (/\.(?:command|sh)$/.test(file)) fs.chmodSync(out, 0o755);
@@ -35,7 +36,7 @@ export function stageMac({ sourceProject = project, destination, projectAware = 
   const version = JSON.parse(fs.readFileSync(path.join(sourceProject, 'package.json'), 'utf8')).version;
   fs.writeFileSync(path.join(app, 'Contents/Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
-<key>CFBundleName</key><string>Switch Notion</string><key>CFBundleDisplayName</key><string>Switch Notion</string>
+<key>CFBundleName</key><string>SwitchNotion</string><key>CFBundleDisplayName</key><string>SwitchNotion</string>
 <key>CFBundleIdentifier</key><string>com.notionswitch.launcher</string><key>CFBundleExecutable</key><string>SwitchNotion</string>
 <key>CFBundleIconFile</key><string>notion.icns</string><key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>${version}</string><key>LSMinimumSystemVersion</key><string>13.0</string>
@@ -46,11 +47,11 @@ export function stageMac({ sourceProject = project, destination, projectAware = 
   fs.chmodSync(entry, 0o755);
   for (const [name, targetMode] of [['Switch Notion 启动.command', 'notion'], ['Switch Notion 配置.command', 'settings']]) {
     const launcher = path.join(target, name);
-    fs.writeFileSync(launcher, '#!/bin/sh\nset -eu\nbase=$(CDPATH= cd "$(dirname "$0")/Switch Notion.app/Contents/Resources/project" && pwd -P)\nexport NOTION_SWITCH_ROOT="$HOME/Library/Application Support/Switch Notion"\nexec /bin/sh "$base/scripts/launch-macos.sh" ' + targetMode + ' "$base"\n', { mode: 0o755 });
+    fs.writeFileSync(launcher, '#!/bin/sh\nset -eu\nbase=$(CDPATH= cd "$(dirname "$0")/' + path.basename(app) + '/Contents/Resources/project" && pwd -P)\nexport NOTION_SWITCH_ROOT="$HOME/Library/Application Support/Switch Notion"\nexec /bin/sh "$base/scripts/launch-macos.sh" ' + targetMode + ' "$base"\n', { mode: 0o755 });
     fs.chmodSync(launcher, 0o755);
   }
   const output = descendants(target); assertDistributionFiles(target, output, keys);
-  const manifest = { name: 'Switch Notion', platform: 'darwin', architecture: 'arm64', version,
+  const manifest = { name: 'SwitchNotion', platform: 'darwin', architecture: 'arm64', version,
     includesNotion: false, includesUserData: false, includesModels: false, includesNode: false, notarized: false,
     files: output.map(file => ({ file: path.relative(target, file).replaceAll('\\', '/'), sha256: createHash('sha256').update(fs.readFileSync(file)).digest('hex') })) };
   fs.writeFileSync(path.join(target, 'package-manifest.json'), JSON.stringify(manifest, null, 2));
@@ -58,7 +59,7 @@ export function stageMac({ sourceProject = project, destination, projectAware = 
 }
 export function packageMac() {
   fs.mkdirSync(path.join(project, 'dist'), { recursive: true });
-  const staged = stageMac({ destination: path.join(project, 'dist', 'Switch-Notion-mac-arm64-' + Date.now()) });
+  const staged = stageMac({ destination: path.join(project, 'dist', 'SwitchNotion-mac-arm64-' + Date.now()) });
   const archive = staged.directory + '.zip', zipped = zipDirectory({ directory: staged.directory, output: archive });
   fs.writeFileSync(archive + '.sha256', createHash('sha256').update(fs.readFileSync(archive)).digest('hex') + '  ' + path.basename(archive) + '\n');
   return { ...staged, archive, ...zipped };

@@ -1,6 +1,6 @@
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { app, BrowserWindow, ipcMain, Menu, MenuItem, Tray, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, MenuItem, Tray, shell, nativeImage } = require('electron');
 const { SettingsService } = require('./settings-service.cjs');
 const { LoginService } = require('./login-state.cjs');
 const { UpdateService } = require('./update-service.cjs');
@@ -88,7 +88,10 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
   app.whenReady().then(async () => {
     const menu = Menu.getApplicationMenu(); if (menu) Menu.setApplicationMenu(menu);
     try {
-      tray = new Tray(await app.getFileIcon(process.execPath));
+      const icon = platform.id === 'darwin'
+        ? nativeImage.createFromPath(path.join(__dirname, 'settings', 'notion-tray.png')).resize({ width: 18, height: 18 })
+        : await app.getFileIcon(process.execPath);
+      tray = new Tray(icon);
       tray.setToolTip('NotionSwitch · 工作区与 DeepSeek 配置');
       tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开 NotionSwitch 配置', click: () => void open() }, { label: '一键启动 Notion', click: () => void openNotion() }, { type: 'separator' }, { label: '退出 NotionSwitch', click: () => app.quit() }]));
       tray.on('click', () => void open());

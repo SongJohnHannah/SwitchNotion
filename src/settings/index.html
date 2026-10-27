@@ -62,6 +62,7 @@
             <p id="speech-audio-state" class="field-help"></p><button id="retry-meeting-audio" class="button secondary" hidden>重试保存会议录音</button>
           <div class="form-actions"><button id="prepare-speech" class="button primary">检测并准备</button><button id="test-speech" class="button secondary">录音测试</button><button id="release-speech" class="button secondary">释放资源</button><button id="save-speech" class="button secondary">保存设置</button></div>
           <div id="speech-result" class="inline-result" role="status" hidden></div>
+          <progress id="speech-progress" max="100" aria-label="语音模型下载进度" hidden></progress>
           <pre id="speech-transcript" class="inline-result" hidden></pre>
           <audio id="speech-playback" controls hidden aria-label="回听本次麦克风录音"></audio><p class="field-help">录音测试只用麦克风，可回听原音并对照文字。测试录音仅保留在本窗口内存，关闭窗口后丢弃，不上传云端。</p>
         </div>

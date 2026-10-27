@@ -15,7 +15,11 @@ function macos({ home, arch, execFileSync, fs }) {
       return layout(path.basename(absolute) === 'Notion' && path.basename(path.dirname(absolute)) === 'MacOS'
         ? path.resolve(absolute, '..', '..', '..') : absolute);
     },
-    runtimeLayout: container => layout(path.join(container, 'Notion.app')),
+    runtimeLayout: container => {
+      const current = path.join(container, 'SwitchNotion.app'), legacy = path.join(container, 'Notion.app');
+      // Existing installations and rollback snapshots may still use the old bundle name.
+      return layout(fs.existsSync(current) || !fs.existsSync(legacy) ? current : legacy);
+    },
     candidates: () => [path.join(home, 'Applications', 'Notion.app'), '/Applications/Notion.app'],
     fallbackCandidates: () => [],
     login: { strategy: arch === 'arm64' ? 'macos-keychain-copy' : 'interactive', sourceRoot: path.join(home, 'Library', 'Application Support', 'Notion') },

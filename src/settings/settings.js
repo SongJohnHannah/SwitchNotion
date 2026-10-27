@@ -141,9 +141,14 @@ async function checkSpeech() {
   const imports = s.audioImports;
   $('speech-audio-state').textContent = imports ? (imports.capturing ? '正在为会议保留待保存的音频。' : imports.active ? '正在后台保存会议音频，不影响录音收尾。' : '会议音频已保存 ' + imports.saved + ' 场 · 待处理 ' + imports.pending + ' 场') + (imports.lastError ? ' ' + imports.lastError : '') : '';
   $('retry-meeting-audio').hidden = !imports?.failed;
-  if (s.preparing && s.progress?.message) {
-    const percentage = s.progress.total ? ` ${Math.min(100, Math.floor(s.progress.received / s.progress.total * 100))}%` : '';
-    result('speech-result', s.progress.message + percentage);
+  const progress = s.progress, bar = $('speech-progress');
+  bar.hidden = !(s.preparing && progress?.total && Number.isFinite(progress.received));
+  if (!bar.hidden) bar.value = Math.min(100, progress.received / progress.total * 100);
+  if (s.preparing && progress?.message) {
+    const size = bytes => bytes >= 1e9 ? (bytes / 1e9).toFixed(2) + ' GB' : (bytes / 1e6).toFixed(1) + ' MB';
+    const amount = progress.total ? ` ${Math.floor(bar.value)}% · ${size(progress.received)} / ${size(progress.total)}` : '';
+    const speed = Number.isFinite(progress.bytesPerSecond) ? ` · ${size(Date.now() - progress.updatedAt > 3000 ? 0 : progress.bytesPerSecond)}/s` : '';
+    result('speech-result', progress.message + amount + speed);
   }
   $('speech-description').textContent = s.loaded ? `模型已载入 ${s.hardwareLabel}；空闲后自动释放，下一次使用会重新载入。` : s.configured ? `已发现本机 ${s.modelName} 模型，下一次使用时载入。` : '尚未准备；点击“检测并准备”会自动下载缺少的组件，首次需要联网。';
   $('speech-native-state').textContent = s.nativeMeetingAdapter ? '保存后重新打开 Notion 页面生效。' : '离线引擎可独立测试；原生速记接入尚未启用。';

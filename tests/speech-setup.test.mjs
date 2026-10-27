@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import downloads from '../src/speech/download.cjs';
 import installer from '../src/speech/install.cjs';
 import platforms from '../src/speech/platform.cjs';
@@ -21,6 +22,39 @@ test('setup downloads only from verified release hosts, checks the digest and re
   await assert.rejects(downloads.download({ url: 'https://github.com/fixture', file, sha256,
     fetchImpl: async () => { calls++; return new Response('', { status: 302, headers: { location: 'http://169.254.169.254/private' } }); } }), /发行站点/);
   assert.equal(calls, 1);
+});
+test('model download progress reports resumed bytes and rejects invalid child output', async () => {
+  const received = [];
+  const script = `process.stdout.write('SWITCH_NOTION_PRO');
+    process.stdout.write('GRESS {"received":40,"total":100,"bytesPerSecond":12}\\n');
+    console.log('SWITCH_NOTION_PROGRESS {"received":101,"total":100,"bytesPerSecond":3}');
+    console.log('SWITCH_NOTION_PROGRESS not-json');`;
+  await installer.run(process.execPath, ['-e', script], { onProgress: value => received.push(value) });
+  assert.deepEqual(received, [{ received: 40, total: 100, bytesPerSecond: 12 }]);
+});
+test('model preparation reports resumed progress and keeps the existing snapshot download', t => {
+  const root = directory(t), modules = path.join(root, 'modules');
+  fs.mkdirSync(path.join(modules, 'tqdm'), { recursive: true });
+  fs.writeFileSync(path.join(modules, 'tqdm', '__init__.py'), '');
+  fs.writeFileSync(path.join(modules, 'tqdm', 'auto.py'), `class tqdm:
+    def __init__(self, *args, **kwargs): self.n = kwargs.get('initial', 0); self.total = kwargs.get('total')
+    def update(self, amount=1): self.n += amount
+    def close(self): pass
+`);
+  fs.writeFileSync(path.join(modules, 'huggingface_hub.py'), `from pathlib import Path
+def hf_hub_download(repo, filename, revision, local_dir, token, tqdm_class):
+    assert filename == 'model.bin' and not token
+    bar = tqdm_class(total=100, initial=40, name='test'); bar.update(60); bar.close()
+def snapshot_download(repo, revision, local_dir, allow_patterns, token):
+    assert 'model.bin' in allow_patterns and not token
+    Path(local_dir).mkdir(parents=True, exist_ok=True)
+    (Path(local_dir) / 'snapshot-called').touch()
+`);
+  const result = spawnSync('python3', [path.resolve('src/speech/managed_prepare.py'), '--root', root], { encoding: 'utf8', env: { ...process.env, PYTHONPATH: modules } });
+  assert.equal(result.status, 0, result.stderr);
+  const events = result.stdout.trim().split('\n').map(line => JSON.parse(line.replace('SWITCH_NOTION_PROGRESS ', '')));
+  assert.equal(events[0].received, 40); assert.equal(events.at(-1).received, 100); assert.equal(events.at(-1).total, 100);
+  assert.ok(fs.existsSync(path.join(root, 'speech/faster-whisper-medium/snapshot-called')));
 });
 for (const id of ['win32', 'darwin']) test(`${id} missing environment setup keeps all files local and selects only its own dependencies`, async t => {
   const root = directory(t), calls = [], progress = []; let discoveries = 0;

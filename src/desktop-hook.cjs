@@ -16,6 +16,7 @@ const { NotionRouter } = require('./notion-routing.cjs');
 const { nativeModelCatalog } = require('./native-models.cjs');
 const { setupSettings, isSettings } = require('./settings-window.cjs');
 const { createNativeImageAdapter, describeUploadResponse } = require('./native-images.cjs');
+const { LocalImageUploads, prefix: localUploadPrefix } = require('./local-image-uploads.cjs');
 const { NativeSpeech, loopbackCsp } = require('./speech/native.cjs');
 const { isMeetingSummary, offlineSummaryResponse } = require('./speech/summary.cjs');
 const { MeetingNativeBridge } = require('./meeting-summary-native.cjs');
@@ -40,6 +41,7 @@ const meetingSummaries = new MeetingSummaryService({ root, provider, log,
   storeFactory: (info, meta) => meta.store || meetingBridge.forRequest(meta.request, meta.session, info.spaceId) });
 const workspace = new NotionRouter({ root, log });
 const mock = new NativeMock({ log, stateFile: path.join(root, 'conversations.local.json'), provider, workspace });
+const localImages = new LocalImageUploads({ root, owns: input => mock.owns(input), record: id => mock.record(id) });
 let recordings;
 const settings = setupSettings({ root, platform, isBusy: () => mock.status().activeTurns > 0 || meetingSummaries.active > 0 || recordings?.active > 0, getCompatibility: () => compatibility });
 recordings = new MeetingRecordings({ root, provider: settings.speech.provider, enabled: () => settings.speech.autoAttachAudio,
@@ -53,6 +55,17 @@ const endpoints = new Set(['runInferenceTranscript', 'createAgentThread', 'creat
 function isNotion(hostname) { return hostname === 'notion.so' || hostname.endsWith('.notion.so') || hostname === 'notion.com' || hostname.endsWith('.notion.com'); }
 async function route(request, passthrough, ses) {
   const url = new URL(request.url), endpoint = url.pathname.match(/\/api\/v\d+\/([^/]+)/)?.[1] || url.pathname.split('/').pop();
+  if (isNotion(url.hostname) && url.pathname.startsWith(localUploadPrefix)) {
+    return localImages.put(url.pathname.slice(localUploadPrefix.length), request);
+  }
+  if (isNotion(url.hostname) && url.pathname.includes('/api/') && ['createAgentServiceFileUploadURL', 'completeAgentServiceFileUpload'].includes(endpoint)) {
+    try {
+      const input = await request.clone().json(), user = request.headers.get('x-notion-active-user-header');
+      if (endpoint === 'createAgentServiceFileUploadURL' && localImages.handlesTarget(input.target) &&
+          ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(input.mediaType)) return json(localImages.create(input, user, url.origin));
+      if (endpoint === 'completeAgentServiceFileUpload' && localImages.hasPending(input.fileId)) return json(localImages.complete(input, user));
+    } catch (error) { return json({ name: 'NotionSwitchImageUpload', message: error.message }, 400); }
+  }
   meetingBridge.observe(request, ses);
   recordings.wake();
   const upstream = passthrough;
@@ -133,6 +146,7 @@ async function route(request, passthrough, ses) {
       if (settings.isLoginSyncing() && /^(?:create|sendEventTo|runInference)/.test(endpoint)) return json({ name: 'NotionSwitchPrototype', message: '本机登录同步正在准备重启，请等待重新打开后继续。' }, 409);
       if (localRead && !mock.owns(input)) return passthrough(request);
       const images = createNativeImageAdapter({
+        readLocalFile: ({ spaceId, threadId, fileId }) => localImages.read({ spaceId, threadId, fileId, userId: request.headers.get('x-notion-active-user-header') }),
         resolveFile: async ({ spaceId, threadId, fileId, includeFileMetadata, signal }) => {
           if (!ses) throw Error('DeepSeek 原生图片会话不可用，请重试。');
           const headers = { 'content-type': 'application/json' };

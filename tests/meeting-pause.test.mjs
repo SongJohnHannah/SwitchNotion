@@ -14,7 +14,7 @@ function routeFixture(t) {
   const fixture = meetingFixture(t);
   const log = [], forwarded = [];
   const context = {
-    Request, Response, Headers, URL, require, console,
+    Request, Response, Headers, URL, require, console, localUploadPrefix: '/notion-switch-local-upload/',
     ...summary,
     settings: { speech: { enabled: true, autoSummary: false } }, nativeSpeech: { enabled: true, endpoint: 'http://127.0.0.1:32123' },
     meetingBridge: { observe() {} }, recordings: { wake() {} },

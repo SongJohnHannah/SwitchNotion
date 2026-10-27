@@ -54,8 +54,17 @@ function createMacRuntime({ execFileSync, fsImpl = fs }) {
       const file = path.join(layout.appRoot, 'Contents', 'Info.plist');
       const info = readPlist(file);
       const set = (key, value) => plist(file, [Object.hasOwn(info, key) ? '-replace' : '-insert', key, '-string', value]);
-      set('CFBundleDisplayName', 'Switch Notion');
+      set('CFBundleDisplayName', 'SwitchNotion');
       set('CFBundleIdentifier', 'com.notionswitch.desktop');
+      for (const item of fsImpl.readdirSync(layout.resources, { withFileTypes: true })) {
+        if (!item.isDirectory() || !item.name.endsWith('.lproj')) continue;
+        const strings = path.join(layout.resources, item.name, 'InfoPlist.strings');
+        if (!fsImpl.existsSync(strings)) fsImpl.writeFileSync(strings, '"CFBundleName" = "SwitchNotion";\n"CFBundleDisplayName" = "SwitchNotion";\n');
+        else {
+          const localized = readPlist(strings);
+          for (const key of ['CFBundleName', 'CFBundleDisplayName']) plist(strings, [Object.hasOwn(localized, key) ? '-replace' : '-insert', key, '-string', 'SwitchNotion']);
+        }
+      }
       for (const key of ['CFBundleURLTypes', 'CFBundleDocumentTypes', 'ElectronTeamID']) if (Object.hasOwn(info, key)) plist(file, ['-remove', key]);
       // Preserve Electron integrity validation; update its expected header hash.
       plist(file, [Object.hasOwn(info, 'ElectronAsarIntegrity') ? '-replace' : '-insert', 'ElectronAsarIntegrity', '-json', JSON.stringify({ 'Resources/app.asar': { algorithm: 'SHA256', hash: headerHash(fsImpl.readFileSync(layout.archive)) } })]);
