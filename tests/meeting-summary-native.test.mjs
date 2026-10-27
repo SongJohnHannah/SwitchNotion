@@ -32,3 +32,23 @@ test('foreign origins, ports and windows cannot borrow a previously observed nat
     assert.throws(() => bridge.forRequest(request, session, ids.space), /登录会话/);
   }
 });
+
+test('recording resumes only under its original account and omits native cookies from object-storage uploads', async () => {
+  const calls = [], bridge = new MeetingNativeBridge({ uploadFetch: async (url, options) => { calls.push({ url, options }); return new Response(''); } });
+  const session = { async fetch(url, options) {
+    calls.push({ url, options });
+    assert.ok(!url.includes('amazonaws.com'), 'Notion session fetch must not perform object-storage uploads');
+    return new Response(JSON.stringify({ results: [{ role: 'editor', value: {
+      id: ids.meeting, space_id: ids.space, type: 'transcription', alive: true
+    } }] }));
+  } };
+  bridge.observe(new Request('https://app.notion.com/api/v3/getRecordValues', { headers: {
+    'x-notion-active-user-header': ids.user, 'x-notion-space-id': ids.space
+  } }), session);
+  const store = await bridge.forRecording({ meetingId: ids.meeting, spaceId: ids.space, userId: ids.user });
+  await store.uploadFetch('https://fixture.s3.amazonaws.com/upload', { method: 'PUT', headers: { 'content-type': 'audio/mpeg' }, body: Buffer.from('fixture') });
+  const upload = calls.at(-1).options;
+  assert.equal(upload.credentials, 'omit'); assert.equal(upload.redirect, 'error');
+  assert.equal(upload.headers['x-notion-active-user-header'], undefined);
+  await assert.rejects(bridge.forRecording({ meetingId: ids.meeting, spaceId: ids.space, userId: ids.notes }), /同一 Notion 登录账号/);
+});

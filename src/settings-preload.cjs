@@ -21,5 +21,6 @@ contextBridge.exposeInMainWorld('notionSwitch', Object.freeze({
   finishSpeechRecording: input => request('speech.record.finish', input),
   cancelSpeechRecording: input => request('speech.record.cancel', input),
   releaseSpeech: () => request('speech.release'),
+  retryMeetingAudio: () => request('speech.audio.retry'),
   help: () => request('help.open')
 }));

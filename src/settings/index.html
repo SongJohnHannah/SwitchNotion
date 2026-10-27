@@ -58,6 +58,8 @@
           <label class="check-label"><input id="speech-enabled" type="checkbox"> 启用原生速记的离线转写</label><p id="speech-native-state" class="field-help">正在检查原生界面适配状态…</p>
           <label class="check-label"><input id="speech-system-audio" type="checkbox" checked> 转写系统播放声音</label><p class="field-help">默认开启：同时转写麦克风和电脑播放的声音。视频、网页和提示音中的讲话也会被转写，保留系统音频标注；关闭后只录麦克风。更改后请刷新 Notion 页面。</p>
             <label class="check-label"><input id="speech-summary" type="checkbox" checked> 停止录音后用 DeepSeek 自动生成摘要</label><p class="field-help">开启后会将转录文字和手写笔记发送给 DeepSeek，摘要需要联网；原始音频在本机转写。关闭后只转录，不自动生成摘要。</p>
+            <label class="check-label"><input id="speech-attach-audio" type="checkbox" checked> 停止后将会议录音保存到当前页面</label><p class="field-help">默认开启：将会议音频上传到这场会议所在的 Notion 页面，生成可播放的 MP3 音频块。长会议按约 8 分钟分段保存。关闭后新会议不另存或上传录音，待处理上传也会暂停；转写和摘要设置独立生效。上传确认成功后清理临时音频，失败时保留待重试。</p>
+            <p id="speech-audio-state" class="field-help"></p><button id="retry-meeting-audio" class="button secondary" hidden>重试保存会议录音</button>
           <div class="form-actions"><button id="prepare-speech" class="button primary">检测并准备</button><button id="test-speech" class="button secondary">录音测试</button><button id="release-speech" class="button secondary">释放资源</button><button id="save-speech" class="button secondary">保存设置</button></div>
           <div id="speech-result" class="inline-result" role="status" hidden></div>
           <pre id="speech-transcript" class="inline-result" hidden></pre>

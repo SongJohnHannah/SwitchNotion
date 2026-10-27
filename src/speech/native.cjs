@@ -4,7 +4,8 @@ const { upgrade } = require('./websocket.cjs');
 const { MeetingAudioSession } = require('../meeting-audio.cjs');
 const allowedOrigin = origin => { try { const u = new URL(origin); return u.protocol === 'https:' && /^(?:(?:app|www)\.)?notion\.(?:com|so)$/.test(u.hostname) && !u.port; } catch { return false; } };
 class NativeSpeech {
-  constructor({ speech, log = () => {}, originAllowed = allowedOrigin } = {}) {
+  constructor({ speech, recordings, log = () => {}, originAllowed = allowedOrigin } = {}) {
+    this.recordings = recordings;
     this.speech = speech; this.log = log; this.originAllowed = originAllowed; this.tickets = new Map(); this.connections = new Set(); this.port = null; this.transportReady = false;
     this.warming = null; this.warmError = null; this.closed = false; this.lifecycleReady = false; this.drainTransportReady = false;
     this.server = http.createServer((_req, res) => res.writeHead(404).end());
@@ -14,13 +15,13 @@ class NativeSpeech {
   }
   get endpoint() { return this.port ? `http://127.0.0.1:${this.port}` : null; }
   get enabled() { return this.speech.enabled && !!this.speech.provider.runtime; }
-  async token() {
+  async token({ userId } = {}) {
     await this.ready;
     if (!this.enabled || !this.transportReady || !this.lifecycleReady || !this.drainTransportReady) throw Error('本机离线语音或原生录音收尾适配尚未准备，请重新打开会议页面；本次录音没有连接云端。');
     if (this.speech.recording) throw Error('本机录音测试正在进行，请先停止测试。');
     for (const [token, ticket] of this.tickets) if (ticket.expires < Date.now()) this.tickets.delete(token);
     if (this.tickets.size >= 64) throw Error('本机录音连接过多，请停止后重新打开速记。');
-    const token = randomBytes(32).toString('hex'); this.tickets.set(token, { expires: Date.now() + 30 * 60 * 1000 });
+    const token = randomBytes(32).toString('hex'); this.tickets.set(token, { expires: Date.now() + 30 * 60 * 1000, userId });
     // Let the native microphone connection start immediately. Model loading
     // runs in parallel; audio work remains serialized by SpeechProvider.
     this.warm(); return { accessToken: token };
@@ -56,7 +57,8 @@ class NativeSpeech {
       });
     } });
     if (!peer) return;
-    session = new MeetingAudioSession({ provider: this.speech.provider, inputMode: this.speech.inputMode || 'meeting', emit: send, onActivity: value => {
+    session = new MeetingAudioSession({ provider: this.speech.provider, inputMode: this.speech.inputMode || 'meeting', emit: send,
+      recordingFactory: context => this.recordings?.begin({ ...context, userId: ticket.userId }), onActivity: value => {
       if (active === value) return; active = value;
       if (value) this.speech.provider.retain(); else this.speech.provider.release();
     } });

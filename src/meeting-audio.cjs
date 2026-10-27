@@ -4,10 +4,10 @@ const { PcmSegmenter } = require('./speech/segmentation.cjs');
 const FRAME_LIMIT = 16000 * 4 * 2;
 const QUEUE_LIMIT = 16000 * 4 * 600;
 class MeetingAudioSession {
-  constructor({ root, provider, emit, inputMode = 'meeting', authorize = async () => {}, onActivity = () => {}, onTranscript = () => {} }) {
+  constructor({ root, provider, emit, inputMode = 'meeting', authorize = async () => {}, recordingFactory, onActivity = () => {}, onTranscript = () => {} }) {
     if (!['microphone', 'meeting'].includes(inputMode)) throw Error('录音来源设置无效。');
     this.inputMode = inputMode;
-    this.root = root; this.provider = provider; this.emit = emit; this.authorize = authorize; this.onActivity = onActivity; this.onTranscript = onTranscript;
+    this.root = root; this.provider = provider; this.emit = emit; this.authorize = authorize; this.recordingFactory = recordingFactory; this.onActivity = onActivity; this.onTranscript = onTranscript;
     this.id = randomUUID(); this.context = null; this.sources = new Map(); this.seen = new Map(); this.jobs = Promise.resolve(); this.queuedBytes = 0; this.closed = false; this.failure = null; this.abort = new AbortController(); this.drained = false;
   }
   settings() {
@@ -34,6 +34,7 @@ class MeetingAudioSession {
       const changed = this.context && (this.context.blockId !== blockId || this.context.spaceId !== spaceId);
       if (changed && !this.drained) throw Error('一个活动录音连接不能切换会议页面。');
       await this.authorize({ blockId, spaceId }); if (changed) this.sources.clear();
+      if (!this.context || this.drained) this.recording = this.recordingFactory?.({ blockId, spaceId });
       this.context = { blockId, spaceId }; this.drained = false; this.settings(); this.onActivity(true); return {};
     }
     if (method === 'transcriptionSettings') return { result: 'success' };
@@ -51,10 +52,14 @@ class MeetingAudioSession {
       if (this.queuedBytes + buffered + bytes.length > QUEUE_LIMIT) throw Error('转写积压超过十分钟，请停止录音并等待处理完成；已接收的音频会继续转写。');
       const state = this.sources.get(source) || { segmenter: new PcmSegmenter(), offset: 0, context: '' };
       this.sources.set(source, state);
+      this.recording?.write({ source, pcm: bytes });
       state.segmenter.push(bytes, pcm => this.enqueue(source, state, pcm));
       return {};
     }
     if (['drainTranscription', 'audioFinished', 'destroySession'].includes(method)) {
+      // Audio saving is background work; neither disk encoding nor upload may
+      // extend capture or the native transcript drain deadline.
+      void this.recording?.finish()?.catch(() => {});
       for (const [source, state] of this.sources) state.segmenter.flush(pcm => this.enqueue(source, state, pcm));
       await this.jobs; this.drained = true; this.onActivity(false); if (this.failure) throw this.failure;
       return {};
@@ -79,6 +84,6 @@ class MeetingAudioSession {
       this.emit(frame(text.trim() ? 'complete' : 'ignore', text));
     }).catch(() => { this.failure = Error('本机语音转写失败，请停止录音后在配置中检测引擎。'); this.onActivity(false); this.emit({ type: 'openai_error', message: this.failure.message }); }).finally(() => { this.queuedBytes -= pcm.length; });
   }
-  close() { this.closed = true; this.abort.abort(); this.sources.clear(); this.onActivity(false); }
+  close() { this.closed = true; this.abort.abort(); this.recording?.abort(); this.sources.clear(); this.onActivity(false); }
 }
 module.exports = { MeetingAudioSession };

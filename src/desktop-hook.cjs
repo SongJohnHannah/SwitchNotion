@@ -20,6 +20,7 @@ const { NativeSpeech, loopbackCsp } = require('./speech/native.cjs');
 const { isMeetingSummary, offlineSummaryResponse } = require('./speech/summary.cjs');
 const { MeetingNativeBridge } = require('./meeting-summary-native.cjs');
 const { MeetingSummaryService } = require('./meeting-summary.cjs');
+const { MeetingRecordings } = require('./meeting-recordings.cjs');
 const { uuid } = require('./native-context.cjs');
 const logFile = path.join(root, 'events.jsonl');
 const log = event => fs.appendFileSync(logFile, JSON.stringify({ time: new Date().toISOString(), ...event }) + '\n');
@@ -39,8 +40,12 @@ const meetingSummaries = new MeetingSummaryService({ root, provider, log,
   storeFactory: (info, meta) => meta.store || meetingBridge.forRequest(meta.request, meta.session, info.spaceId) });
 const workspace = new NotionRouter({ root, log });
 const mock = new NativeMock({ log, stateFile: path.join(root, 'conversations.local.json'), provider, workspace });
-const settings = setupSettings({ root, platform, isBusy: () => mock.status().activeTurns > 0 || meetingSummaries.active > 0, getCompatibility: () => compatibility });
-const nativeSpeech = new NativeSpeech({ speech: settings.speech, log }); settings.speech.native = nativeSpeech;
+let recordings;
+const settings = setupSettings({ root, platform, isBusy: () => mock.status().activeTurns > 0 || meetingSummaries.active > 0 || recordings?.active > 0, getCompatibility: () => compatibility });
+recordings = new MeetingRecordings({ root, provider: settings.speech.provider, enabled: () => settings.speech.autoAttachAudio,
+  storeFactory: (info, signal) => meetingBridge.forRecording(info, signal), log });
+settings.speech.audioImports = recordings;
+const nativeSpeech = new NativeSpeech({ speech: settings.speech, recordings, log }); settings.speech.native = nativeSpeech;
 const installed = new WeakSet();
 const cacheReady = new WeakMap();
 const compatibility = { adaptedAssets: [], automaticAssets: [], unsupportedAssets: [] };
@@ -49,6 +54,7 @@ function isNotion(hostname) { return hostname === 'notion.so' || hostname.endsWi
 async function route(request, passthrough, ses) {
   const url = new URL(request.url), endpoint = url.pathname.match(/\/api\/v\d+\/([^/]+)/)?.[1] || url.pathname.split('/').pop();
   meetingBridge.observe(request, ses);
+  recordings.wake();
   const upstream = passthrough;
   passthrough = async req => {
     let response = await upstream(req);
@@ -65,7 +71,7 @@ async function route(request, passthrough, ses) {
     return response;
   };
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && endpoint === 'getAudioProcessorAuthToken' && settings.speech.enabled) {
-    try { return json(await nativeSpeech.token()); }
+    try { return json(await nativeSpeech.token({ userId: uuid(request.headers.get('x-notion-active-user-header')) })); }
     catch (error) { return json({ message: error.message, status: 503 }, 503); }
   }
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && settings.speech.enabled && ['runMeetingNotesAgent', 'runInferenceTranscript'].includes(endpoint)) {
@@ -204,7 +210,7 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/status' && req.method === 'GET') {
     const state = mock.status(), speechBusy = settings.speech.provider.leases > 0 || settings.speech.provider.status().busy || nativeSpeech.connections.size > 0;
     res.end(JSON.stringify({ pid: process.pid, appReady: app.isReady(), windows: BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), minimized: win.isMinimized(), destroyed: win.isDestroyed() })), ...state,
-      activeTurns: state.activeTurns + (speechBusy ? 1 : 0) + meetingSummaries.active, meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
+      activeTurns: state.activeTurns + (speechBusy ? 1 : 0) + meetingSummaries.active + recordings.active, meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
       compatibility, notion: workspace.status(), settings: settings.status(), speech: { ...settings.speech.status(), native: nativeSpeech.status() } }));
   }
   else if (['/meetings/inspect', '/meetings/summarize'].includes(req.url) && req.method === 'POST') {
@@ -253,5 +259,5 @@ server.listen(0, '127.0.0.1', () => {
   log({ type: 'control-ready', mode: provider.status().mode });
 });
 app.whenReady().then(() => { install(session.defaultSession); log({ type: 'native-app-ready', electron: process.versions.electron }); });
-app.on('will-quit', () => { meetingSummaries.close(); nativeSpeech.close(); server.close(); log({ type: 'prototype-quit' }); });
+app.on('will-quit', () => { recordings.close(); meetingSummaries.close(); nativeSpeech.close(); server.close(); log({ type: 'prototype-quit' }); });
 log({ type: 'hook-loaded', originalStartupContinues: true });

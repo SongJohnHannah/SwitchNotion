@@ -17,7 +17,7 @@ function routeFixture(t) {
     Request, Response, Headers, URL, require, console,
     ...summary,
     settings: { speech: { enabled: true, autoSummary: false } }, nativeSpeech: { enabled: true, endpoint: 'http://127.0.0.1:32123' },
-    meetingBridge: { observe() {} },
+    meetingBridge: { observe() {} }, recordings: { wake() {} },
     meetingSummaries: new serviceModule.MeetingSummaryService({ root: fixture.root, provider: fixture.provider, storeFactory: () => fixture.store }),
     log: e => log.push(e), isNotion: host => host === 'app.notion.com',
     json: (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } }),

@@ -11,6 +11,7 @@ class SpeechSettings {
     let saved; try { saved = JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch { saved = {}; }
     this.enabled = saved.enabled === true;
     this.autoSummary = saved.autoSummary !== false;
+    this.autoAttachAudio = saved.autoAttachAudio !== false;
     this.inputMode = saved.inputMode === 'microphone' ? 'microphone' : 'meeting';
     const model = Object.hasOwn(models, saved.model) ? saved.model : 'medium';
     this.provider = provider || new SpeechProvider({ root, runtime: saved.runtime, model });
@@ -19,11 +20,11 @@ class SpeechSettings {
   get recording() { return this.capture.active; }
   status() { return { ...this.provider.status(), enabled: this.enabled, preparing: this.preparing,
     lastError: this.lastError, progress: this.progress, recording: this.recording, modelName: models[this.provider.status().model || 'medium']?.name, engineName: 'faster-whisper',
-    summaryUsesNetwork: true, autoSummary: this.autoSummary, inputMode: this.inputMode, nativeMeetingAdapter: !!this.native?.status().available }; }
+    summaryUsesNetwork: true, autoSummary: this.autoSummary, autoAttachAudio: this.autoAttachAudio, audioImports: this.audioImports?.status(), inputMode: this.inputMode, nativeMeetingAdapter: !!this.native?.status().available }; }
   save() {
     const { provider, model, platform, architecture, device, computeType } = this.provider.status();
     fs.writeFileSync(this.file, JSON.stringify({ version: 2, provider, model, platform, architecture,
-      device, computeType, enabled: this.enabled, autoSummary: this.autoSummary, inputMode: this.inputMode, runtime: this.provider.runtime }, null, 2) + '\n', { mode: 0o600, flush: true });
+      device, computeType, enabled: this.enabled, autoSummary: this.autoSummary, autoAttachAudio: this.autoAttachAudio, inputMode: this.inputMode, runtime: this.provider.runtime }, null, 2) + '\n', { mode: 0o600, flush: true });
   }
   async prepare() {
     if (this.preparing || this.provider.status().busy || this.provider.leases) throw Error('离线引擎正在工作，请稍后重试。');
@@ -54,10 +55,14 @@ class SpeechSettings {
     finally { this.preparing = false; this.installAbort = null; }
   }
   async request(action, input = {}) {
-    const fields = action === 'speech.save' ? ['enabled', 'model', 'autoSummary', 'inputMode'] : action === 'speech.record.finish' ? ['recordingId', 'audio', 'mimeType'] : action === 'speech.record.cancel' ? ['recordingId'] : [];
-    if (!['speech.status', 'speech.prepare', 'speech.probe', 'speech.save', 'speech.record.start', 'speech.record.finish', 'speech.record.cancel', 'speech.release'].includes(action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !fields.includes(k))) return { ok: false, error: '无法识别这项离线语音操作。' };
+    const fields = action === 'speech.save' ? ['enabled', 'model', 'autoSummary', 'autoAttachAudio', 'inputMode'] : action === 'speech.record.finish' ? ['recordingId', 'audio', 'mimeType'] : action === 'speech.record.cancel' ? ['recordingId'] : [];
+    if (!['speech.status', 'speech.prepare', 'speech.probe', 'speech.save', 'speech.record.start', 'speech.record.finish', 'speech.record.cancel', 'speech.release', 'speech.audio.retry'].includes(action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !fields.includes(k))) return { ok: false, error: '无法识别这项离线语音操作。' };
     try {
       if (action === 'speech.status') return { ok: true, result: this.status() };
+      if (action === 'speech.audio.retry') {
+        if (!this.audioImports) throw Error('会议录音保存尚未就绪。');
+        const result = await this.audioImports.retry(); return { ok: true, result: { ...result, message: result.failed ? '部分会议录音仍未保存，请查看录音保存状态。' : '已核对并重试保存会议录音。' } };
+      }
       if (action === 'speech.record.cancel') { this.capture.cancel(input.recordingId); return { ok: true, result: {} }; }
       if (action === 'speech.record.finish') return { ok: true, result: await this.capture.finish(input) };
       if (this.isBusy() && action !== 'speech.save') throw Error('Notion 任务正在执行，请结束后再检测或测试语音。');
@@ -67,6 +72,7 @@ class SpeechSettings {
       if (action === 'speech.save') {
         if (typeof input.enabled !== 'boolean') throw Error('请选择是否启用离线转写。');
         if (input.autoSummary !== undefined && typeof input.autoSummary !== 'boolean') throw Error('请选择是否自动生成会议摘要。');
+        if (input.autoAttachAudio !== undefined && typeof input.autoAttachAudio !== 'boolean') throw Error('请选择是否将会议录音保存到当前页面。');
         const inputMode = input.inputMode ?? this.inputMode;
         if (!['microphone', 'meeting'].includes(inputMode)) throw Error('请选择有效的录音来源。');
         const model = input.model ?? this.provider.status().model ?? 'medium';
@@ -82,7 +88,9 @@ class SpeechSettings {
         }
         if (input.enabled && !this.provider.runtime) await this.prepare();
         const inputChanged = inputMode !== this.inputMode;
-        this.enabled = input.enabled; this.inputMode = inputMode; if (input.autoSummary !== undefined) this.autoSummary = input.autoSummary; this.save(); await this.onChange(this.enabled);
+        this.enabled = input.enabled; this.inputMode = inputMode; if (input.autoSummary !== undefined) this.autoSummary = input.autoSummary;
+        if (input.autoAttachAudio !== undefined) this.autoAttachAudio = input.autoAttachAudio;
+        this.save(); await this.onChange(this.enabled); if (this.autoAttachAudio) this.audioImports?.wake();
         if (inputChanged && this.native) this.native.lifecycleReady = false;
         return { ok: true, result: { ...this.status(), message: inputChanged ? '已保存录音来源。请刷新 Notion 页面后再开始录音。' : '离线语音设置已保存。' } };
       }
