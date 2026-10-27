@@ -37,3 +37,30 @@ test('local upload rejects unowned threads, oversized or incomplete data', async
   assert.equal((await store.put(token, new Request(created.upload.url, { method: 'PUT', body: PNG.subarray(1) }))).status, 400);
   assert.throws(() => store.complete({ spaceId: SPACE, target: input.target, fileId: created.file.id }, USER), /尚未上传完成/);
 });
+
+test('native chat previews resolve metadata and serve original bytes without a cloud upload', async t => {
+  const store = fixture(t), target = { type: 'user' };
+  const created = store.create({ spaceId: SPACE, target, filename: 'color.png', mediaType: 'image/png', sizeBytes: PNG.length }, USER, 'https://app.notion.com');
+  await store.put(new URL(created.upload.url).pathname.split('/').at(-1), new Request(created.upload.url, { method: 'PUT', body: PNG }));
+  const file = store.complete({ spaceId: SPACE, target, fileId: created.file.id }, USER);
+  const input = { spaceId: SPACE, threadId: THREAD, fileId: file.id, includeFileMetadata: true };
+  const preview = store.resolve(input, USER, 'https://app.notion.com');
+  assert.deepEqual(preview.file, file);
+  assert.ok(!JSON.stringify(preview).includes(USER));
+  const response = store.preview(new Request(preview.url));
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'image/png');
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), PNG);
+  const thumbnail = store.preview(new Request('https://app.notion.com/image/' + encodeURIComponent(preview.url) + '?width=240'));
+  assert.deepEqual(Buffer.from(await thumbnail.arrayBuffer()), PNG);
+  assert.equal(store.preview(new Request(preview.url, { method: 'HEAD' })).headers.get('content-length'), String(PNG.length));
+  assert.throws(() => store.resolve(input, SPACE, 'https://app.notion.com'), /不属于/);
+  assert.equal(store.preview(new Request(preview.url, { headers: { origin: 'https://evil.example' } })).status, 404);
+  assert.equal(store.preview(new Request(preview.url, { method: 'POST' })).status, 404);
+  assert.equal(store.preview(new Request(preview.url.replace('app.notion.com', 'www.notion.so'))).status, 404);
+  assert.equal(store.preview(new Request('https://app.notion.com/image/' + encodeURIComponent('https://evil.example/notion-switch-local-image/x'))), null);
+  const token = new URL(preview.url).pathname.split('/').at(-1);
+  store.previews.get(token).expires = 0;
+  assert.equal(store.preview(new Request(preview.url)).status, 404);
+});

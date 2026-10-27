@@ -28,6 +28,11 @@ class AgentMock {
       if (fs.statSync(stateFile).size > 10 * 1024 * 1024) throw Error('Local conversation store exceeds prototype limit');
       for (const saved of JSON.parse(fs.readFileSync(stateFile, 'utf8')).threads) {
         const t = { ...saved, entities: new Map(saved.entities.map(e => [e.id, e])), frames: [], stop: null, eventIds: new Set(saved.eventIds || []) };
+        // Older versions saved model attachments but emitted an empty files
+        // list. Restore native file blocks for already existing conversations.
+        for (const entity of t.entities.values()) if (entity.kind === 'user_message' && !entity.files?.length && t.attachments?.[entity.id]) {
+          entity.files = clone(t.attachments[entity.id].filter(part => part.type === 'file'));
+        }
         if (t.session?.status === 'running') {
           const interruptedTurn = t.turns.at(-1);
           if (writeTools.has(interruptedTurn.activeTool)) {
@@ -118,7 +123,7 @@ class AgentMock {
       this.log({ type: 'native-selection-rejected', reason: error.selectionReason || 'invalid_selection', selectionType: ['blocks', 'text'].includes(selection?.type) ? selection.type : 'other', previewCharacters: typeof selection?.text === 'string' ? selection.text.length : null, pointerCount: Array.isArray(selection?.value) ? selection.value.length : null });
     }
     const promptText = textFrom(content);
-    const user = this.entity(t, 'user_message', { text: [[selectionDisplay(promptText, selectedContext)]], ...(selectedContext?.selection ? { user_prompt_text: promptText } : {}), files: [], is_current_user: true, render_on_user_side: true, user_message_kind: 'direct', client_message_id: clientMessageId, ...(t.thread.created_by_id ? { sender_actor_kind: 'user', sender_actor_id: t.thread.created_by_id } : {}), ...(selectedContext ? { thread_context: selectedContext } : {}) });
+    const user = this.entity(t, 'user_message', { text: [[selectionDisplay(promptText, selectedContext)]], ...(selectedContext?.selection ? { user_prompt_text: promptText } : {}), files: clone(content.filter(part => part.type === 'file')), is_current_user: true, render_on_user_side: true, user_message_kind: 'direct', client_message_id: clientMessageId, ...(t.thread.created_by_id ? { sender_actor_kind: 'user', sender_actor_id: t.thread.created_by_id } : {}), ...(selectedContext ? { thread_context: selectedContext } : {}) });
     t.attachments ||= {};
     t.attachmentScopes ||= {};
     if (content.some(part => part.type !== 'text')) { t.attachments[user.id] = clone(content); t.attachmentScopes[user.id] = { workspace_id: turn.nativeContext.workspace_id || t.thread.space_id }; }

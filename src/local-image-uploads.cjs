@@ -6,11 +6,13 @@ const { randomUUID, randomBytes, createHash } = require('node:crypto');
 const { uuid } = require('./native-context.cjs');
 const maxSize = 16 * 1024 * 1024;
 const prefix = '/notion-switch-local-upload/';
+const previewPrefix = '/notion-switch-local-image/';
 
 class LocalImageUploads {
   constructor({ root, owns, record }) {
     this.directory = path.join(root, 'image-attachments'); this.owns = owns; this.record = record;
     this.pending = new Map(); this.tokens = new Map();
+    this.previews = new Map();
   }
   handlesTarget(target) {
     return target?.type === 'user' || target?.type === 'thread' && !!this.owns({ threadId: target.threadId });
@@ -44,6 +46,7 @@ class LocalImageUploads {
     return new Response(null, { status: 200 });
   }
   hasPending(id) { return this.pending.has(id); }
+  hasFile(id) { return !!uuid(id) && fs.existsSync(path.join(this.directory, id + '.json')); }
   complete(input, userId) {
     const item = this.pending.get(input.fileId);
     if (!item || !item.data || Date.now() - item.created > 30 * 60 * 1000 || item.userId !== userId || item.spaceId !== input.spaceId ||
@@ -70,5 +73,36 @@ class LocalImageUploads {
     if (createHash('sha256').update(data).digest('hex') !== meta.sha256) throw Error('图片附件校验失败。');
     return data;
   }
+  resolve(input, userId, origin) {
+    const scope = { fileId: input.fileId, spaceId: input.spaceId, threadId: input.threadId, userId };
+    if (!this.read(scope)) throw Error('图片附件不存在。');
+    const meta = JSON.parse(fs.readFileSync(path.join(this.directory, input.fileId + '.json'), 'utf8'));
+    for (const [token, item] of this.previews) if (item.expires < Date.now()) this.previews.delete(token);
+    if (this.previews.size >= 256) this.previews.delete(this.previews.keys().next().value);
+    const token = randomBytes(32).toString('hex');
+    this.previews.set(token, { scope, origin, expires: Date.now() + 30 * 60 * 1000 });
+    return { url: origin + previewPrefix + token, ...(input.includeFileMetadata ? { file: {
+      id: meta.id, filename: meta.filename, media_type: meta.mediaType, size_bytes: meta.sizeBytes, sha256: meta.sha256
+    } } : {}) };
+  }
+  preview(request) {
+    const url = new URL(request.url); let pathname = url.pathname;
+    // Native thumbnails can wrap the content URL in Notion's /image proxy.
+    // Serve the local bytes before that proxy reaches the network.
+    if (pathname.startsWith('/image/')) {
+      try { const nested = new URL(decodeURIComponent(pathname.slice(7))); if (nested.origin !== url.origin) return null; pathname = nested.pathname; }
+      catch { return null; }
+    }
+    if (!pathname.startsWith(previewPrefix)) return null;
+    const item = this.previews.get(pathname.slice(previewPrefix.length));
+    if (!item || item.expires < Date.now() || item.origin !== url.origin || !['GET', 'HEAD'].includes(request.method) ||
+        request.headers.get('sec-fetch-site') === 'cross-site' || request.headers.get('origin') && request.headers.get('origin') !== url.origin) return new Response(null, { status: 404 });
+    try {
+      const data = this.read(item.scope);
+      const meta = JSON.parse(fs.readFileSync(path.join(this.directory, item.scope.fileId + '.json'), 'utf8'));
+      return new Response(request.method === 'HEAD' ? null : data, { headers: { 'content-type': meta.mediaType,
+        'content-length': String(data.length), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'cross-origin-resource-policy': 'same-origin' } });
+    } catch { return new Response(null, { status: 404 }); }
+  }
 }
-module.exports = { LocalImageUploads, prefix };
+module.exports = { LocalImageUploads, prefix, previewPrefix };

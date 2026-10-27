@@ -55,6 +55,18 @@ const endpoints = new Set(['runInferenceTranscript', 'createAgentThread', 'creat
 function isNotion(hostname) { return hostname === 'notion.so' || hostname.endsWith('.notion.so') || hostname === 'notion.com' || hostname.endsWith('.notion.com'); }
 async function route(request, passthrough, ses) {
   const url = new URL(request.url), endpoint = url.pathname.match(/\/api\/v\d+\/([^/]+)/)?.[1] || url.pathname.split('/').pop();
+  if (isNotion(url.hostname)) {
+    if (url.pathname.startsWith('/notion-switch-local-image/') || url.pathname.startsWith('/image/')) {
+      const preview = localImages.preview(request); if (preview) return preview;
+    }
+    if (url.pathname.includes('/api/') && endpoint === 'getFileContentURLForAgentThread') {
+      const input = await request.clone().json();
+      if (localImages.hasFile(input.fileId)) {
+        try { return json(localImages.resolve(input, request.headers.get('x-notion-active-user-header'), url.origin)); }
+        catch { return json({ message: '无法读取当前对话的图片附件。' }, 404); }
+      }
+    }
+  }
   if (isNotion(url.hostname) && url.pathname.startsWith(localUploadPrefix)) {
     return localImages.put(url.pathname.slice(localUploadPrefix.length), request);
   }
