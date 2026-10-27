@@ -43,6 +43,14 @@ wss://audioprocessor.app.notion.com/primus-v8?...会话参数...
 
 原始调查时，接管主要覆盖侧栏 Agent 和浮动文字编辑。目前 AudioProcessor 已接入本机识别，`runMeetingNotesAgent` 与 `runInferenceTranscript/summarize-transcript` 已接入 DeepSeek 摘要。原生“笔记”是手写区域；AI 生成后新增“摘要”标签，而不是覆盖手写笔记或转录。
 
+### 摘要指令（Windows / macOS 共用）
+
+`summaryTemplateSelection` 支持 `"auto"` 或 `{ page_id, space_id }`，预设和自定义指令都按原生页面引用读取。请求未提供选择时，读取会议记录的 `transcription_summary_template_selection`；明确选择 Auto 时覆盖已保存的模板。两种总结接口均使用 `meeting-summary-instructions.cjs`，不依赖操作系统。
+
+所选页面通过当前账号的正常 API 权限读取，允许可访问的其他工作区模板，但模板读取使用独立工作区范围，不改变摘要写入的会议和工作区。指令作为用户选择的摘要结构与关注点单独传给模型；手写笔记、转录仍作为数据。读取失败、空指令和超过 12,000 字符的指令会明确失败，不静默退回 Auto。模板正文参与请求指纹，生成期间修改指令会阻止旧结果写回。
+
+上述兼容由接口、模板读取及写回测试覆盖；Windows 实机录音和模型生成质量仍需在对应环境验证。
+
 保留原生速记界面的替代实现需要独立适配：音频采集 → 自选语音识别 → 原生转写事件和记录 → DeepSeek 会议总结 → 摘要记录写回。录音、停止收尾、会话取消、说话人信息及写入核验均需验证，不能仅替换一个模型地址就宣称支持。
 
 ## 原始依据

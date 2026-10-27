@@ -67,6 +67,12 @@ class NativeMeetingStore {
     const snapshot = { meeting: value, role: meeting.role, notes: notes.text, transcript: transcript.text, spaceId: this.spaceId };
     snapshot.sourceHash = fingerprint(snapshot); return snapshot;
   }
+  async template(selection, signal) {
+    // Presets can live in another workspace. Read with the same account's
+    // normal API access, in an isolated scope; never change the write store.
+    const reader = new NativeMeetingStore({ api: this.api, spaceId: selection.space_id, userId: this.userId });
+    return reader.tree(selection.page_id, signal);
+  }
   async findMeetings(pageId, signal) {
     const page = await this.root(pageId, signal);
     if (['transcription', 'meeting_note_page'].includes(page.value.type)) return [page.value.id];
