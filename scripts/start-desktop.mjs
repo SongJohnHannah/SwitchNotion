@@ -38,7 +38,9 @@ function launch() {
 }
 let child = launch(), runtimeRestored = false;
 if (prepared.pendingValidation) {
-  if (await waitForRuntime({ root: stateRoot, pid: child.pid })) acceptRuntime();
+  // macOS can take longer to restore tabs after a freshly signed bundle swap.
+  const validationTimeout = platform.id === 'darwin' ? 45000 : undefined;
+  if (await waitForRuntime({ root: stateRoot, pid: child.pid, timeoutMs: validationTimeout })) acceptRuntime();
   else {
     // Ask only this isolated process to quit. Never kill the original Notion,
     // or swap an executable directory while its process still owns files.
@@ -55,7 +57,7 @@ if (prepared.pendingValidation) {
     rollbackRuntime({ holdHash: prepared.sourceHash, reason: '新版本未通过本机启动检查，已自动恢复上一个版本。' });
     runtimeRestored = true;
     child = launch();
-    if (!await waitForRuntime({ root: stateRoot, pid: child.pid })) throw Error('上一个原型版本也未能启动，请打开配置或查看启动结果。');
+    if (!await waitForRuntime({ root: stateRoot, pid: child.pid, timeoutMs: validationTimeout })) throw Error('上一个原型版本也未能启动，请打开配置或查看启动结果。');
   }
 }
 const { ProviderRouter } = createRequire(import.meta.url)('../src/provider.cjs');

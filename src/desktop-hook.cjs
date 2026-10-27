@@ -17,6 +17,7 @@ const { nativeModelCatalog } = require('./native-models.cjs');
 const { setupSettings, isSettings } = require('./settings-window.cjs');
 const { createNativeImageAdapter, describeUploadResponse } = require('./native-images.cjs');
 const { LocalImageUploads, prefix: localUploadPrefix } = require('./local-image-uploads.cjs');
+const { generateAiBlock } = require('./native-ai-block.cjs');
 const { NativeSpeech, loopbackCsp } = require('./speech/native.cjs');
 const { isMeetingSummary, offlineSummaryResponse } = require('./speech/summary.cjs');
 const { MeetingNativeBridge } = require('./meeting-summary-native.cjs');
@@ -150,6 +151,17 @@ async function route(request, passthrough, ses) {
       compatibility.automaticAssets.push(compatAsset); log({ type: 'local-provider-ui-auto-adapted', asset: compatAsset, modules: adapted.automatic });
     }
     return adapted.response;
+  }
+  if (isNotion(url.hostname) && url.pathname.includes('/api/') && endpoint === 'generateAiBlock' && provider.status().mode === 'deepseek') {
+    try {
+      const input = await request.clone().json(), spaceId = uuid(input?.blockPointer?.spaceId);
+      const store = meetingBridge.forRequest(request, ses, spaceId);
+      return await generateAiBlock({ input, store, provider, signal: request.signal });
+    } catch (error) {
+      const message = /^(?:AI block|当前页面|此 AI block|暂只支持|请填写|无法读取)/.test(error.message || '') ? error.message : 'AI block 生成未完成，请检查当前页面和模型配置。';
+      log({ type: 'local-ai-block-failed', reason: 'generation_failed' });
+      return json({ name: 'NotionSwitchAiBlock', message }, 400);
+    }
   }
   const localRead = ['getThreadTranscript', 'getThreadQueuedMessages', 'listenToThreadTranscript'].includes(endpoint);
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && (localRead || endpoints.has(endpoint) || /^(runInference|create.*Agent.*Thread|sendEventTo.*Thread)/.test(endpoint))) {
