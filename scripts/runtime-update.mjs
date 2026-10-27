@@ -93,7 +93,7 @@ export function prepareRuntime({ root = stateRoot, platform = createDesktopPlatf
   }
   const marker = local(root, 'prepared.json'); let previous = readJson(marker);
   if (previous?.platform && previous.platform !== platform.id) throw Error('运行目录属于其他操作系统，请使用此电脑上的独立运行目录。');
-  if (previous?.pendingValidation && fs.existsSync(local(root, 'runtime-previous'))) { rollbackRuntime({ root, platform, reason: '上次更新未完成启动验证，已自动恢复。' }); previous = readJson(marker); }
+  if (previous?.pendingValidation && fs.existsSync(local(root, 'runtime-previous')) && !readJson(local(root, 'runtime-previous.json'))?.pendingValidation) { rollbackRuntime({ root, platform, reason: '上次更新未完成启动验证，已自动恢复。' }); previous = readJson(marker); }
   const sourceLayout = platform.installationLayout(path.resolve(source)), originalPath = sourceLayout.archive;
   const runtimeLayout = platform.runtimeLayout(local(root, 'runtime'));
   const canReuse = () => fs.existsSync(runtimeLayout.executable) && fs.existsSync(runtimeLayout.archive);
@@ -104,7 +104,7 @@ export function prepareRuntime({ root = stateRoot, platform = createDesktopPlatf
     if (!platform.findInstallation(source, root)) throw Error('未找到完整的官方 Notion 安装，保留现有原型。');
     const original = fs.readFileSync(originalPath), build = inspectDesktop(original, platform.compatibility), adapter = adapterHash(sourceProject);
     const last = readJson(local(root, 'update-status.json'));
-    if (!force && last?.heldHash === build.hash && previous && canReuse()) return { ...previous, updateStatus: 'held', message: last.message };
+    if (!force && last?.heldHash === build.hash && previous?.adapterHash === adapter && canReuse()) return { ...previous, updateStatus: 'held', message: last.message };
     if (!force && previous?.sourceHash === build.hash && previous.adapterHash === adapter && canReuse()) return { ...previous, updateStatus: 'current' };
     stage = 'runtime-staging-' + randomUUID(); const target = local(root, stage);
     const staged = platform.stageInstallation({ source: sourceLayout, container: target, copy });

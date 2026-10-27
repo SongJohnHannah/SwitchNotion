@@ -65,14 +65,14 @@ test('M1 launch prepares a separate bundle, updates ASAR integrity and identity,
   const staged = f.platform.runtimeLayout(path.join(f.root, 'runtime'));
   assert.equal(result.pendingValidation, true); assert.equal(result.platform, 'darwin');
   const info = JSON.parse(fs.readFileSync(path.join(staged.appRoot, 'Contents/Info.plist'), 'utf8'));
-  assert.equal(info.CFBundleDisplayName, 'Switch Notion'); assert.equal(info.CFBundleIdentifier, 'com.notionswitch.desktop');
+  assert.equal(info.CFBundleDisplayName, 'Switch Notion'); assert.equal(info.CFBundleName, 'Notion'); assert.equal(info.CFBundleIdentifier, 'com.notionswitch.desktop');
   assert.equal(info.CFBundleIconFile, 'electron.icns'); assert.equal(info.CFBundleURLTypes, undefined);
   assert.equal(fs.existsSync(path.join(staged.resources, 'app-update.yml')), false);
   assert.equal(fs.existsSync(path.join(f.source.resources, 'app-update.yml')), true);
   assert.equal(info.ElectronAsarIntegrity['Resources/app.asar'].hash, runtimeModule.headerHash(fs.readFileSync(staged.archive)));
   assert.ok(readArchive(fs.readFileSync(staged.archive)).read('.webpack/main/index.js').toString().startsWith('require(require('));
   assert.deepEqual(fs.readFileSync(f.source.archive), original); assert.deepEqual(fs.readFileSync(path.join(f.source.appRoot, 'Contents/Info.plist')), beforePlist);
-  assert.ok(f.calls.some(c => c.args.includes('-R'))); assert.ok(f.calls.some(c => c.args.includes('--force')));
+  assert.ok(f.calls.some(c => c.args.includes('=anchor apple generic and certificate leaf[subject.OU] = "LBQJ96FQ8D"'))); assert.ok(f.calls.some(c => c.args.includes('--force')));
   let launch;
   f.platform.launchRuntime({ container: path.join(f.root, 'runtime'), stateRoot: f.root, spawnImpl: (...args) => { launch = args; } });
   assert.equal(launch[0], staged.executable); assert.equal(launch[2].env.NOTION_SWITCH_ROOT, f.root);

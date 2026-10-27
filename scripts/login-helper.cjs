@@ -1,10 +1,12 @@
 // External Node 22 helper. No cookie/key values ever enter IPC, stdout or logs.
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { inspectLogin, stageLogin, readStagedMetadata, applyStagedLogin, safeError } = require('../src/login-state.cjs');
 const platform = require('../src/platform/index.cjs').createDesktopPlatform();
 const project = path.resolve(__dirname, '..'), fixedRoot = path.join(project, '.notion-switch');
+const allowedRoots = platform.id === 'darwin' ? [path.join(fixedRoot, 'mac-arm64'), path.join(os.homedir(), 'Library', 'Application Support', 'Switch Notion')] : [fixedRoot];
 function argumentsFor(values) {
   const action = values[0], options = {};
   if (!['status', 'stage', 'apply-and-restart'].includes(action) || values.length > 7) throw Error('Invalid helper action');
@@ -14,11 +16,11 @@ function argumentsFor(values) {
     options[key] = values[index + 1];
   }
   const root = path.resolve(options['--root'] || fixedRoot);
-  if (!platform.samePath(root, fixedRoot)) throw Error('Invalid helper root');
+  if (!allowedRoots.some(allowed => platform.samePath(root, allowed))) throw Error('Invalid helper root');
   return { action, root, stageId: options['--stage'], parentPid: Number(options['--parent-pid']) };
 }
-function reopenSettings() {
-  const child = spawn(process.execPath, [path.join(project, 'scripts', 'open-settings.mjs')], { cwd: project, windowsHide: true, detached: true, stdio: 'ignore', env: { ...process.env, NODE_NO_WARNINGS: '1' } });
+function reopenSettings(root) {
+  const child = spawn(process.execPath, [path.join(project, 'scripts', 'open-settings.mjs')], { cwd: project, windowsHide: true, detached: true, stdio: 'ignore', env: { ...process.env, ...(platform.id === 'darwin' ? { NOTION_SWITCH_ROOT: root } : {}), NODE_NO_WARNINGS: '1' } });
   child.on('error', () => {}); child.unref();
 }
 (async () => {
@@ -42,10 +44,10 @@ function reopenSettings() {
         let previous; try { previous = JSON.parse(fs.readFileSync(resultFile, 'utf8')); } catch {}
         if (previous?.stageId !== args.stageId) fs.writeFileSync(resultFile, JSON.stringify({ version: 1, stageId: args.stageId, status: 'failed', at: new Date().toISOString(), errorCode: safeError(error, 'apply_failed').loginCode, serverValidated: false }), { mode: 0o600 });
       } catch {}
-    } finally { reopenSettings(); }
+    } finally { reopenSettings(args.root); }
   } catch (error) {
     const safe = safeError(error, 'helper_unavailable');
-    if (args?.action === 'apply-and-restart') { if (process.connected) { try { process.disconnect(); } catch {} } reopenSettings(); }
+    if (args?.action === 'apply-and-restart') { if (process.connected) { try { process.disconnect(); } catch {} } reopenSettings(args.root); }
     else process.stdout.write(JSON.stringify({ ok: false, code: safe.loginCode }));
     process.exitCode = 1;
   }

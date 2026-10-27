@@ -70,8 +70,10 @@
         <div class="page-heading"><div><span class="eyebrow">LOCAL LOGIN</span><h1>Notion 登录状态</h1><p>登录信息保存在本机，平时一键启动会自动沿用。</p></div></div>
         <div id="login-card" class="provider-card">
           <h2 id="login-title">正在检查本机登录信息…</h2><p id="login-description" class="dialog-description"></p>
-          <p>首次使用或登录失效时，可以从这台电脑已登录的原版 Notion 同步。只复制 Notion 的登录信息；工作区 API Key 用于页面授权，需要单独添加。</p>
-          <div class="form-actions"><button id="check-login" class="button secondary">检查登录状态</button><button id="sync-login" class="button primary">从本机 Notion 同步登录</button></div>
+          <p id="login-sync-help">首次使用或登录失效时，可以从这台电脑已登录的原版 Notion 同步。只复制 Notion 的登录信息；工作区 API Key 用于页面授权，需要单独添加。</p>
+          <p id="login-interactive-help" hidden>请在 SwitchNotion 的 Notion 窗口中登录。工作区 API Key 用于页面授权，需要单独添加。</p>
+          <p id="login-mac-help" hidden>退出原版 Notion 后，可以同步本机登录。启动时如出现钥匙串访问提示，请按系统提示确认。工作区 API Key 需单独添加。</p>
+          <div class="form-actions"><button id="check-login" class="button secondary">检查登录状态</button><button id="sync-login" class="button primary">从本机 Notion 同步登录</button><button id="open-login-notion" class="button primary" hidden>打开 Notion 登录</button></div>
           <div id="login-result" class="inline-result" role="status" hidden></div>
         </div>
       </section>

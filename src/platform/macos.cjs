@@ -8,7 +8,7 @@ function macos({ home, arch, execFileSync, fs }) {
     return { appRoot, executable: path.join(appRoot, 'Contents', 'MacOS', 'Notion'), resources, archive: path.join(resources, 'app.asar') };
   };
   return {
-    id: 'darwin', label: 'macOS', capabilities: { prepareRuntime: arch === 'arm64', launchRuntime: arch === 'arm64', syncLogin: false },
+    id: 'darwin', label: 'macOS', capabilities: { prepareRuntime: arch === 'arm64', launchRuntime: arch === 'arm64', syncLogin: arch === 'arm64' },
     compatibility: { enabled: true, reviewedBuilds, versionPattern: /^7\.\d+\.\d+$/, electronPattern: /^44\./ },
     installationLayout(candidate) {
       const absolute = path.resolve(candidate);
@@ -18,7 +18,7 @@ function macos({ home, arch, execFileSync, fs }) {
     runtimeLayout: container => layout(path.join(container, 'Notion.app')),
     candidates: () => [path.join(home, 'Applications', 'Notion.app'), '/Applications/Notion.app'],
     fallbackCandidates: () => [],
-    login: { strategy: 'interactive', sourceRoot: path.join(home, 'Library', 'Application Support', 'Notion') },
+    login: { strategy: arch === 'arm64' ? 'macos-keychain-copy' : 'interactive', sourceRoot: path.join(home, 'Library', 'Application Support', 'Notion') },
     nodeName: /^node$/,
     launchOptions: {},
     configureAppIdentity() {},

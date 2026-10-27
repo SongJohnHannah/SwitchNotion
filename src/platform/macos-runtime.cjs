@@ -42,7 +42,7 @@ function createMacRuntime({ execFileSync, fsImpl = fs }) {
       const sourceInfo = readPlist(path.join(source.appRoot, 'Contents', 'Info.plist'));
       if (sourceInfo.CFBundleIdentifier !== 'notion.id' || sourceInfo.ElectronTeamID !== 'LBQJ96FQ8D') throw Error('选择的应用不是已识别的官方 Notion。');
       // Verify the signing authority rather than trusting Info.plist alone.
-      run('/usr/bin/codesign', ['--verify', '-R', 'anchor apple generic and certificate leaf[subject.OU] = "LBQJ96FQ8D"', source.appRoot]);
+      run('/usr/bin/codesign', ['--verify', '-R', '=anchor apple generic and certificate leaf[subject.OU] = "LBQJ96FQ8D"', source.appRoot]);
       const expected = sourceInfo.ElectronAsarIntegrity?.['Resources/app.asar'];
       if (expected && (expected.algorithm !== 'SHA256' || expected.hash !== headerHash(fsImpl.readFileSync(source.archive)))) throw Error('官方 Mac Notion ASAR 完整性检查失败。');
       validateBundleLinks(source.appRoot, fsImpl);
@@ -54,12 +54,14 @@ function createMacRuntime({ execFileSync, fsImpl = fs }) {
       const file = path.join(layout.appRoot, 'Contents', 'Info.plist');
       const info = readPlist(file);
       const set = (key, value) => plist(file, [Object.hasOwn(info, key) ? '-replace' : '-insert', key, '-string', value]);
-      set('CFBundleDisplayName', 'Switch Notion'); set('CFBundleName', 'Switch Notion');
+      set('CFBundleDisplayName', 'Switch Notion');
       set('CFBundleIdentifier', 'com.notionswitch.desktop');
       for (const key of ['CFBundleURLTypes', 'CFBundleDocumentTypes', 'ElectronTeamID']) if (Object.hasOwn(info, key)) plist(file, ['-remove', key]);
       // Preserve Electron integrity validation; update its expected header hash.
       plist(file, [Object.hasOwn(info, 'ElectronAsarIntegrity') ? '-replace' : '-insert', 'ElectronAsarIntegrity', '-json', JSON.stringify({ 'Resources/app.asar': { algorithm: 'SHA256', hash: headerHash(fsImpl.readFileSync(layout.archive)) } })]);
-      run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', '--preserve-metadata=entitlements,flags,runtime', layout.appRoot]);
+      // The official bundle's team-restricted entitlements cannot be carried
+      // over to an ad-hoc signature. Re-sign the isolated copy without them.
+      run('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', layout.appRoot]);
       run('/usr/bin/codesign', ['--verify', '--deep', '--strict', layout.appRoot]);
     }
   };

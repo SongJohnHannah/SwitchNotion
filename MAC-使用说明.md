@@ -6,13 +6,15 @@
 
 下载项目源码后，解压到自己的文件夹，双击项目根目录的 **Switch Notion 启动.command**。以后仍双击这个文件即可；修改配置可双击 **Switch Notion 配置.command**。不需要输入终端命令。
 
+双击 **安装到应用程序.command**，可在“应用程序”中创建带 Notion 图标的 **SwitchNotion**，也可通过 Spotlight 搜索并打开。安装时会编译本机启动器，需要 macOS 命令行开发工具。首次打开时，如果系统询问访问项目所在文件夹，请按提示允许。这个入口使用当前项目的代码和资料；更新项目代码后可再次运行安装脚本，刷新属于当前项目的启动器。如果移动项目文件夹，请先移除旧的应用入口，再从新位置运行安装脚本。安装脚本不会覆盖其他同名应用。
+
 使用 Mac 分发 ZIP 时，解压后双击 **Switch Notion.app**，也可以把它拖入“应用程序”后双击。分发文件夹中的 **Switch Notion 启动.command** 是另一种入口。移动整个源码文件夹可以继续使用；移动分发版 `.app` 后，直接双击移动后的应用。
 
 首次没有合适的 Node.js 时，窗口询问是否准备本机运行环境；确认后从 nodejs.org 下载固定版本的 ARM64 Node，并核对内置 SHA-256。已有原生 ARM64 Node 22+ 时直接复用。首次准备需要网络，日常不再重复下载。
 
 启动器自动识别当前平台。Mac 查找 `~/Applications/Notion.app` 和 `/Applications/Notion.app`；Windows 使用 Windows 安装位置和注册表。无需填写系统类型或安装路径。找不到 Notion 时，窗口提供“选择 Notion”“打开官网”和“取消”。请从 [Notion 官网](https://www.notion.com/desktop) 安装官方应用。
 
-首次在独立窗口中登录 Notion，并在配置页填写本机 DeepSeek 和工作区连接密钥。Mac 使用交互登录，不复制 Windows 登录或 Keychain 资料。登录和原生控件的具体行为仍需在 M1 上验收。
+首次使用时，可在独立窗口中登录 Notion，也可在配置页的“Notion 登录”中从本机原版 Notion 同步登录。同步前请保存内容并退出原版 Notion；同步会备份隔离副本的 Cookie，只读取 Notion 域的登录资料，不复制钥匙串或页面数据库。重启后如果系统询问钥匙串访问，请按提示确认；登录是否有效仍以 Notion 窗口为准。DeepSeek 和工作区连接密钥需要在配置页单独填写。
 
 ## 名称与图标
 

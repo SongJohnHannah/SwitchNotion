@@ -87,11 +87,31 @@ async function checkLogin() {
   if (!r.ok) { result('login-result', r.error, true); return; }
   $('sync-login').dataset.unavailable = String(r.result.syncSupported === false);
   $('sync-login').disabled = r.result.syncSupported === false;
+  const interactive = r.result.syncSupported === false && r.result.loginStrategy === 'interactive';
+  const macSync = r.result.syncSupported === true && r.result.loginStrategy === 'macos-keychain-copy';
+  $('login-sync-help').hidden = interactive || macSync;
+  $('login-interactive-help').hidden = !interactive;
+  $('login-mac-help').hidden = !macSync;
+  $('sync-login').hidden = interactive;
+  $('open-login-notion').hidden = !interactive && !macSync;
+  if (interactive) {
+    $('login-title').textContent = r.result.hasLogin === true ? '已检测到保存的登录信息' : r.result.hasLogin === false ? '尚未检测到本机登录信息' : '暂时无法检查登录状态';
+    $('login-description').textContent = r.result.hasLogin === true ? '已在本机找到登录信息；会话是否仍有效，以 Notion 窗口为准。' : '请打开 Notion 窗口，按提示登录或确认当前会话。';
+    result('login-result', '登录信息保存在此应用的独立资料中。');
+    return;
+  }
+  if (macSync) {
+    $('login-title').textContent = r.result.hasLogin === true ? '已检测到保存的登录信息' : r.result.hasLogin === false ? '尚未检测到本机登录信息' : '暂时无法检查登录状态';
+    $('login-description').textContent = r.result.message;
+    result('login-result', r.result.lastSync?.message || '检查仅确认本机登录信息是否存在；是否仍有效，以 Notion 窗口为准。', !!r.result.lastSync && r.result.lastSync.status !== 'applied');
+    return;
+  }
   $('login-title').textContent = r.result.hasLogin ? '已检测到保存的登录信息' : '尚未检测到有效的本机登录信息';
   $('login-description').textContent = r.result.syncSupported === false ? r.result.message : r.result.hasLogin ? '无需重复复制。若 Notion 窗口仍要求登录，可以重新同步。' : r.result.message;
   result('login-result', r.result.lastSync?.message || '检查仅确认本机登录信息是否存在；是否仍有效，以 Notion 窗口为准。', !!r.result.lastSync && r.result.lastSync.status !== 'applied');
 }
 $('check-login').addEventListener('click', () => operation($('login-card'), checkLogin));
+$('open-login-notion').addEventListener('click', async () => { const r = await api.openNotion(); if (!r.ok) toast(r.error); });
 $('sync-login').addEventListener('click', () => $('login-dialog').showModal());
 $('cancel-login').addEventListener('click', () => { if (!busy) $('login-dialog').close(); });
 $('login-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });

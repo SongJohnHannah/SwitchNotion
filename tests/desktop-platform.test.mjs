@@ -42,14 +42,14 @@ test('Windows discovery, staging and launch share one layout and preserve isolat
 
 test('macOS discovery uses app bundles without Windows commands or Windows archive hashes', t => {
   const dir = fixture(t), root = path.join(dir, 'state'); fs.mkdirSync(root);
-  const platform = createDesktopPlatform({ id: 'darwin', home: dir, env: {}, execFileSync: () => { throw Error('must not execute commands'); } });
+  const platform = createDesktopPlatform({ id: 'darwin', arch: 'arm64', home: dir, env: {}, execFileSync: () => { throw Error('must not execute commands'); } });
   const source = install(platform, path.join(dir, 'Applications', 'Notion.app'));
   assert.deepEqual(platform.discoverInstallation(root), source);
   assert.deepEqual(platform.findInstallation(source.executable, root), source);
   const layout = platform.runtimeLayout(path.join(root, 'runtime'));
   assert.equal(layout.appRoot, path.join(root, 'runtime', 'Notion.app'));
   assert.equal(layout.archive, path.join(layout.appRoot, 'Contents', 'Resources', 'app.asar'));
-  assert.equal(platform.login.strategy, 'interactive'); assert.equal(platform.capabilities.syncLogin, false);
+  assert.equal(platform.login.strategy, 'macos-keychain-copy'); assert.equal(platform.capabilities.syncLogin, true);
   assert.equal(platform.compatibility.reviewedBuilds['7.40.1'], '48154144947412453a987b55cc1725c5a4dbf66f7b90ea919384d061cde2716f');
   assert.notEqual(platform.compatibility.reviewedBuilds['7.40.1'], createDesktopPlatform({ id: 'win32' }).compatibility.reviewedBuilds['7.40.1']);
   assert.equal(platform.samePath(path.join(dir, 'A'), path.join(dir, 'a')), false);

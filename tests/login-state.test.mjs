@@ -7,6 +7,8 @@ import { EventEmitter } from 'node:events';
 import { DatabaseSync } from 'node:sqlite';
 import { createRequire } from 'node:module';
 const { LoginService, inspectLogin, stageLogin, readStagedMetadata, applyStagedLogin, waitForProcessExit, PARTITIONS } = createRequire(import.meta.url)('../src/login-state.cjs');
+const { createDesktopPlatform } = createRequire(import.meta.url)('../src/platform/index.cjs');
+const windows = createDesktopPlatform({ id: 'win32' });
 const COOKIE_SECRET = 'fixture-cookie-secret-do-not-emit', CRYPT_SECRET = 'fixture-crypt-secret-do-not-emit';
 const digest = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 function rootOnly(t) {
@@ -48,9 +50,54 @@ function fixture(t, { valid = true } = {}) {
   fs.writeFileSync(path.join(profile, 'Local State'), JSON.stringify({ os_crypt: { encrypted_key: 'old-local-encryption-fixture' }, user_preferences: { theme: 'dark' } }));
   fs.writeFileSync(path.join(profile, 'page-content.db'), 'target-page-content-must-remain');
   for (const relative of PARTITIONS) cookieDatabase(path.join(profile, relative), [{ host: '.notion.so', payload: 'old-cookie-fixture' }]);
-  return { root, sourceRoot, profile, directory };
+  return { root, sourceRoot, profile, directory, platform: windows };
 }
 function allCookies(file) { const db = new DatabaseSync(file, { readOnly: true }); try { const statement = db.prepare('SELECT * FROM cookies'); statement.setReadBigInts(true); return statement.all(); } finally { db.close(); } }
+
+test('Mac sync uses Keychain-encrypted Notion cookies, preserves Local State and backs up the target', async t => {
+  const root = rootOnly(t), sourceRoot = path.join(root, 'fixture-source'), separateRoot = path.join(root, 'state');
+  fs.mkdirSync(sourceRoot); fs.mkdirSync(path.join(separateRoot, 'profile'), { recursive: true });
+  const platform = createDesktopPlatform({ id: 'darwin', arch: 'arm64', home: root });
+  const parts = ['Partitions/notion/Cookies', 'Cookies'];
+  cookieDatabase(path.join(sourceRoot, parts[0]), [{ host: '.notion.so', payload: 'v10fixture-encrypted' }, { host: '.example.com', payload: 'v10other' }]);
+  for (const part of parts) cookieDatabase(path.join(separateRoot, 'profile', part), [{ host: '.notion.so', payload: 'v10old' }, { host: '.example.com', payload: 'v10keep' }]);
+  fs.writeFileSync(path.join(separateRoot, 'profile', 'Local State'), 'local-state-unchanged');
+  fs.writeFileSync(path.join(separateRoot, 'profile', 'page-content.db'), 'page-data-unchanged');
+  const input = { root: separateRoot, sourceRoot, platform }, sourceBefore = filesBelow(sourceRoot), targetBefore = filesBelow(path.join(separateRoot, 'profile'));
+  const staged = stageLogin(input);
+  assert.deepEqual(filesBelow(sourceRoot), sourceBefore);
+  assert.deepEqual(filesBelow(path.join(separateRoot, 'profile')), targetBefore);
+  assert.equal(fs.existsSync(path.join(separateRoot, 'login-staging', staged.stageId, 'Local State')), false);
+  assert.equal(readStagedMetadata({ root: separateRoot, platform, stageId: staged.stageId }).partitions.length, 2);
+  const applied = await applyStagedLogin({ root: separateRoot, platform, stageId: staged.stageId, parentPid: 424242, waitForExit: async () => {} });
+  for (const part of parts) {
+    assert.deepEqual(allCookies(path.join(separateRoot, 'profile', part)).map(row => row.host_key).sort(), ['.example.com', '.notion.so']);
+    assert.equal(digest(path.join(separateRoot, 'login-backups', applied.backupId, part)), targetBefore[part]);
+  }
+  assert.equal(fs.readFileSync(path.join(separateRoot, 'profile', 'Local State'), 'utf8'), 'local-state-unchanged');
+  assert.equal(fs.readFileSync(path.join(separateRoot, 'profile', 'page-content.db'), 'utf8'), 'page-data-unchanged');
+  assert.equal(fs.existsSync(path.join(separateRoot, 'profile', '.notion-switch-use-original-keychain')), true);
+  assert.equal(applied.serverValidated, false);
+});
+
+test('Mac sync restores the existing profile when applying fails', async t => {
+  const root = rootOnly(t), sourceRoot = path.join(root, 'fixture-source'), separateRoot = path.join(root, 'state');
+  fs.mkdirSync(sourceRoot); fs.mkdirSync(path.join(separateRoot, 'profile'), { recursive: true });
+  const platform = createDesktopPlatform({ id: 'darwin', arch: 'arm64', home: root }), part = 'Partitions/notion/Cookies';
+  cookieDatabase(path.join(sourceRoot, part), [{ host: '.notion.com', payload: 'v10fixture-encrypted' }]);
+  cookieDatabase(path.join(separateRoot, 'profile', part), [{ host: '.notion.so', payload: 'v10previous' }]);
+  const before = filesBelow(path.join(separateRoot, 'profile')), staged = stageLogin({ root: separateRoot, sourceRoot, platform });
+  await assert.rejects(applyStagedLogin({ root: separateRoot, platform, stageId: staged.stageId, parentPid: 424242, waitForExit: async () => {}, beforeInstall: (_relative, index) => { if (index === 1) throw Error('fixture failure'); } }), /已尝试恢复/);
+  assert.deepEqual(filesBelow(path.join(separateRoot, 'profile')), before);
+});
+
+test('Mac sync rejects unrecognized cookie encryption', t => {
+  const root = rootOnly(t), sourceRoot = path.join(root, 'fixture-source'), separateRoot = path.join(root, 'state');
+  fs.mkdirSync(sourceRoot); fs.mkdirSync(separateRoot);
+  cookieDatabase(path.join(sourceRoot, 'Partitions/notion/Cookies'), [{ host: '.notion.so', payload: 'v20unknown' }]);
+  const platform = createDesktopPlatform({ id: 'darwin', arch: 'arm64', home: root });
+  assert.throws(() => stageLogin({ root: separateRoot, sourceRoot, platform }), /加密状态不受支持/);
+});
 
 test('login staging reads original SQLite without changing source or target and filters every cookie domain', t => {
   const f = fixture(t), sourceBefore = filesBelow(f.sourceRoot), targetBefore = filesBelow(f.profile);
@@ -67,7 +114,7 @@ test('login staging reads original SQLite without changing source or target and 
   assert.equal(stagedState.os_crypt.encrypted_key === CRYPT_SECRET, true);
   assert.equal(fs.existsSync(path.join(f.root, 'login-staging', stage.stageId, 'page-content.db')), false);
   assert.equal(JSON.stringify(stage).includes(COOKIE_SECRET) || JSON.stringify(stage).includes(CRYPT_SECRET), false);
-  assert.equal(readStagedMetadata({ root: f.root, stageId: stage.stageId }).stageId, stage.stageId);
+  assert.equal(readStagedMetadata({ root: f.root, stageId: stage.stageId, platform: windows }).stageId, stage.stageId);
 });
 
 test('absent or expired token prevents staging and never overwrites target profile', t => {
@@ -80,7 +127,7 @@ test('absent or expired token prevents staging and never overwrites target profi
 test('apply waits for prototype exit, keeps local rollback backup, and preserves unrelated target data', async t => {
   const f = fixture(t), sourceBefore = filesBelow(f.sourceRoot), targetBefore = filesBelow(f.profile), stage = stageLogin(f);
   let waited = false;
-  const result = await applyStagedLogin({ root: f.root, stageId: stage.stageId, parentPid: 424242, waitForExit: async pid => { assert.equal(pid, 424242); assert.deepEqual(filesBelow(f.profile), targetBefore); waited = true; } });
+  const result = await applyStagedLogin({ root: f.root, stageId: stage.stageId, platform: windows, parentPid: 424242, waitForExit: async pid => { assert.equal(pid, 424242); assert.deepEqual(filesBelow(f.profile), targetBefore); waited = true; } });
   assert.equal(waited, true); assert.equal(result.status, 'applied'); assert.deepEqual(filesBelow(f.sourceRoot), sourceBefore);
   const state = JSON.parse(fs.readFileSync(path.join(f.profile, 'Local State'), 'utf8'));
   assert.equal(state.os_crypt.encrypted_key === CRYPT_SECRET, true); assert.deepEqual(state.user_preferences, { theme: 'dark' }); assert.equal(Object.hasOwn(state, 'original_preferences'), false);
@@ -95,7 +142,7 @@ test('apply waits for prototype exit, keeps local rollback backup, and preserves
 
 test('a failed apply rolls every changed login file back and exposes no secret in the result', async t => {
   const f = fixture(t), before = filesBelow(f.profile), stage = stageLogin(f);
-  await assert.rejects(applyStagedLogin({ root: f.root, stageId: stage.stageId, parentPid: 424242, waitForExit: async () => {}, beforeInstall: (_relative, index) => { if (index === 1) throw Error(COOKIE_SECRET); } }), /已尝试恢复/);
+  await assert.rejects(applyStagedLogin({ root: f.root, stageId: stage.stageId, platform: windows, parentPid: 424242, waitForExit: async () => {}, beforeInstall: (_relative, index) => { if (index === 1) throw Error(COOKIE_SECRET); } }), /已尝试恢复/);
   assert.deepEqual(filesBelow(f.profile), before);
   const saved = fs.readFileSync(path.join(f.root, 'login-sync-result.json'), 'utf8');
   assert.equal(JSON.parse(saved).status, 'rolled-back'); assert.equal(saved.includes(COOKIE_SECRET) || saved.includes(CRYPT_SECRET), false);
@@ -118,13 +165,13 @@ test('Windows EACCES and EPERM source-cookie errors give the close-original inst
 
 test('busy AI rejects synchronization before launching helpers or requesting restart', async t => {
   const root = rootOnly(t); let helperCalls = 0, restarts = 0;
-  const service = new LoginService({ root, isBusy: () => true, runHelper: async () => { helperCalls++; }, onRestart: () => { restarts++; } });
+  const service = new LoginService({ root, platform: windows, isBusy: () => true, runHelper: async () => { helperCalls++; }, onRestart: () => { restarts++; } });
   await assert.rejects(service.sync(), /AI 正在生成/); assert.equal(helperCalls, 0); assert.equal(restarts, 0);
 });
 
 test('GUI metadata is allow-listed and restart happens only after the detached worker acknowledges staging', async t => {
   const root = rootOnly(t), stageId = randomUUID(), events = [];
-  const service = new LoginService({ root, runHelper: async action => {
+  const service = new LoginService({ root, platform: windows, runHelper: async action => {
     events.push(action);
     return action === 'stage' ? { stageId, secret: COOKIE_SECRET } : { sourceAvailable: true, sourceHasLogin: true, hasLogin: false, os_crypt: CRYPT_SECRET, cookies: [{ value: COOKIE_SECRET }], lastSync: { status: 'applied', at: 'fixture-time', message: COOKIE_SECRET } };
   }, getTargetLoginStatus: async () => ({ hasLogin: true, cookie: COOKIE_SECRET }), launchApply: async id => { assert.equal(id, stageId); events.push('worker-ready'); }, onRestart: () => { events.push('restart'); } });
@@ -139,7 +186,7 @@ test('apply worker uses hidden detached IPC and cannot restart before the exact 
   const root = rootOnly(t), stageId = randomUUID(), child = new EventEmitter();
   let sent, restarts = 0, detached = false;
   child.connected = true; child.disconnect = () => { child.connected = false; }; child.unref = () => { detached = true; };
-  const service = new LoginService({ root, currentPid: 424242, runHelper: async () => ({ stageId }), onRestart: () => { restarts++; }, spawnImpl: (executable, args, options) => { sent = { executable, args, options }; return child; } });
+  const service = new LoginService({ root, platform: windows, currentPid: 424242, runHelper: async () => ({ stageId }), onRestart: () => { restarts++; }, spawnImpl: (executable, args, options) => { sent = { executable, args, options }; return child; } });
   service.runtime = () => ({ executable: process.execPath, helper: 'fixture-login-helper.cjs' });
   const running = service.sync();
   for (let index = 0; index < 20 && !sent; index++) await new Promise(resolve => setImmediate(resolve));
@@ -153,10 +200,10 @@ test('apply worker uses hidden detached IPC and cannot restart before the exact 
 
 test('helper failures are sanitized and an active process prevents target overwrite', async t => {
   const f = fixture(t), before = filesBelow(f.profile), stage = stageLogin(f);
-  const service = new LoginService({ root: f.root, runHelper: async () => { throw Error(COOKIE_SECRET); } });
+  const service = new LoginService({ root: f.root, platform: windows, runHelper: async () => { throw Error(COOKIE_SECRET); } });
   await assert.rejects(service.sync(), error => !error.message.includes(COOKIE_SECRET));
   assert.equal(service.syncing, false);
-  await assert.rejects(applyStagedLogin({ root: f.root, stageId: stage.stageId, parentPid: 424242, waitForExit: async () => { await waitForProcessExit(424242, { timeoutMs: 0, isAlive: () => true }); } }), /尚未完全退出/);
+  await assert.rejects(applyStagedLogin({ root: f.root, stageId: stage.stageId, platform: windows, parentPid: 424242, waitForExit: async () => { await waitForProcessExit(424242, { timeoutMs: 0, isAlive: () => true }); } }), /尚未完全退出/);
   assert.deepEqual(filesBelow(f.profile), before);
-  await assert.rejects(applyStagedLogin({ root: f.root, stageId: '../outside', parentPid: 424242, waitForExit: async () => {} }), /暂存资料不完整/);
+  await assert.rejects(applyStagedLogin({ root: f.root, stageId: '../outside', platform: windows, parentPid: 424242, waitForExit: async () => {} }), /暂存资料不完整/);
 });

@@ -6,6 +6,8 @@ const { setTimeout: sleep } = require('node:timers/promises');
 const { createDesktopPlatform } = require('./platform/index.cjs');
 
 const PARTITIONS = ['Partitions/notion/Network/Cookies', 'Network/Cookies'];
+const MAC_PARTITIONS = ['Partitions/notion/Cookies', 'Cookies'];
+const MAC_KEYCHAIN_MARKER = '.notion-switch-use-original-keychain';
 const SIDECARS = ['-wal', '-shm', '-journal'];
 const STAGE_ID = /^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i;
 const messages = {
@@ -86,13 +88,16 @@ function encryption(directory) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || !['encrypted_key', 'app_bound_encrypted_key'].some(key => typeof value[key] === 'string' && value[key].length)) throw failure('encryption_missing');
   return value;
 }
-function requireLoginSync(platform) { if (!platform.capabilities.syncLogin || platform.login.strategy !== 'windows-local-copy') throw failure('platform_unsupported'); }
+function requireLoginSync(platform) { if (!platform.capabilities.syncLogin || !['windows-local-copy', 'macos-keychain-copy'].includes(platform.login.strategy)) throw failure('platform_unsupported'); }
+const usesMacKeychain = platform => platform.login.strategy === 'macos-keychain-copy';
+const partitionsFor = platform => usesMacKeychain(platform) ? MAC_PARTITIONS : PARTITIONS;
 function sourceDirectory(platform) { if (!platform.login.sourceRoot) throw failure('source_missing'); return platform.login.sourceRoot; }
-function inspectDirectory(directory, now) {
+function inspectDirectory(directory, now, platform) {
   const result = { available: fs.existsSync(directory), hasLogin: false, known: true, locked: false, encryptionAvailable: false };
   if (!result.available) return result;
-  try { encryption(directory); result.encryptionAvailable = true; } catch {}
-  for (const relative of PARTITIONS) {
+  if (usesMacKeychain(platform)) result.encryptionAvailable = true;
+  else try { encryption(directory); result.encryptionAvailable = true; } catch {}
+  for (const relative of partitionsFor(platform)) {
     try { const content = readCookies(path.join(directory, relative), now); result.hasLogin ||= !!content?.hasLogin; }
     catch (error) { result.known = false; result.locked ||= error.loginCode === 'source_locked'; }
   }
@@ -109,7 +114,7 @@ function inspectLogin({ root, platform = createDesktopPlatform(), sourceRoot, no
   root = checkedRoot(root);
   if (!platform.capabilities.syncLogin) return { syncSupported: false, loginStrategy: platform.login.strategy, sourceAvailable: false, sourceHasLogin: null, hasLogin: null, targetLoginKnown: false, serverValidated: false };
   sourceRoot ||= sourceDirectory(platform);
-  const original = inspectDirectory(path.resolve(sourceRoot), now), target = inspectDirectory(within(root, 'profile'), now);
+  const original = inspectDirectory(path.resolve(sourceRoot), now, platform), target = inspectDirectory(within(root, 'profile'), now, platform);
   return { sourceAvailable: original.available, sourceHasLogin: original.known ? original.hasLogin && original.encryptionAvailable : null, sourceLocked: original.locked, hasLogin: target.known ? target.hasLogin && target.encryptionAvailable : null, targetLoginKnown: target.known, serverValidated: false, lastSync: safeResult(root) };
 }
 function writeCookieDatabase(file, content) {
@@ -131,24 +136,29 @@ function stageLogin({ root, platform = createDesktopPlatform(), sourceRoot, now 
   requireLoginSync(platform); sourceRoot ||= sourceDirectory(platform);
   root = checkedRoot(root); sourceRoot = path.resolve(sourceRoot);
   if (isWithin(root, sourceRoot) || isWithin(sourceRoot, root) || !fs.existsSync(sourceRoot)) throw failure('source_missing');
-  const stageId = randomUUID(), directory = within(root, 'login-staging', stageId);
+  const stageId = randomUUID(), directory = within(root, 'login-staging', stageId), parts = partitionsFor(platform), mac = usesMacKeychain(platform);
   try {
     let crypt, contents;
-    try { crypt = encryption(sourceRoot); contents = PARTITIONS.map(relative => readCookieFile(path.join(sourceRoot, relative), now)); }
+    try { if (!mac) crypt = encryption(sourceRoot); contents = parts.map(relative => readCookieFile(path.join(sourceRoot, relative), now)); }
     catch (error) { if (locked(error)) throw failure('source_locked'); throw error; }
     const fallback = contents.find(content => content?.hasLogin);
     if (!fallback) throw failure('no_login');
+    if (mac && contents.filter(Boolean).flatMap(content => content.cookies).some(cookie => cookie.encrypted_value?.byteLength && Buffer.from(cookie.encrypted_value).subarray(0, 3).toString() !== 'v10')) throw failure('encryption_missing');
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     const partitions = [];
-    for (let index = 0; index < PARTITIONS.length; index++) {
-      const relative = PARTITIONS[index], content = contents[index]?.hasLogin ? contents[index] : fallback;
+    for (let index = 0; index < parts.length; index++) {
+      const relative = parts[index], content = contents[index]?.hasLogin ? contents[index] : fallback;
       const file = within(root, 'login-staging', stageId, relative);
       writeCookieDatabase(file, content);
       partitions.push({ relative, notionCookieCount: content.cookies.length, sha256: hashFile(file) });
     }
-    const stateFile = within(root, 'login-staging', stageId, 'Local State');
-    fs.writeFileSync(stateFile, JSON.stringify({ os_crypt: crypt }), { mode: 0o600, flush: true });
-    writeJson(within(root, 'login-staging', stageId, 'manifest.json'), { version: 1, stageId, at: new Date(now).toISOString(), partitions, localStateSha256: hashFile(stateFile) });
+    let keyMetadata = { strategy: 'macos-keychain-copy' };
+    if (!mac) {
+      const stateFile = within(root, 'login-staging', stageId, 'Local State');
+      fs.writeFileSync(stateFile, JSON.stringify({ os_crypt: crypt }), { mode: 0o600, flush: true });
+      keyMetadata = { localStateSha256: hashFile(stateFile) };
+    }
+    writeJson(within(root, 'login-staging', stageId, 'manifest.json'), { version: 1, stageId, at: new Date(now).toISOString(), partitions, ...keyMetadata });
     return { stageId, partitions: partitions.map(({ relative, notionCookieCount }) => ({ relative, notionCookieCount })), hasLogin: true, sourceOpenedReadOnly: true, onlyNotionDomains: true, decrypted: false, pageDatabasesCopied: false, serverValidated: false };
   } catch (error) {
     if (fs.existsSync(directory)) { within(root, 'login-staging', stageId); fs.rmSync(directory, { recursive: true, force: true }); }
@@ -160,16 +170,20 @@ function readStagedMetadata({ root, stageId, platform = createDesktopPlatform() 
   root = checkedRoot(root);
   if (!STAGE_ID.test(stageId || '')) throw failure('stage_invalid');
   try {
-    const directory = within(root, 'login-staging', stageId), manifest = readJson(within(root, 'login-staging', stageId, 'manifest.json'));
-    if (manifest.version !== 1 || manifest.stageId !== stageId || !Array.isArray(manifest.partitions) || manifest.partitions.length !== PARTITIONS.length) throw failure('stage_invalid');
-    for (let index = 0; index < PARTITIONS.length; index++) {
-      const relative = PARTITIONS[index], metadata = manifest.partitions[index], file = within(root, 'login-staging', stageId, relative);
+    const directory = within(root, 'login-staging', stageId), manifest = readJson(within(root, 'login-staging', stageId, 'manifest.json')), parts = partitionsFor(platform);
+    if (manifest.version !== 1 || manifest.stageId !== stageId || !Array.isArray(manifest.partitions) || manifest.partitions.length !== parts.length) throw failure('stage_invalid');
+    for (let index = 0; index < parts.length; index++) {
+      const relative = parts[index], metadata = manifest.partitions[index], file = within(root, 'login-staging', stageId, relative);
       if (metadata.relative !== relative || metadata.sha256 !== hashFile(file)) throw failure('stage_invalid');
       const content = readCookies(file);
       if (!content?.hasLogin || content.totalCookies !== content.cookies.length || content.cookies.some(row => !notionHost(row.host_key)) || content.cookies.length !== metadata.notionCookieCount) throw failure('stage_invalid');
+      if (usesMacKeychain(platform) && content.cookies.some(cookie => cookie.encrypted_value?.byteLength && Buffer.from(cookie.encrypted_value).subarray(0, 3).toString() !== 'v10')) throw failure('stage_invalid');
     }
-    if (manifest.localStateSha256 !== hashFile(within(root, 'login-staging', stageId, 'Local State'))) throw failure('stage_invalid');
-    encryption(directory);
+    if (usesMacKeychain(platform)) { if (manifest.strategy !== 'macos-keychain-copy') throw failure('stage_invalid'); }
+    else {
+      if (manifest.localStateSha256 !== hashFile(within(root, 'login-staging', stageId, 'Local State'))) throw failure('stage_invalid');
+      encryption(directory);
+    }
     return { stageId, partitions: manifest.partitions.map(({ relative, notionCookieCount }) => ({ relative, notionCookieCount })) };
   } catch { throw failure('stage_invalid'); }
 }
@@ -189,31 +203,57 @@ function install(file, source, temporaryFiles) {
   const temporary = file + '.notion-switch-' + randomUUID() + '.tmp'; temporaryFiles.push(temporary);
   fs.copyFileSync(source, temporary, fs.constants.COPYFILE_EXCL); fs.renameSync(temporary, file);
 }
+async function mergedMacCookies(file, source, temporaryFiles) {
+  if (!fs.existsSync(file)) return source;
+  const temporary = file + '.notion-switch-merge-' + randomUUID() + '.tmp'; temporaryFiles.push(temporary);
+  const original = openReadOnly(file);
+  try { await require('node:sqlite').backup(original, temporary); } finally { original.close(); }
+  fs.chmodSync(temporary, 0o600);
+  const content = readCookies(source), database = new (sqlite())(temporary);
+  try {
+    const columns = rows(database, 'PRAGMA table_info(cookies)').map(column => column.name);
+    if (!content || columns.length !== content.columns.length || content.columns.some(column => !columns.includes(column))) throw failure('stage_invalid');
+    database.exec('BEGIN IMMEDIATE');
+    database.exec("DELETE FROM cookies WHERE lower(host_key) IN ('notion.so','.notion.so','notion.com','.notion.com') OR lower(host_key) LIKE '%.notion.so' OR lower(host_key) LIKE '%.notion.com'");
+    const quote = name => '"' + name.replaceAll('"', '""') + '"';
+    const insert = database.prepare(`INSERT INTO cookies (${content.columns.map(quote).join(',')}) VALUES (${content.columns.map(() => '?').join(',')})`);
+    for (const cookie of content.cookies) insert.run(...content.columns.map(column => cookie[column]));
+    database.exec('COMMIT');
+  } catch (error) { try { database.exec('ROLLBACK'); } catch {} throw error; }
+  finally { database.close(); }
+  return temporary;
+}
 async function applyStagedLogin({ root, stageId, parentPid, platform = createDesktopPlatform(), waitForExit = waitForProcessExit, beforeInstall = () => {} }) {
   requireLoginSync(platform);
   root = checkedRoot(root);
   const stage = readStagedMetadata({ root, stageId, platform });
   await waitForExit(parentPid);
-  const profile = within(root, 'profile'), backupId = randomUUID(), backup = within(root, 'login-backups', backupId), temporaryFiles = [];
-  const targets = [...PARTITIONS.flatMap(relative => [relative, ...SIDECARS.map(suffix => relative + suffix)]), 'Local State'];
+  const profile = within(root, 'profile'), backupId = randomUUID(), backup = within(root, 'login-backups', backupId), temporaryFiles = [], mac = usesMacKeychain(platform), parts = partitionsFor(platform);
+  const targets = [...parts.flatMap(relative => [relative, ...SIDECARS.map(suffix => relative + suffix)]), ...(mac ? [MAC_KEYCHAIN_MARKER] : ['Local State'])];
   const previous = targets.map(relative => ({ relative, exists: fs.existsSync(within(root, 'profile', relative)) }));
   let changed = false;
   const record = value => writeJson(within(root, 'login-sync-result.json'), { version: 1, stageId, backupId, at: new Date().toISOString(), sourceOpenedReadOnly: true, onlyNotionDomains: true, decrypted: false, pageDatabasesCopied: false, serverValidated: false, ...value });
   try {
-    for (const relative of PARTITIONS) assertTargetUnlocked(within(root, 'profile', relative));
+    for (const relative of parts) assertTargetUnlocked(within(root, 'profile', relative));
     fs.mkdirSync(backup, { recursive: true, mode: 0o700 });
     for (const item of previous) if (item.exists) { const file = within(root, 'login-backups', backupId, item.relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.copyFileSync(within(root, 'profile', item.relative), file); }
     writeJson(within(root, 'login-backups', backupId, 'manifest.json'), { version: 1, stageId, files: previous });
-    const statePath = within(root, 'profile', 'Local State'), targetState = fs.existsSync(statePath) ? readJson(statePath) : {};
-    const replacement = within(root, 'login-staging', stageId, 'Local State.merged');
-    fs.writeFileSync(replacement, JSON.stringify({ ...targetState, os_crypt: encryption(within(root, 'login-staging', stageId)) }), { mode: 0o600, flush: true });
+    let replacement;
+    if (!mac) {
+      const statePath = within(root, 'profile', 'Local State'), targetState = fs.existsSync(statePath) ? readJson(statePath) : {};
+      replacement = within(root, 'login-staging', stageId, 'Local State.merged');
+      fs.writeFileSync(replacement, JSON.stringify({ ...targetState, os_crypt: encryption(within(root, 'login-staging', stageId)) }), { mode: 0o600, flush: true });
+    }
+    const macSources = new Map();
+    if (mac) for (const relative of parts) macSources.set(relative, await mergedMacCookies(within(root, 'profile', relative), within(root, 'login-staging', stageId, relative), temporaryFiles));
     record({ status: 'applying' });
-    for (const [index, relative] of [...PARTITIONS, 'Local State'].entries()) {
+    for (const [index, relative] of [...parts, ...(mac ? [] : ['Local State'])].entries()) {
       const file = within(root, 'profile', relative); fs.mkdirSync(path.dirname(file), { recursive: true });
       changed = true; beforeInstall(relative, index);
       if (relative !== 'Local State') for (const suffix of SIDECARS) { const sidecar = within(root, 'profile', relative + suffix); if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar); }
-      install(file, relative === 'Local State' ? replacement : within(root, 'login-staging', stageId, relative), temporaryFiles);
+      install(file, relative === 'Local State' ? replacement : mac ? macSources.get(relative) : within(root, 'login-staging', stageId, relative), temporaryFiles);
     }
+    if (mac) fs.writeFileSync(within(root, 'profile', MAC_KEYCHAIN_MARKER), 'Notion\n', { mode: 0o600, flush: true });
     const result = { status: 'applied', partitions: stage.partitions, hasLogin: true }; record(result);
     return { ...result, backupId, serverValidated: false };
   } catch (error) {
@@ -242,7 +282,7 @@ class LoginService {
     try {
       const file = within(this.root, 'launcher.local.json'), settings = readJson(file), executable = settings.nodeExecutable;
       if (!this.platform.isNodeExecutable(executable)) throw failure('helper_unavailable');
-      const project = path.dirname(this.root), helper = path.join(project, 'scripts', 'login-helper.cjs'), reopen = path.join(project, 'scripts', 'open-settings.mjs');
+      const project = usesMacKeychain(this.platform) ? fs.realpathSync(settings.projectDirectory) : path.dirname(this.root), helper = path.join(project, 'scripts', 'login-helper.cjs'), reopen = path.join(project, 'scripts', 'open-settings.mjs');
       if (!fs.statSync(helper).isFile() || !fs.statSync(reopen).isFile()) throw failure('helper_unavailable');
       return { executable, helper };
     } catch { throw failure('helper_unavailable'); }
