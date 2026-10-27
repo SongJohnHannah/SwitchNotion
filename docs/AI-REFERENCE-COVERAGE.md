@@ -26,7 +26,7 @@
 | 数据库、数据源、字段 | 可读结构、字段和记录 | API 与模型实测合成词汇数据库 |
 | 数据库记录、字段分页 | 单条记录使用专用读取；超长字段需继续分页 | 模型只读指定记录，未查询整库；字段分页自动测试 |
 | 数据库视图链接 | 有数据库 ID 和视图 ID 时先读筛选/排序；仅有数据库块不能证明当前 UI 视图范围 | API 与模型实测 Default view；视图、筛选自动测试 |
-| AI 回复选区 | 已修复丢失，作为对话引用资料保留 | 模型实测正确复述合成颜色和数字；历史、压缩、混合引用测试 |
+| AI 回复选区 | 已修复丢失，作为对话引用资料保留 | 模型实测正确复述合成颜色和数字；Mac 原生 Add to chat、发送、回复及重新加载验收通过；历史、压缩、混合引用测试 |
 | 浮动编辑框文字选区 | 解释、润色、翻译等原生文字预览可用 | 原生协议自动测试；不提供直接写入工具 |
 | 浮动框整表/整库、额外页面/文件 pointers、截断预览 | 明确提示使用侧栏 Agent；这些入口仍未实现完整读取 | 自动测试确认不调用模型、不静默丢弃 |
 | 聊天图片上传、粘贴、缩略图、预览、恢复 | Flash 支持 PNG/JPEG/GIF/WebP；Pro 输入图片明确失败 | 图片协议、模型路由、本地上传、恢复与两种分发包自动测试；本次未新增真机图片上传验收 |
@@ -45,6 +45,8 @@ API 验收共 39 项：38 通过，1 项评论权限受限。覆盖 31 个块实
 35 种模拟类型包括：paragraph、heading_1/2/3/4、bulleted_list_item、numbered_list_item、quote、to_do、toggle、callout、code、equation、divider、breadcrumb、table_of_contents、table、table_row、column_list、column、synced_block、link_to_page、child_page、child_database、image、video、audio、file、pdf、bookmark、embed、link_preview、tab、meeting_notes、unsupported。模拟可读不表示官方允许创建每一种类型。
 
 本次完整回归：382 项，362 通过、20 跳过、0 失败。跳过项目需要未随源码分发的官方样本、显式 GPU 验收或 Windows 真机环境。本机是 Apple Silicon Mac；没有 Windows 桌面环境，不能把共用代码和分发包测试称为 Windows 窗口实测。Windows 真机步骤见 [验收清单](WINDOWS-VALIDATION-CHECKLIST.md)。
+
+补充 Mac 原生界面验收（Notion 7.41.0）：解锁后确认应用运行文件与提交的修复一致。在 AI 回复中选中合成文字，通过 Add to chat 添加为引用后提问，界面保留 `1 selection` 和“引用的 AI 对话”，模型正确返回“颜色是青色，数字是 927”。本地消息保存了原生 `chat_selection` 注释；重新加载窗口后，引用标记、片段、问题和回答均恢复，未出现错误。测试未读取或修改页面内容。
 
 可重复执行：
 
