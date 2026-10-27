@@ -260,7 +260,7 @@ test('read-only mode exposes no write tools and rejects direct write dispatch', 
   assert.equal(session.definitions.some(d => writeTools.has(d.function.name)), false);
   await assert.rejects(session.execute('append_page', { page_id: B, revision: 'x', content: 'no write' }), /只读/);
   assert.equal(f.calls.length, 0);
-  await assert.rejects(session.execute('read_page', { page_id: '33333333-3333-4333-8333-333333333333' }), error => error.message.includes('HTTP 404') && !error.message.includes('fixture-notion-token'));
+  await assert.rejects(session.execute('read_page', { page_id: '33333333-3333-4333-8333-333333333333' }), error => error.message.includes('HTTP 404') && error.message.includes('添加连接') && error.message.includes('未删除') && !error.message.includes('fixture-notion-token'));
 });
 
 test('restoring a process interrupted during writing tells the native conversation to verify the page', async t => {

@@ -15,7 +15,7 @@ async function apiError(response) {
   const code = typeof detail?.code === 'string' && /^[a-z_]{1,50}$/.test(detail.code) ? detail.code : undefined;
   const rejected = response.status === 400 && rejectedCodes.has(code);
   const field = typeof detail?.message === 'string' ? /\bbody\.(position|after|children|properties|parent|rich_text|type)\b/.exec(detail.message)?.[0] : undefined;
-  const extra = rejected ? `（${code}，参数未通过校验，本次请求未执行${field ? '；请检查 ' + field : ''}）` : response.status === 429 ? '，请求过于频繁，请稍后重试' : [403, 404].includes(response.status) ? '，请检查页面授权和连接的读写权限' : '';
+  const extra = rejected ? `（${code}，参数未通过校验，本次请求未执行${field ? '；请检查 ' + field : ''}）` : response.status === 429 ? '，请求过于频繁，请稍后重试' : response.status === 404 ? '：找不到目标，或连接尚无权访问。请确认页面未删除且属于所配置的工作区，并在目标页面右上角“⋯”→“连接”→“添加连接”中授权对应连接' : response.status === 403 ? '，请检查页面授权和连接的读写权限' : '';
   const error = Error(`Notion API 返回 HTTP ${response.status}${extra}。`);
   error.status = response.status; error.apiCode = code;
   if (rejected) error.writeOutcome = 'rejected';

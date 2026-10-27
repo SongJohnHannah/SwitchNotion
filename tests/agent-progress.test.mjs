@@ -11,6 +11,16 @@ const messages = task => [{ role: 'system', content: '' }, { role: 'user', conte
 const defs = names => names.map(name => ({ function: { name } }));
 const state = () => ({ version: 1, receipts: [], pending: [], compactions: 0 });
 
+test('repeating an inaccessible read stops without sending a second request', async () => {
+  let reads = 0, rounds = 0;
+  const provider = { async* generate({ onToolCalls }) { onToolCalls([call('read-' + ++rounds, 'read_page', { page_id: 'missing' })]); } };
+  const workspace = { open: () => ({ definitions: defs(['read_page']), execute: async () => {
+    reads++; const error = Error('Notion API 返回 HTTP 404，请检查页面授权。'); error.status = 404; throw error;
+  } }) };
+  await assert.rejects(runAgent({ provider, config: { multiAgent: false }, messages: messages('读取目标'), workspace, signal: new AbortController().signal, onText: () => {} }), /停止重复读取/);
+  assert.equal(reads, 1); assert.equal(rounds, 2);
+});
+
 test('repeated reads reach Notion but duplicate large bodies are not sent to the model again', async () => {
   let generations = 0, reads = 0;
   const payload = 'large unchanged content '.repeat(8000);

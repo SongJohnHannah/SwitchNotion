@@ -53,7 +53,7 @@ class SettingsService {
     if (profile?.workspaceId && identity.id !== profile.workspaceId) throw Error('这个 API Key 属于另一个工作区。请用“添加工作区”保存它，当前连接没有修改。');
     const client = this.router.client({ apiKey });
     const pages = await client.request(client.config(), 'POST', 'search', { filter: { value: 'page', property: 'object' }, page_size: 1 }, AbortSignal.timeout(30000));
-    const result = { workspaceName: identity.name, status: 'connected', message: pages.results?.length ? '连接正常，可以访问已授权页面' : '连接正常；请在 Notion 中把需要使用的页面授权给此连接' };
+    const result = { workspaceName: identity.name, status: 'connected', message: pages.results?.length ? '连接正常，可以访问已授权页面' : '密钥有效，但此连接目前没有可访问的页面。请在目标页面右上角“⋯”→“连接”→“添加连接”中授权此连接。' };
     if (profile) this.health.set(idFor(profile), result);
     return result;
   }

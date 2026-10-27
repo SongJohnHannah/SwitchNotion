@@ -63,6 +63,7 @@ async function runAgent({ provider, config, messages, workspace, nativeContext, 
     '本轮当前页面只以最新 native_context 为准，不能把历史对话中的页面当作当前页。用户说此页面、当前页时，工具 page_id 使用 current；先读取内容再总结或修改。长页按 next_offset 继续读取，未读完不能声称总结了全文。',
     '当前页标题只使用 read_page 返回的 title，不要把正文中的子页面链接或小标题当作当前页标题；title 为 null 时只说“当前页”。',
     '默认只操作当前工作区。用户明确要求跨工作区时，通过 list_workspaces 查看已配置范围，搜索使用 workspace_id=all 并继续分页；结果含 workspace_id，读取和修改其他工作区页面时必须带该 ID。缺少连接或授权时直接说明，不能用另一个工作区的密钥兜底。',
+    'Notion 返回 HTTP 404 表示目标不存在或连接无权访问。不要反复尝试读取同一目标或假称已经读取；说明检查页面地址、工作区并在目标页面添加连接。只有确认目标属于数据库等其他资源类型时，才尝试对应的读取工具。',
     '修改目标不明确时先向用户澄清。文字追加/精确替换先 read_page 获取 revision；结构化编辑先读块和 block_revision；页面元数据、数据库结构与记录字段先读相应信息和版本。保留无关内容。',
     '用户要求在当前页下新建页面或数据库时，parent_page_id=current，直接使用 create_page/create_database，不要要求用户手动创建。创建数据库后使用返回的 data_source_id 新增记录，properties 使用普通字段值。创建前检查目标位置是否已有同名对象，避免重复创建。',
     '删除/移入回收站、移动页面、移除数据库字段、删除评论或视图，只在当前用户明确要求对应操作时执行，不能为了修复其他问题自行删除。仅总结、解释、翻译、润色建议时只输出结果；用户要求应用到页面时才执行写入。',
@@ -101,7 +102,7 @@ async function runAgent({ provider, config, messages, workspace, nativeContext, 
     }
   }
   const verified = new Map(checkpoint.receipts.filter(r => r.verified).map(r => [operationKey(r.name, { ...r.arguments, workspace_id: r.arguments?.workspace_id || r.result?.workspace_id }, checkpoint.originContext), r]));
-  const reads = new Map(), facts = new Set();
+  const reads = new Map(), facts = new Set(), missingReads = new Set();
   let operations = 0, segmentRounds = 0, stagnantRounds = 0, lastCompactionProgress, stalledCompactions = 0;
   async function compactContext(options = {}) {
     const previous = messages.slice(), compression = compact(messages, checkpoint, { tools, ...options });
@@ -184,9 +185,14 @@ async function runAgent({ provider, config, messages, workspace, nativeContext, 
       if (!tools.some(t => t.function.name === name)) throw Error('本地 Agent 拒绝了未启用的工具。');
       onStep({ name, state: 'started' });
       onText(`\n\n> 正在${labels[name]}…\n\n`);
-      let result, writeRecorded = false, duplicate = false, args, writeIntentStarted = false;
+      let result, writeRecorded = false, duplicate = false, args, writeIntentStarted = false, repeatedMissing = false;
       try {
         try { args = JSON.parse(call.function.arguments); } catch { throw Error('Notion 工具参数不是有效 JSON，未执行操作。'); }
+        const readKey = JSON.stringify([name, args]);
+        if (!writeTools.has(name) && missingReads.has(readKey)) {
+          repeatedMissing = true;
+          throw Error('Notion 已停止重复读取无法访问的目标。请先检查页面地址、工作区和页面连接授权，再重新发起任务。');
+        }
         const prior = writeTools.has(name) && verified.get(operationKey(name, args, checkpoint.originContext));
         if (writeTools.has(name) && !prior) {
           if (checkpoint.uncertainWrite) throw Error('此前写入的结果未确定，本轮已停止后续写入。请先读取页面检查。');
@@ -211,6 +217,7 @@ async function runAgent({ provider, config, messages, workspace, nativeContext, 
         onStep({ name, state: 'completed', verified: !duplicate && result.verified, duplicate });
       } catch (error) {
         if (signal.aborted) throw error;
+        if (!writeTools.has(name) && error.status === 404 && args) missingReads.add(JSON.stringify([name, args]));
         const message = /^(Notion |请先|必须|页面|替换|该页面|此前|本会话)/.test(error.message || '') ? error.message : 'Notion 工具执行失败，请检查配置或页面授权。';
         if (writeIntentStarted && definitelyNotWritten(error)) { checkpoint.uncertainWrite = false; delete checkpoint.pendingWrite; }
         result = { error: message, ...(writeTools.has(name) ? failureInfo(error) : {}) }; onText(`\n\n> ${message}\n\n`); onStep({ name, state: 'failed' });
@@ -218,6 +225,7 @@ async function runAgent({ provider, config, messages, workspace, nativeContext, 
       if (writeTools.has(name) && !writeRecorded) { let args; try { args = JSON.parse(call.function.arguments); } catch { args = {}; } checkpoint.receipts.push(receipt(name, args, result)); }
       else if (!writeTools.has(name)) checkpoint.readEvidence = [...(checkpoint.readEvidence || []), reference(result)].filter(value => Object.keys(value).length).slice(-16);
       checkpoint.pending = calls.slice(index + 1); saveCheckpoint();
+      if (repeatedMissing) throw Error(result.error);
       if (!result.error && !writeTools.has(name)) {
         const hash = name + ':' + factHash(result);
         if (!facts.has(hash)) madeProgress = true;
