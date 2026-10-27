@@ -2,6 +2,7 @@ const { createHash } = require('node:crypto');
 const { parse } = require('./parser.cjs');
 const { inspect } = require('./semantic.cjs');
 const { modules: reviewed } = require('./reviewed.json');
+const { modules: macModules } = require('./macos-reviewed.json');
 const { stopWithAudioFlush } = require('../speech/client.cjs');
 const cache = new Map(), ids = Object.keys(reviewed);
 const hint = new RegExp('(?:^|[,{])\\s*(?:' + ids.join('|') + ')\\s*\\(');
@@ -48,7 +49,9 @@ function edit(source, changes) {
 }
 function patchModule(module, id, options) {
   const record = reviewed[id], info = inspect(module);
-  if (info.fingerprint !== record.fingerprint) throw Error('Changed native module behavior');
+  // The Mac release adds stop-source telemetry. Its reviewed methods keep
+  // the same selectors, capture permissions and drain deadlines as before.
+  if (info.fingerprint !== record.fingerprint && info.fingerprint !== macModules[id]?.fingerprint) throw Error('Changed native module behavior');
   const node = key => { const value = info.at(record.selectors[key]); if (!value?.type) throw Error('Missing native selector'); return value; };
   const sourceOf = value => module.slice(value.start - 2, value.end - 2);
   const changes = [], replace = (value, text) => changes.push({ start: value.start - 2, end: value.end - 2, text });

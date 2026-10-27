@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "review": "2026-10-27: Mac client stop-source telemetry; capture permissions and drain deadlines retained.",
+  "modules": {
+    "241978": {
+      "asset": "17048-37d068bc6d2dddf7.js",
+      "moduleHash": "69d220828e180883982a383af5204ae9db3be7fa308d1c3d41b0aea76c798728",
+      "fingerprint": "dcd17ac435b9ba12868aaa2b40b58dc5a1c034fbc279b68ddd7659220602d3bf"
+    },
+    "331787": {
+      "asset": "89269-b1b071cd41334f47.js",
+      "moduleHash": "444d8bad2ad5f737a86b836776421e449b37dd93a7cd83ed9f15841927beb406",
+      "fingerprint": "cc9fa2d32b8607b8f053b175d6a423fec70d7f7998cd434095a55dc1413880ea"
+    }
+  }
+}

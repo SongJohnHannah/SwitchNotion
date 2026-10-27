@@ -1,4 +1,5 @@
 const { createHash } = require('node:crypto');
+const { modules: macModules } = require('./compat/macos-reviewed.json');
 const reviewed = {
   '95271': ['811656', 'f2be3eb51416adf2699c8fd44fdf7cdecfb53ab21b299dbf77e57acafe74d801'],
   '96975': ['459724', '6ab3eed179a1e223dfe221d164c59774bb0b3a3a38e7e6090e2359e44c50b332'],
@@ -32,6 +33,7 @@ function compatibleModule(source, asset) {
   const index = positions[0], start = boundaries[index].index + (boundaries[index][0].startsWith(expected[0]) ? 0 : 1), end = boundaries[index + 1]?.index ?? source.lastIndexOf('}]);');
   if (end <= start) return false;
   const module = source.slice(start, end);
-  return expected.slice(1).includes(digest(module)) || match[1] === '95271' && stableAvailability(module);
+  const hash = digest(module);
+  return expected.slice(1).includes(hash) || macModules[expected[0]]?.moduleHash === hash || match[1] === '95271' && stableAvailability(module);
 }
 module.exports = { compatibleModule };
