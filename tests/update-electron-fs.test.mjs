@@ -30,7 +30,8 @@ test('the configuration update check reads physical archives under Electron ASAR
     Module._load=function(name,...args){return name==='original-fs'?physical:load.call(this,name,...args)};
     fs.readFileSync=function(file,...args){if(String(file).endsWith('.asar'))throw Error('ENOENT, not found in '+file);return physical.readFileSync(file,...args)};
     const {UpdateService}=require('./src/update-service.cjs');
-    new UpdateService({root:process.argv[1],load:()=>import('./scripts/runtime-update.mjs')}).request('update.status').then(result=>console.log(JSON.stringify(result)));`;
+    const {createDesktopPlatform}=require('./src/platform/index.cjs');
+    new UpdateService({root:process.argv[1],platform:createDesktopPlatform({id:'win32',arch:'x64'}),load:()=>import('./scripts/runtime-update.mjs')}).request('update.status').then(result=>console.log(JSON.stringify(result)));`;
   const result = JSON.parse(execFileSync(process.execPath, ['-e', probe, root], { encoding: 'utf8', windowsHide: true }));
   assert.equal(result.ok, true); assert.equal(result.result.compatible, true, result.result.message);
   assert.equal(result.result.originalVersion, '7.50.0');

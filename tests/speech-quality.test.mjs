@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import audio from '../src/meeting-audio.cjs';
 import speech from '../src/speech-provider.cjs';
 import settings from '../src/speech/settings.cjs';
+import speechPlatforms from '../src/speech/platform.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -38,7 +39,8 @@ test('configuration switches the actual recognition model and restores the previ
   t.after(() => { assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
   const runtime = model => ({ pythonExecutable: path.join(root, 'python.exe'), modelDirectory: path.join(root, model), model,
     platform: 'win32', architecture: 'x64', device: 'cuda', computeType: 'float16' });
-  const provider = new speech.SpeechProvider({ root, runtime: runtime('medium'), discoverImpl: async (_root, { platform }) => runtime(platform.profile.model) });
+  const platform = speechPlatforms.createSpeechPlatform({ id: 'win32', arch: 'x64' });
+  const provider = new speech.SpeechProvider({ root, platform, runtime: runtime('medium'), discoverImpl: async (_root, { platform }) => runtime(platform.profile.model) });
   provider.probe = async () => provider.status();
   const service = new settings.SpeechSettings({ root, provider, runtimeExists: () => true });
   assert.equal((await service.request('speech.save', { enabled: true, model: 'large-v3-turbo' })).ok, true);

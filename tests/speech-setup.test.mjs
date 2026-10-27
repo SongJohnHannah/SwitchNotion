@@ -33,6 +33,9 @@ test('model download progress reports resumed bytes and rejects invalid child ou
   assert.deepEqual(received, [{ received: 40, total: 100, bytesPerSecond: 12 }]);
 });
 test('model preparation reports resumed progress and keeps the existing snapshot download', t => {
+  const candidates = process.platform === 'win32' ? [['py', '-3'], ['python'], ['python3']] : [['python3'], ['python']];
+  const python = candidates.find(([command, ...args]) => spawnSync(command, [...args, '-c', 'import sys; assert sys.version_info >= (3, 9)'], { stdio: 'ignore' }).status === 0);
+  if (!python) return t.skip('Python 3 is not available on this machine');
   const root = directory(t), modules = path.join(root, 'modules');
   fs.mkdirSync(path.join(modules, 'tqdm'), { recursive: true });
   fs.writeFileSync(path.join(modules, 'tqdm', '__init__.py'), '');
@@ -50,7 +53,7 @@ def snapshot_download(repo, revision, local_dir, allow_patterns, token):
     Path(local_dir).mkdir(parents=True, exist_ok=True)
     (Path(local_dir) / 'snapshot-called').touch()
 `);
-  const result = spawnSync('python3', [path.resolve('src/speech/managed_prepare.py'), '--root', root], { encoding: 'utf8', env: { ...process.env, PYTHONPATH: modules } });
+  const result = spawnSync(python[0], [...python.slice(1), path.resolve('src/speech/managed_prepare.py'), '--root', root], { encoding: 'utf8', env: { ...process.env, PYTHONPATH: modules } });
   assert.equal(result.status, 0, result.stderr);
   const events = result.stdout.trim().split('\n').map(line => JSON.parse(line.replace('SWITCH_NOTION_PROGRESS ', '')));
   assert.equal(events[0].received, 40); assert.equal(events.at(-1).received, 100); assert.equal(events.at(-1).total, 100);

@@ -11,22 +11,22 @@ function fixture(t) {
 }
 test('fresh machines discover their own user installation rather than another computer path', t => {
   const f = fixture(t), local = path.join(f.dir, 'new-user'), installation = f.install('new-user/Programs/Notion');
-  assert.equal(findNotion(f.root, { env: { LOCALAPPDATA: local }, home: f.dir, registry: () => { throw Error('no registry needed'); } }), installation);
+  assert.equal(findNotion(f.root, { id: 'win32', arch: 'x64', env: { LOCALAPPDATA: local }, home: f.dir, registry: () => { throw Error('no registry needed'); } }), installation);
 });
 
 test('redirected app-data environments still discover the installation in the actual user home', t => {
   const f = fixture(t), installed = f.install('user-home/AppData/Local/Programs/Notion');
-  assert.equal(findNotion(f.root, { env: { LOCALAPPDATA: path.join(f.dir, 'redirected') }, home: path.join(f.dir, 'user-home'), registry: () => [] }), installed);
+  assert.equal(findNotion(f.root, { id: 'win32', arch: 'x64', env: { LOCALAPPDATA: path.join(f.dir, 'redirected') }, home: path.join(f.dir, 'user-home'), registry: () => [] }), installed);
 });
 test('a selected custom installation or registry location is supported without choosing the isolated copy as source', t => {
   const f = fixture(t), installed = f.install('custom'), isolated = path.join(f.root, 'runtime');
   fs.cpSync(installed, isolated, { recursive: true });
-  assert.equal(notionDirectory(path.join(isolated, 'Notion.exe'), f.root), null);
-  assert.equal(findNotion(f.root, { env: {}, home: path.join(f.dir, 'missing'), registry: () => [path.join(installed, 'Notion.exe')] }), installed);
+  assert.equal(notionDirectory(path.join(isolated, 'Notion.exe'), f.root, { id: 'win32', arch: 'x64' }), null);
+  assert.equal(findNotion(f.root, { id: 'win32', arch: 'x64', env: {}, home: path.join(f.dir, 'missing'), registry: () => [path.join(installed, 'Notion.exe')] }), installed);
   fs.writeFileSync(path.join(f.root, 'installation.local.json'), JSON.stringify({ source: installed }));
-  assert.equal(findNotion(f.root, { env: {}, registry: () => { throw Error('must use saved choice'); } }), installed);
+  assert.equal(findNotion(f.root, { id: 'win32', arch: 'x64', env: {}, registry: () => { throw Error('must use saved choice'); } }), installed);
 });
 test('no installation returns a missing result so the bootstrap can offer the official download page', t => {
-  const f = fixture(t); assert.equal(findNotion(f.root, { env: {}, home: path.join(f.dir, 'missing'), registry: () => [] }), null);
-  assert.equal(notionDirectory('relative/Notion.exe', f.root), null);
+  const f = fixture(t); assert.equal(findNotion(f.root, { id: 'win32', arch: 'x64', env: {}, home: path.join(f.dir, 'missing'), registry: () => [] }), null);
+  assert.equal(notionDirectory('relative/Notion.exe', f.root, { id: 'win32', arch: 'x64' }), null);
 });

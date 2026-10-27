@@ -33,7 +33,7 @@ function fixture(t) {
   const parent = path.resolve('.notion-switch'), dir = fs.mkdtempSync(path.join(parent, 'test-update-')), root = path.join(dir, 'state'), source = path.join(dir, 'installed'), sourceProject = path.join(dir, 'project');
   t.after(() => { assert.equal(path.dirname(dir), parent); fs.rmSync(dir, { recursive: true, force: true }); });
   fs.mkdirSync(root); fs.mkdirSync(path.join(sourceProject, 'src'), { recursive: true }); fs.writeFileSync(path.join(sourceProject, 'src/desktop-hook.cjs'), '// fixture hook');
-  return { root, source, sourceProject };
+  return { root, source, sourceProject, platform: platformModule.createDesktopPlatform({ id: 'win32', arch: 'x64' }) };
 }
 test('compatible future patch versions stage automatically, preserve user data, validate and support rollback without an update loop', t => {
   const f = fixture(t), original = build(f.source, '7.40.20');
