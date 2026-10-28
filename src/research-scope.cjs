@@ -27,7 +27,8 @@ function researchWorkspace(workspace, { spaceId, config, onSource = () => {} }) 
       const result = await session.execute(name, input);
       for (const row of [result, ...(result.results || [])]) {
         if (row.workspace_id !== undefined && uuid(row.workspace_id) !== spaceId) throw Error('Notion 研究返回了其他工作区的资料，已停止使用。');
-        if (row.url) onSource({ ...row, kind: /^search_/.test(name) ? 'snippet' : 'notion', body_available: ['read_page', 'read_block', 'read_database_entry', 'read_database_entry_property'].includes(name) });
+        if (row.url) onSource({ ...row, kind: /^search_/.test(name) ? 'snippet' : 'notion', body_available: ['read_page', 'read_database_entry', 'read_database_entry_property'].includes(name) ||
+          name === 'read_block' && !['image', 'pdf', 'file', 'audio', 'video', 'bookmark', 'embed', 'link_preview'].includes(row.block?.type) });
       }
       return result;
     } };

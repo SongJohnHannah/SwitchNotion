@@ -1,6 +1,6 @@
 const { NativeMeetingStore } = require('./meeting-summary-store.cjs');
 const { uuid } = require('./native-context.cjs');
-const allowed = new Set(['getRecordValues', 'queryCollection', 'saveTransactionsFanout', 'getUploadSpaceFileUrl', 'getSpacePermissionGroupIdsContainingMembers', 'getCalendarEvents']);
+const allowed = new Set(['getRecordValues', 'queryCollection', 'saveTransactionsFanout', 'getUploadSpaceFileUrl', 'getSpacePermissionGroupIdsContainingMembers', 'getCalendarEvents', 'getSignedFileUrls']);
 class MeetingNativeBridge {
   constructor({ uploadFetch = globalThis.fetch } = {}) { this.contexts = []; this.uploadFetch = uploadFetch; }
   observe(request, session) {
@@ -21,6 +21,12 @@ class MeetingNativeBridge {
       if (main && (endpoint !== 'getRecordValues' || !Array.isArray(data?.requests) || data.requests.length !== 1 || data.requests[0].table !== 'user_root' || uuid(data.requests[0].id) !== context.userId)) throw Error('Notion 指令账号目录读取范围无效。');
       if (endpoint === 'getSpacePermissionGroupIdsContainingMembers' && (uuid(data?.spaceId) !== uuid(spaceId) || !Array.isArray(data.userIds) || data.userIds.length !== 1 || uuid(data.userIds[0]) !== context.userId)) throw Error('Notion 指令分组查询只允许当前账号和工作区。');
       if (endpoint === 'getCalendarEvents' && (uuid(data?.spaceId) !== uuid(spaceId) || Object.keys(data).some(key => !['spaceId', 'timeMin', 'timeMax', 'orderBy', 'userTimeZone', 'knownUserEmails', 'unfurlGroups'].includes(key)) || !Number.isFinite(data.timeMin) || !Number.isFinite(data.timeMax) || data.timeMax <= data.timeMin || data.timeMax - data.timeMin > 31 * 86400000 || data.orderBy !== 'startTime' || !Array.isArray(data.knownUserEmails) || data.knownUserEmails.length || data.unfurlGroups !== false)) throw Error('Notion 日历查询只允许当前账号、工作区与 31 天以内的只读范围。');
+      if (endpoint === 'getSignedFileUrls') {
+        const item = data?.urls?.[0], pointer = item?.permissionRecord;
+        if (!data || Object.keys(data).some(key => key !== 'urls') || !Array.isArray(data.urls) || data.urls.length !== 1 || !item || Object.keys(item).some(key => !['url', 'download', 'downloadName', 'permissionRecord'].includes(key)) ||
+            typeof item.url !== 'string' || !item.url || item.url.length > 8192 || /[\u0000-\u001f]/.test(item.url) || item.download !== false || typeof item.downloadName !== 'string' || !item.downloadName || item.downloadName.length > 255 || /[\\/\u0000-\u001f]/.test(item.downloadName) ||
+            !pointer || Object.keys(pointer).some(key => !['table', 'id', 'spaceId'].includes(key)) || pointer.table !== 'block' || !uuid(pointer.id) || uuid(pointer.spaceId) !== uuid(spaceId) || selectedSpace && uuid(selectedSpace) !== uuid(spaceId)) throw Error('Notion 文件读取签名请求只允许当前工作区的一个附件块。');
+      }
       const matching = !main && (selectedSpace === context.spaceId || !selectedSpace);
       const headers = { ...(matching ? context.routing : {}), 'content-type': 'application/json', 'x-notion-active-user-header': context.userId };
       if (!main && selectedSpace && !headers['x-notion-space-short-id']) headers['x-notion-space-id'] = selectedSpace;
@@ -30,7 +36,7 @@ class MeetingNativeBridge {
       });
       if (!response.ok) {
         await response.body?.cancel();
-        const error = Error(endpoint === 'getCalendarEvents' ? `Notion 日历接口返回 HTTP ${response.status}，请检查当前账号的原生日历连接。` : `会议内容接口返回 HTTP ${response.status}，未确认摘要写入。`);
+        const error = Error(endpoint === 'getCalendarEvents' ? `Notion 日历接口返回 HTTP ${response.status}，请检查当前账号的原生日历连接。` : endpoint === 'getSignedFileUrls' ? `Notion 文件读取签名接口返回 HTTP ${response.status}，请检查原生附件权限。` : `会议内容接口返回 HTTP ${response.status}，未确认摘要写入。`);
         error.notSubmitted = endpoint === 'saveTransactionsFanout' && [400, 401, 403, 404, 413, 429].includes(response.status);
         throw error;
       }

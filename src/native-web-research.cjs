@@ -49,7 +49,7 @@ function preparePublicResearch(input, records, userId, { forInference = true, al
   if (forInference && normalized.input.transcript.findLast(step => ['user', 'agent-inference'].includes(step.type))?.type !== 'user') fail('请先输入新的问题，或从原问题重新生成；未重复运行已经完成的报告。');
   return normalized;
 }
-function streamPublicResearch({ normalized, records, userId, provider, workspace, webSources, thread, signal, timeoutMs = 300000, log = () => {}, onFinish = () => {} }) {
+function streamPublicResearch({ normalized, records, userId, provider, workspace, webSources, pageFiles, thread, signal, timeoutMs = 300000, log = () => {}, onFinish = () => {} }) {
   const { input, config } = normalized, generation = new AbortController();
   const active = signal ? AbortSignal.any([signal, generation.signal]) : generation.signal;
   const step = { id: randomUUID(), type: 'agent-inference', traceId: input.traceId, startedAt: Date.now(), value: [{ type: 'text', content: '' }] };
@@ -86,8 +86,9 @@ function streamPublicResearch({ normalized, records, userId, provider, workspace
       const old = sources.get(item.url);
       if (!old && (sources.size >= 32 || sourceCharacters + item.url.length > 16000)) continue;
       if (!old) sourceCharacters += item.url.length;
+      const file = result.source === 'notion-page-file';
       sources.set(item.url, { url: item.url, title: String(item.title || old?.title || '公开网页').replace(/[\r\n\[\]\\`]/g, ' ').slice(0, 160),
-        body_available: name === 'read_web_page' || !!old?.body_available, complete: name === 'read_web_page' && result.complete === true || !!old?.complete,
+        body_available: file ? result.body_available === true : name === 'read_web_page' || !!old?.body_available, complete: file ? result.complete === true : name === 'read_web_page' && result.complete === true || !!old?.complete,
         ...(result.fetched_at ? { fetched_at: result.fetched_at } : {}) });
     }
   };
@@ -101,7 +102,17 @@ function streamPublicResearch({ normalized, records, userId, provider, workspace
       const scoped = config.notion ? researchWorkspace(workspace, { spaceId: input.spaceId, config, onSource: row => {
         collect(row, row.body_available ? 'read_web_page' : 'search_pages');
       } }) : null;
-      const messages = config.notion ? await researchMessages(input, { signal: active, resolveReferences: createInlineReferenceReader({ workspace: scoped }) }) : [{ role: 'system', content: '' }];
+      const fileReader = config.notion && pageFiles ? pageFiles.open({ spaceId: input.spaceId, signal: active,
+        session: await scoped.open({ signal: active, nativeContext: normalized.nativeContext }) }) : null;
+      const fileService = fileReader && { ...fileReader, execute: async (name, args) => {
+        const result = await fileReader.execute(name, args);
+        collect({ ...result, title: result.document?.filename || 'Notion 附件', complete: result.document?.complete === true }, 'read_web_page'); return result;
+      } };
+      const resolveFile = fileService ? ({ blockId, spaceId }) => {
+        if (spaceId !== input.spaceId) fail('附件不属于本轮所选工作区。');
+        return fileService.execute('read_notion_file', { block_id: blockId });
+      } : undefined;
+      const messages = config.notion ? await researchMessages(input, { signal: active, resolveReferences: createInlineReferenceReader({ workspace: scoped, resolveFile }) }) : [{ role: 'system', content: '' }];
       for (const original of config.notion ? [] : input.transcript) {
         if (original.type === 'user') {
           const content = original.actualMessage ?? original.value, urls = [...explicitUrls([{ type: 'text', text: content }])];
@@ -111,7 +122,7 @@ function streamPublicResearch({ normalized, records, userId, provider, workspace
       const lastUser = messages.findLastIndex(value => value.role === 'user');
       messages.splice(lastUser, 0, { role: 'user', notionSwitchResearch: true, content: config.notion ? '本轮只读研究仅使用所选工作区的已授权 Notion 来源' + (config.useWebSearch ? '及启用的公开网页。' : '。') + config.notice + '报告必须标明读取来源和未读完的范围。' : '本轮原生来源范围仅为公开网页。未提供任何 Notion 工作区连接、页面正文、个人指令或技能工具。报告须给出实际来源及未完成的范围；引用搜索摘要时标明尚未读取正文。' });
       const tracked = web ? { ...web, execute: async (name, args) => { const result = await web.execute(name, args); collect(result, name); return result; } } : undefined;
-      await runAgent({ provider, config: provider.config(normalized.modelSelection), messages, workspace: scoped, nativeContext: normalized.nativeContext, web: tracked, research: true, operationScope: input.threadId + ':' + input.traceId, signal: active,
+      await runAgent({ provider, config: provider.config(normalized.modelSelection), messages, workspace: scoped, nativeContext: normalized.nativeContext, web: tracked, nativeServices: fileService ? [fileService] : [], research: true, operationScope: input.threadId + ':' + input.traceId, signal: active,
         onText: delta => { if (!ended) { if (step.value[0].content.length + delta.length > 120000) fail('报告达到长度上限，请缩小范围。'); step.value[0].content += delta; flush(); if (Date.now() - lastSaved >= 1000) snapshot('running'); } },
         onTextReset: count => { if (!ended && count) { step.value[0].content = step.value[0].content.slice(0, -count); flush(); } },
         onStep: value => log({ type: 'native-public-research-tool-step', ...value }) });

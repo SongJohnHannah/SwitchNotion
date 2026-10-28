@@ -26,12 +26,13 @@ const normalizePreview = text => text.normalize('NFC').replace(/[*_`~]/g, '').re
 
 // All I/O goes through the existing scoped Router. This module has no paths,
 // Electron dependencies, model tools, writes, or operating-system branches.
-function createInlineReferenceReader({ workspace, maxCalls = 128, maxBlocks = 800, maxCharacters = 160000, timeoutMs = 30000 } = {}) {
+function createInlineReferenceReader({ workspace, resolveFile, maxFiles = 8, maxFileBytes = 24 * 1024 * 1024, maxCalls = 128, maxBlocks = 800, maxCharacters = 160000, timeoutMs = resolveFile ? 300000 : 30000 } = {}) {
   return async ({ pointers = [], selection, pageId, spaceId, signal }) => {
     pointers = referencePointers(pointers, spaceId);
     if (!workspace?.open || !uuid(spaceId)) fail('读取连接尚未配置，请先添加该工作区的连接。');
     const deadline = AbortSignal.timeout(timeoutMs), active = signal ? AbortSignal.any([signal, deadline]) : deadline;
-    let calls = 0, blocks = 0;
+    let calls = 0, blocks = 0, fileBytes = 0;
+    const files = new Map(), fileProofs = new Map(), pageProofs = new Map(), fileTypes = new Set(['image', 'pdf', 'file', 'audio', 'video']);
     let session;
     const readError = error => {
       if (signal?.aborted) throw error;
@@ -59,6 +60,29 @@ function createInlineReferenceReader({ workspace, maxCalls = 128, maxBlocks = 80
     const readBlock = async (id, scope) => {
       const key = scope + ':' + id;
       return cache.get(key) || remember((await execute('read_block', { block_id: id }, scope)).block, scope);
+    };
+    const fileBody = async (block, scope, strict = false) => {
+      if (!resolveFile) return null;
+      const key = scope + ':' + uuid(block.id);
+      if (files.has(key)) {
+        const value = files.get(key); if (strict && !value.body_available) fail('所选附件格式尚未支持，未忽略附件继续生成。'); return value;
+      }
+      if (files.size >= maxFiles || fileBytes >= maxFileBytes) fail('本轮页面附件超过 8 个或 24 MiB，请只引用必要附件。');
+      let value;
+      try {
+        value = await resolveFile({ blockId: uuid(block.id), spaceId: scope, signal: active,
+          session: { execute: (name, args) => execute(name, args, scope) }, maxBytes: Math.min(16 * 1024 * 1024, maxFileBytes - fileBytes) });
+        active.throwIfAborted();
+        if (!value?.document || value.body_available !== true || !Number.isSafeInteger(value.bytes) || value.bytes < 1 || typeof value.block_revision !== 'string' || !value.block_revision ||
+            value.workspace_id !== scope || uuid(value.block_id) !== uuid(block.id)) fail('页面附件没有取得可核对的正文。');
+        fileBytes += value.bytes; if (fileBytes > maxFileBytes) fail('本轮页面附件超过 24 MiB，请缩小引用范围。');
+        fileProofs.set(key, { blockId: uuid(block.id), scope, revision: value.block_revision });
+        value = { block_id: uuid(block.id), type: block.type, document: value.document, body_available: true, read_only: true };
+      } catch (error) {
+        if (error.code !== 'NOTION_FILE_UNSUPPORTED' || strict) throw error;
+        value = { block_id: uuid(block.id), type: block.type, body_available: false, note: '附件格式尚未支持，仅保留块标识，未读取其二进制正文。' };
+      }
+      checkSize(value); files.set(key, value); return value;
     };
     async function* children(id, scope) {
       let cursor; const cursors = new Set(), seen = new Set();
@@ -92,6 +116,24 @@ function createInlineReferenceReader({ workspace, maxCalls = 128, maxBlocks = 80
       } while (true);
       const value = { kind: 'page', page_id: id, title: metadata.title, text: chunks.join(''), complete: true };
       if (metadata.parent?.database_id || metadata.parent?.data_source_id) value.entry = await completeEntry(await execute('read_database_entry', { page_id: id }, scope), scope);
+      if (resolveFile) {
+        const attachments = [], visited = new Set([id]);
+        const visit = async parent => {
+          for await (const block of children(parent, scope)) {
+            const child = uuid(block.id); if (visited.has(child)) fail('页面附件遍历出现重复或循环。'); visited.add(child);
+            if (fileTypes.has(block.type)) attachments.push(await fileBody(block, scope));
+            // A page reference does not implicitly select linked pages,
+            // databases, or a synced block's external source.
+            if (block.has_children && !['child_page', 'child_database', 'link_to_page', 'synced_block'].includes(block.type)) await visit(child);
+            checkSize(attachments);
+          }
+        };
+        await visit(id);
+        if (!revision) fail('页面附件列表缺少可核对的版本。');
+        pageProofs.set(scope + ':' + id, { pageId: id, scope, revision });
+        value.attachments = attachments;
+        value.attachment_scope = '只读取本页直接包含的附件；不展开子页面、数据库、同步来源或链接。未支持的格式标记为 body_available=false。';
+      }
       return value;
     }
     async function completeEntry(entry, scope) {
@@ -149,7 +191,12 @@ function createInlineReferenceReader({ workspace, maxCalls = 128, maxBlocks = 80
         value.pointer_only = true; value.body_available = false; value.note = '仅引用指针，未打开其目标正文。'; return value;
       }
       if (['image', 'pdf', 'file', 'audio', 'video', 'bookmark', 'embed', 'link_preview'].includes(block.type)) {
-        value.body_available = false; value.note = '只读取到媒体或链接元数据，尚未解析二进制正文。';
+        const parsed = fileTypes.has(block.type) ? await fileBody(block, scope, ancestors.size === 0) : null;
+        if (parsed) {
+          Object.assign(value, parsed);
+          // Signed storage URLs are used only by the downloader, not the model.
+          value.data = { ...(data.name ? { name: data.name } : {}), ...(data.caption ? { caption: data.caption } : {}) };
+        } else { value.body_available = false; value.note = '只读取到媒体或链接元数据，尚未解析二进制正文。'; }
       } else if (!['paragraph', 'heading_1', 'heading_2', 'heading_3', 'bulleted_list_item', 'numbered_list_item', 'quote',
         'to_do', 'toggle', 'callout', 'code', 'equation', 'divider', 'breadcrumb', 'table_of_contents', 'table', 'table_row',
         'column_list', 'column', 'synced_block'].includes(block.type)) {
@@ -235,6 +282,14 @@ function createInlineReferenceReader({ workspace, maxCalls = 128, maxBlocks = 80
         }
       }
       for (const pointer of pointers) { result.references.push({ pointer, ...(await objectReference(pointer, true)) }); checkSize(result); }
+      for (const proof of fileProofs.values()) {
+        const latest = await execute('read_block', { block_id: proof.blockId }, proof.scope);
+        if (latest.block_revision !== proof.revision) fail('引用附件在读取其他来源期间已改变，请重新发送。');
+      }
+      for (const proof of pageProofs.values()) {
+        const latest = await execute('read_page', { page_id: proof.pageId, offset: 0 }, proof.scope);
+        if (latest.revision !== proof.revision) fail('引用页面或附件列表在读取期间已改变，请重新发送。');
+      }
       active.throwIfAborted(); return checkSize(result);
     } catch (error) { readError(error); }
   };

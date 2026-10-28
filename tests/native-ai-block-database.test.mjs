@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { aiBlockDatabaseFixture } from './helpers/native-ai-block-database.mjs';
 import { autofillId } from './helpers/native-autofill.mjs';
 const { generateAiBlock } = createRequire(import.meta.url)('../src/native-ai-block.cjs');
+const { openNativePageFiles } = createRequire(import.meta.url)('../src/native-page-files.cjs');
 const { uuid } = createRequire(import.meta.url)('../src/native-context.cjs');
 const sourceData = f => JSON.parse(f.requests[0].messages.at(-1).content.split('所选来源资料：\n')[1]);
 
@@ -109,8 +110,12 @@ test('database readers may read a source while child pages and linked relation t
 test('the actual desktop route returns database-backed AI block Markdown without forwarding hosted inference', async () => {
   const f = aiBlockDatabaseFixture(), source = fs.readFileSync(new URL('../src/desktop-hook.cjs', import.meta.url), 'utf8');
   f.provider.status = () => ({ mode: 'deepseek' });
+  const api = f.store.api;
+  f.store.api = (name, ...args) => name === 'getSignedFileUrls' ? { signedUrls: ['https://example.invalid/synthetic.pdf'] } : api(name, ...args);
   const route = vm.runInNewContext(source.slice(source.indexOf('async function route('), source.indexOf('\nfunction install(ses)')) + '\nroute', {
     Request, Response, Headers, URL, uuid, generateAiBlock, provider: f.provider,
+    openNativePageFiles: options => openNativePageFiles({ ...options, fetchFile: async () => ({ body: Buffer.from('synthetic-pdf-input') }) }),
+    mediaTranscripts: { parse: async () => ({ filename: 'synthetic.pdf', format: 'pdf', pages: [{ page: 1, text: '合成附件代码927' }], complete: true }) },
     settings: { speech: { enabled: false }, isLoginSyncing: () => false }, nativeSpeech: { enabled: false },
     meetingBridge: { observe() {}, forRequest: (_request, _session, spaceId) => { assert.equal(spaceId, f.ids.space); return f.store; } },
     recordings: { wake() {} }, log() {}, localUploadPrefix: '/notion-switch-local-upload/', isNotion: host => host === 'app.notion.com',
@@ -121,4 +126,5 @@ test('the actual desktop route returns database-backed AI block Markdown without
   }), () => assert.fail('AI block inference must stay local'));
   assert.equal(response.status, 200); assert.equal(JSON.parse(await response.text()).markdownString, '数据库合成摘要');
   assert.equal(f.requests.length, 1); assert.equal(f.writes().length, 0);
+  assert.match(JSON.stringify(f.requests[0].messages), /合成附件代码927/);
 });

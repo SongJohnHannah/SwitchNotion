@@ -71,7 +71,7 @@ class NativeMock {
         try { normalized = preparePublicResearch(input, this.inline, userId, { allowNotion: this.workspaceResearch && !!this.workspace?.open }); }
         catch (error) { return json({ message: error.message }, 400); }
         if (!thread) { thread = { kind: 'web-research', turns: [], stop: null, scopeRecord: { created_by_id: userId, space_id: input.spaceId } }; this.threads.set(input.threadId, thread); }
-        return streamPublicResearch({ normalized, signal, provider: this.provider, workspace: this.workspace, webSources: this.webSources, records: this.inline, userId, thread, log: this.log,
+        return streamPublicResearch({ normalized, signal, provider: this.provider, workspace: this.workspace, webSources: this.webSources, pageFiles: this.agent.extensions?.pageFiles, records: this.inline, userId, thread, log: this.log,
           onFinish: status => { if (status === 'completed') this.completed++; else if (status === 'failed') this.researchFailures++; else this.stopped++; } });
       }
       if (isFormula(input)) {
