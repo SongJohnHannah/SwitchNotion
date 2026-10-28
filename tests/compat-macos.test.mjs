@@ -99,14 +99,22 @@ test('current Mac assets enter the production response adapter and changed bytes
   }
 });
 
-test('the Mac dispatch does not enable these new assets on the unchanged Windows compatibility path', { skip: Object.values(currentAssets).some(name => fixtureMissing(name)) && 'Optional public macOS client fixtures unavailable' }, () => {
+test('the Mac dispatch preserves the current upstream Windows compatibility path', { skip: Object.values(currentAssets).some(name => fixtureMissing(name)) && 'Optional public macOS client fixtures unavailable' }, () => {
   const require = createRequire(new URL('../src/client-compat.cjs', import.meta.url));
   const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(new URL('../src/client-compat.cjs', import.meta.url), 'utf8'), { require, module, process: { platform: 'win32' } });
+  const windowsRequire = id => {
+    assert.notEqual(id, './compat/macos-client.cjs', 'Windows must not load the Mac adapter');
+    return require(id);
+  };
+  vm.runInNewContext(fs.readFileSync(new URL('../src/client-compat.cjs', import.meta.url), 'utf8'), { require: windowsRequire, module, process: { platform: 'win32' } });
   for (const name of new Set([...Object.values(currentAssets), ...currentRecordings])) {
     if (fixtureMissing(name)) continue;
     const source = fs.readFileSync(cached(name), 'utf8');
-    assert.throws(() => module.exports.adaptClient(source, name, options), /Unreviewed/);
+    if (name === currentAssets.autofill) {
+      // Upstream now reviews this Autofill asset on Windows too. Preserve
+      // its existing adapter output without routing through the Mac copy.
+      assert.equal(module.exports.adaptClient(source, name, options), require('./compat/autofill.cjs').adaptAutofill(source, name));
+    } else assert.throws(() => module.exports.adaptClient(source, name, options), /Unreviewed/);
   }
 });
 
