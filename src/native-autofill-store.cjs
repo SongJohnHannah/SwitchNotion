@@ -4,12 +4,13 @@ const { normalizeViewSnapshot, resolveViewInfo } = require('./native-autofill-vi
 const { dateProperty } = require('./native-autofill-date.cjs');
 const { workflowSources, verifySources } = require('./native-autofill-sources.cjs');
 const { loadApiProperties, planApi, submitApi, verifyApi } = require('./native-autofill-api.cjs');
+const { checkPersonValue, instructionMentionText } = require('./native-autofill-people.cjs');
 const fail = message => { throw Error('Notion Autofill ' + message); };
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const hash = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 const plain = value => Array.isArray(value) ? value.map(span => typeof span?.[0] === 'string' ? span[0] : '').join('') : '';
-const types = new Set(['text', 'title', 'select', 'multi_select', 'status', 'email', 'url', 'phone_number', 'number', 'checkbox', 'date', 'relation']);
+const types = new Set(['text', 'title', 'select', 'multi_select', 'status', 'email', 'url', 'phone_number', 'number', 'checkbox', 'date', 'relation', 'person']);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 function emptyProperty(value, field) {
   if (field?.type === 'checkbox' && Array.isArray(value)) return plain(value) !== 'Yes';
@@ -104,6 +105,11 @@ class NativeAutofillStore {
             field.collection_id && uuid(field.collection_id) !== target || field.limit != null && (!Number.isSafeInteger(field.limit) || field.limit < 0)) fail('关系字段范围、限制或模式尚未支持。');
         relation = { target_collection_id: target, limit: Math.min(field.limit || 25, 25) };
       }
+      if (field.type === 'person') {
+        if (workflow.data.isLite === true || field.synced_permissions === 'read_only' || field.default != null && field.default !== 'created_by' ||
+            field.limit != null && typeof field.limit !== 'boolean' && (!Number.isSafeInteger(field.limit) || field.limit < 0)) fail('人员字段模式、默认值或限制尚未支持。');
+        relation = { limit: field.limit ? 1 : 25, ...(field.default === 'created_by' ? { default_created_by: true } : {}) };
+      }
       const options = ['select', 'multi_select', 'status'].includes(field.type) ? field.options : undefined;
       if (options && (!Array.isArray(options) || options.some(option => typeof option.value !== 'string' || option.value.includes(',')))) fail('分类字段选项格式无效。');
       return { id, name: field.name, type: field.type, ...(options ? { options: options.map(option => option.value) } : {}), ...relation,
@@ -112,7 +118,7 @@ class NativeAutofillStore {
     const instructionSpans = workflow.data.instructions || [];
     if (!Array.isArray(instructionSpans) || instructionSpans.some(span => !Array.isArray(span) || typeof span[0] !== 'string' ||
         span[1]?.some(annotation => !['b', 'i', 's', 'u', 'c', 'a', '_', ...(workflow.data.isLite !== true ? ['p'] : [])].includes(annotation[0])))) fail('工作流指令含尚未读取的引用，未忽略来源继续填充。');
-    const instructions = plain(instructionSpans).trim() || '根据记录正文和字段配置填充明确选择的字段。';
+    const instructions = (fields.some(field => field.type === 'person') ? instructionMentionText(instructionSpans) : plain(instructionSpans)).trim() || '根据记录正文和字段配置填充明确选择的字段。';
     if (instructions.length > 12000) fail('工作流指令过长。');
     const sourcePolicy = workflowSources(workflow, this.spaceId);
     const rows = [];
@@ -163,6 +169,10 @@ class NativeAutofillStore {
     for (const field of snapshot.fields) {
       const value = output[field.id];
       if (snapshot.sourcePolicy && object(value) && value.$skip === true && Object.keys(value).length === 1) continue;
+      if (field.type === 'person') {
+        checkPersonValue(field, row, value === null ? [] : value);
+        properties[field.id] = (value || []).flatMap((id, index) => [...(index ? [[',']] : []), ['‣', [['u', uuid(id)]]]]); continue;
+      }
       if (value === null) { properties[field.id] = []; continue; }
       if (field.type === 'relation') {
         if (!Array.isArray(value) || value.length > field.limit || value.some(id => !uuid(id)) || new Set(value.map(uuid)).size !== value.length) fail('关系字段必须是已核对目标记录的 UUID 数组，且不能超过字段限制。');

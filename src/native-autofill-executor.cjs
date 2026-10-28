@@ -21,6 +21,7 @@ function messages(snapshot, row) {
   ];
   if (snapshot.sourcePolicy) result[0].content += '\n这是高级 Autofill。可按工作流来源权限使用只读工具；只生成所选字段。条件不满足或要求保留原值时，该字段输出 {"$skip":true}，不要用 null 代替“不操作”。null 表示实际清空。仍需返回所有目标字段的键。不得调用页面修改工具；本次写回由程序统一校验。';
   if (snapshot.fields.some(field => field.type === 'relation')) result[0].content += '\nrelation 字段输出目标数据库记录的 UUID 数组，只能使用实际读取或查询确认的 ID。target_collection_id 指定唯一目标数据源，limit 指定数量限制；不要输出页面标题或编造 ID。api_value 是公开 API 当前完整字段值；查不到可靠目标时用 {"$skip":true} 保留。';
+  if (snapshot.fields.some(field => field.type === 'person')) result[0].content += '\nperson 字段输出用户 UUID 数组。当前登录用户是 current_user_id；按姓名指定其他人时先调用 find_autofill_people，仅使用完整且唯一匹配的 ID。同名、无结果或未完整检索时返回 {"$skip":true}，不猜测，不使用姓名字符串或群组 ID。limit 为人数上限；default_created_by 字段不能用空数组清除默认创建者。';
   if (format) result.splice(2, 0, format); return result;
 }
 function outputObject(text) {
@@ -84,6 +85,7 @@ class AutofillExecutor {
         const field = snapshot.fields.find(value => value.id === id);
         if (!row.api) return emptyProperty(row.properties[id], field);
         const value = row.api.properties[row.api.mapping[id]];
+        if (field.type === 'person' && field.default_created_by && row.defaultCreatorId) return false;
         return field.type === 'checkbox' ? value !== true : value == null || typeof value === 'string' && !value.trim() || Array.isArray(value) && !value.length;
       }) : info.propertyIds;
       if (!propertyIds.length) { skipped.add(row.pageId); notify({ stage: 'skipped', rowId: row.pageId }); continue; }

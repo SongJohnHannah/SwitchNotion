@@ -1,6 +1,7 @@
 const { createHash } = require('node:crypto');
 const { uuid } = require('./native-context.cjs');
 const { simpleValuesEqual } = require('./notion-databases.cjs');
+const { seedPeople, verifyPeople } = require('./native-autofill-people.cjs');
 const fail = message => { throw Error('Notion Autofill ' + message); };
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const hash = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
@@ -13,7 +14,7 @@ function nameFor(entry, fieldId) {
   return names[0];
 }
 async function openApi(store, signal, { parentId, write = false, operationScope = 'native-autofill-properties' } = {}) {
-  if (!store.workspace?.open) fail('关系填充需要当前工作区现有的 API 连接。');
+  if (!store.workspace?.open) fail('人员/关系填充需要当前工作区现有的 API 连接。');
   const session = await store.workspace.open({ signal, operationScope, nativeContext: { workspace_id: store.spaceId },
     ...(!write ? { readScope: { workspaceId: store.spaceId, ...(parentId ? { rootIds: [parentId] } : {}) } } : {}) });
   if (uuid(session?.context?.current_workspace_id) !== store.spaceId || !session.definitions?.some(value => value.function.name === (write ? 'update_database_entry' : 'read_database_entry'))) fail('当前工作区 API 未连接、不可读取或未启用字段写入。');
@@ -25,7 +26,7 @@ function checkedEntry(entry, rowId, collectionId) {
   return entry;
 }
 async function loadApiProperties(store, snapshot, signal) {
-  if (!snapshot.fields.some(field => field.type === 'relation')) return;
+  if (!snapshot.fields.some(field => ['relation', 'person'].includes(field.type))) return;
   const session = await openApi(store, signal, { parentId: snapshot.collection.parent_id });
   const schema = await session.execute('read_database', { data_source_id: snapshot.info.collectionId });
   if (uuid(schema.data_source_id) !== snapshot.info.collectionId || uuid(schema.parent?.database_id) !== uuid(snapshot.collection.parent_id) || !/^[a-f\d]{64}$/.test(schema.schema_revision || '')) fail('公开 API 数据源与原生数据库不匹配。');
@@ -42,11 +43,12 @@ async function loadApiProperties(store, snapshot, signal) {
     if (uuid(entry.workspace_id) !== store.spaceId) fail('公开 API 返回了其他工作区。');
     if (snapshot.fields.some(field => nameFor(entry, field.id) !== mapping[field.id] || (entry.incomplete_properties || []).includes(nameFor(entry, field.id)))) fail('目标字段在读取中变化或包含未完整返回的分页值，未以截断内容生成或覆盖。');
     row.api = { revision: entry.property_revision, properties: entry.properties, propertyIds: entry.property_ids, mapping, stateHash: stateHash(entry) };
+    if (snapshot.fields.some(field => field.type === 'person')) seedPeople(store, row, snapshot.workflow.data.instructions);
   }
 }
 function apiValue(field, value) {
   if (value === null) return ['text', 'title'].includes(field.type) ? '' : ['relation', 'multi_select', 'person'].includes(field.type) ? [] : field.type === 'checkbox' ? false : null;
-  if (field.type === 'relation') return value.map(uuid);
+  if (['relation', 'person'].includes(field.type)) return value.map(uuid);
   if (field.type === 'date' && value.time_zone) return { ...value, start: value.start.slice(0, 16) + ':00', ...(value.end ? { end: value.end.slice(0, 16) + ':00' } : {}) };
   return value;
 }
@@ -58,7 +60,8 @@ function planApi(snapshot, row, output, propertyIds, contextHash) {
     if (field.type === 'relation') for (const id of properties[name]) targets.push({ id, collectionId: field.target_collection_id });
   }
   return { version: 1, collectionId: snapshot.info.collectionId, parentId: snapshot.collection.parent_id, revision: row.api.revision, contextHash,
-    fields: fields.map(field => ({ id: field.id, name: row.api.mapping[field.id], type: apiType(field) })), properties, before, targets };
+    fields: fields.map(field => ({ id: field.id, name: row.api.mapping[field.id], type: apiType(field) })), properties, before, targets,
+    ...(fields.some(field => field.type === 'person') ? { peopleQueries: [...row.peopleQueries].map(([query, id]) => ({ query, id })) } : {}) };
 }
 async function submitApi(store, plan, snapshot, signal, onSubmit) {
   const session = await openApi(store, signal, { write: true, operationScope: 'native-autofill:' + plan.id }), scope = plan.api;
@@ -68,6 +71,7 @@ async function submitApi(store, plan, snapshot, signal, onSubmit) {
   const expectedTargets = snapshot.fields.filter(field => field.type === 'relation' && plan.propertyIds.includes(field.id)).flatMap(field =>
     (scope.properties[field.name] || []).map(id => ({ id, collectionId: field.target_collection_id })));
   if (hash(scope.targets) !== hash(expectedTargets)) fail('关系目标记录与所选字段不匹配。');
+  await verifyPeople(store, plan, signal);
   for (const target of scope.targets) {
     const row = checkedEntry(await session.execute('read_database_entry', { page_id: target.id }), target.id, target.collectionId);
     if (uuid(row.workspace_id) !== store.spaceId) fail('关系目标属于其他工作区。');
