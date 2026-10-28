@@ -1,5 +1,6 @@
 const { randomUUID } = require('node:crypto');
 const { uuid } = require('./native-context.cjs');
+const { propertyFiles, propertyKey, readFileProperty } = require('./file-properties.cjs');
 const fail = message => { throw Error('Notion 引用' + message); };
 function referencePointers(values = [], workspaceId, { limit = 32 } = {}) {
   if (!Array.isArray(values) || values.length > limit) fail(`列表无效或超过 ${limit} 项，请缩小范围。`);
@@ -61,26 +62,27 @@ function createInlineReferenceReader({ workspace, resolveFile, maxFiles = 8, max
       const key = scope + ':' + id;
       return cache.get(key) || remember((await execute('read_block', { block_id: id }, scope)).block, scope);
     };
-    const fileBody = async (block, scope, strict = false) => {
+    const fileBody = async (block, scope, strict = false, property) => {
       if (!resolveFile) return null;
-      const key = scope + ':' + uuid(block.id);
+      const key = scope + ':' + JSON.stringify(property ? [uuid(block.id), propertyKey(property.propertyId), property.fileIndex] : [uuid(block.id)]);
       if (files.has(key)) {
         const value = files.get(key); if (strict && !value.body_available) fail('所选附件格式尚未支持，未忽略附件继续生成。'); return value;
       }
       if (files.size >= maxFiles || fileBytes >= maxFileBytes) fail('本轮页面附件超过 8 个或 24 MiB，请只引用必要附件。');
       let value;
       try {
-        value = await resolveFile({ blockId: uuid(block.id), spaceId: scope, signal: active,
+        value = await resolveFile({ ...(property ? { pageId: uuid(block.id), ...property } : { blockId: uuid(block.id) }), spaceId: scope, signal: active,
           session: { execute: (name, args) => execute(name, args, scope) }, maxBytes: Math.min(16 * 1024 * 1024, maxFileBytes - fileBytes) });
         active.throwIfAborted();
-        if (!value?.document || value.body_available !== true || !Number.isSafeInteger(value.bytes) || value.bytes < 1 || typeof value.block_revision !== 'string' || !value.block_revision ||
-            value.workspace_id !== scope || uuid(value.block_id) !== uuid(block.id)) fail('页面附件没有取得可核对的正文。');
+        const revision = property ? value?.file_revision : value?.block_revision;
+        if (!value?.document || value.body_available !== true || !Number.isSafeInteger(value.bytes) || value.bytes < 1 || typeof revision !== 'string' || !revision || value.workspace_id !== scope ||
+            (property ? uuid(value.page_id) !== uuid(block.id) || propertyKey(value.property_id) !== propertyKey(property.propertyId) || value.file_index !== property.fileIndex : uuid(value.block_id) !== uuid(block.id))) fail('页面附件没有取得可核对的正文。');
         fileBytes += value.bytes; if (fileBytes > maxFileBytes) fail('本轮页面附件超过 24 MiB，请缩小引用范围。');
-        fileProofs.set(key, { blockId: uuid(block.id), scope, revision: value.block_revision });
-        value = { block_id: uuid(block.id), type: block.type, document: value.document, body_available: true, read_only: true };
+        fileProofs.set(key, { ...(property ? { pageId: uuid(block.id), ...property } : { blockId: uuid(block.id) }), scope, revision });
+        value = { ...(property ? { page_id: uuid(block.id), property_id: value.property_id, file_index: value.file_index } : { block_id: uuid(block.id) }), type: block.type, document: value.document, body_available: true, read_only: true };
       } catch (error) {
         if (error.code !== 'NOTION_FILE_UNSUPPORTED' || strict) throw error;
-        value = { block_id: uuid(block.id), type: block.type, body_available: false, note: '附件格式尚未支持，仅保留块标识，未读取其二进制正文。' };
+        value = { ...(property ? { page_id: uuid(block.id), property_id: property.propertyId, file_index: property.fileIndex } : { block_id: uuid(block.id) }), type: block.type, body_available: false, note: '附件格式尚未支持，未读取其二进制正文。' };
       }
       checkSize(value); files.set(key, value); return value;
     };
@@ -129,10 +131,15 @@ function createInlineReferenceReader({ workspace, resolveFile, maxFiles = 8, max
           }
         };
         await visit(id);
+        for (const [name, type] of Object.entries(value.entry?.property_types || {})) if (type === 'files') {
+          const property = propertyFiles(value.entry, value.entry.property_ids[name]);
+          for (let index = 0; index < property.files.length; index++) attachments.push(await fileBody({ id, type: 'file' }, scope, false, { propertyId: property.id, fileIndex: index }));
+          value.entry.properties[name] = property.files.map(file => ({ name: file.name, type: file.type, body_available: false, note: '正文见 attachments 对应字段及序号。' }));
+        }
         if (!revision) fail('页面附件列表缺少可核对的版本。');
         pageProofs.set(scope + ':' + id, { pageId: id, scope, revision });
         value.attachments = attachments;
-        value.attachment_scope = '只读取本页直接包含的附件；不展开子页面、数据库、同步来源或链接。未支持的格式标记为 body_available=false。';
+        value.attachment_scope = '读取本页附件块与本记录文件属性；不展开子页面、其他数据库记录、同步来源或链接。未支持格式标记为 body_available=false。';
       }
       return value;
     }
@@ -145,7 +152,7 @@ function createInlineReferenceReader({ workspace, resolveFile, maxFiles = 8, max
           const result = await execute('read_database_entry_property', { page_id: entry.page_id, property_id: id, page_size: 100,
             ...(cursor ? { start_cursor: cursor } : {}) }, scope);
           if (Array.isArray(result.items)) items.push(...result.items);
-          else if (!result.has_more) items.push(result.value);
+          else if (!result.has_more) items.push(...(entry.property_types?.[name] === 'files' && Array.isArray(result.value) ? result.value : [result.value]));
           else fail('记录字段分页内容无效。');
           checkSize(items);
           if (!result.has_more) break;
@@ -283,6 +290,11 @@ function createInlineReferenceReader({ workspace, resolveFile, maxFiles = 8, max
       }
       for (const pointer of pointers) { result.references.push({ pointer, ...(await objectReference(pointer, true)) }); checkSize(result); }
       for (const proof of fileProofs.values()) {
+        if (proof.pageId) {
+          const latest = await readFileProperty({ execute: (name, args) => execute(name, args, proof.scope) }, proof.pageId, proof.propertyId, proof.scope, active);
+          if (latest.revision !== proof.revision) fail('引用文件属性在读取其他来源期间已改变，请重新发送。');
+          continue;
+        }
         const latest = await execute('read_block', { block_id: proof.blockId }, proof.scope);
         if (latest.block_revision !== proof.revision) fail('引用附件在读取其他来源期间已改变，请重新发送。');
       }

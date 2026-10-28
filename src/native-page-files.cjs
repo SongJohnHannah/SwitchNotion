@@ -3,7 +3,7 @@ const { uuid } = require('./native-context.cjs');
 const { PageFiles } = require('./page-files.cjs');
 const plain = value => Array.isArray(value) ? value.map(span => typeof span?.[0] === 'string' ? span[0] : '').join('') : '';
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
-function openNativePageFiles({ store, parseContent, signal, fetchFile }) {
+function openNativePageFiles({ store, parseContent, signal, fetchFile, budget }) {
   const userId = uuid(store.userId), spaceId = uuid(store.spaceId), signed = new Map();
   if (!userId || !spaceId) throw Error('Notion 文件读取原生账号或工作区无效。');
   const session = { execute: async (name, args) => {
@@ -29,6 +29,6 @@ function openNativePageFiles({ store, parseContent, signal, fetchFile }) {
     }
     return { block: { id, type: block.type, [block.type]: { type: 'file', name: filename, file: { url: address } } }, block_revision: revision, url: 'https://www.notion.so/' + id.replaceAll('-', '') };
   } };
-  return new PageFiles({ parseContent, ...(fetchFile ? { fetchFile } : {}) }).open({ spaceId, signal, session });
+  return new PageFiles({ parseContent, ...(fetchFile ? { fetchFile } : {}) }).open({ spaceId, signal, session, ...(budget ? { budget } : {}) });
 }
 module.exports = { openNativePageFiles };

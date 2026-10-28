@@ -108,9 +108,9 @@ function streamPublicResearch({ normalized, records, userId, provider, workspace
         const result = await fileReader.execute(name, args);
         collect({ ...result, title: result.document?.filename || 'Notion 附件', complete: result.document?.complete === true }, 'read_web_page'); return result;
       } };
-      const resolveFile = fileService ? ({ blockId, spaceId }) => {
+      const resolveFile = fileService ? ({ blockId, pageId, propertyId, fileIndex, spaceId }) => {
         if (spaceId !== input.spaceId) fail('附件不属于本轮所选工作区。');
-        return fileService.execute('read_notion_file', { block_id: blockId });
+        return fileService.execute('read_notion_file', pageId ? { page_id: pageId, property_id: propertyId, file_index: fileIndex } : { block_id: blockId });
       } : undefined;
       const messages = config.notion ? await researchMessages(input, { signal: active, resolveReferences: createInlineReferenceReader({ workspace: scoped, resolveFile }) }) : [{ role: 'system', content: '' }];
       for (const original of config.notion ? [] : input.transcript) {

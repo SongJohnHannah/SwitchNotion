@@ -93,8 +93,8 @@ const meetingSummaries = new MeetingSummaryService({ root, provider, log,
 const workspace = new NotionRouter({ root, log });
 extensions.pageFiles = new PageFiles({ workspace, parseContent: (...args) => mediaTranscripts.parse(...args) });
 const mock = new NativeMock({ log, stateFile: path.join(root, 'conversations.local.json'), provider, workspace, webSources, memory, extensions, workspaceResearch: true,
-  inlineReferences: createInlineReferenceReader({ workspace, resolveFile: ({ blockId, spaceId, signal, session, maxBytes }) =>
-    extensions.pageFiles.open({ spaceId, signal, session, maxBytes }).execute('read_notion_file', { block_id: blockId }) }) });
+  inlineReferences: createInlineReferenceReader({ workspace, resolveFile: ({ blockId, pageId, propertyId, fileIndex, spaceId, signal, session, maxBytes }) =>
+    extensions.pageFiles.open({ spaceId, signal, session, maxBytes }).execute('read_notion_file', pageId ? { page_id: pageId, property_id: propertyId, file_index: fileIndex } : { block_id: blockId }) }) });
 const backgroundAgents = new BackgroundAgents({ root, memory, provider, workspace, extensions, notify: ({ title, status }) => {
   if (Notification.isSupported()) new Notification({ title: 'Notion AI · ' + title, body: status === 'completed' ? '后台任务已完成，请在工作区配置中查看结果。' : '后台任务需要处理，请在工作区配置中查看。' }).show();
 } });
@@ -308,9 +308,11 @@ async function route(request, passthrough, ses) {
     try {
       const input = await request.clone().json(), spaceId = uuid(input?.blockPointer?.spaceId);
       const store = meetingBridge.forRequest(request, ses, spaceId);
-      const files = openNativePageFiles({ store, parseContent: (...args) => mediaTranscripts.parse(...args), signal: request.signal });
+      const budget = { files: 0, bytes: 0 };
+      const files = openNativePageFiles({ store, parseContent: (...args) => mediaTranscripts.parse(...args), signal: request.signal, budget });
+      const properties = typeof extensions !== 'undefined' ? extensions.pageFiles?.open({ spaceId: store.spaceId, signal: request.signal, budget }) : null;
       return await generateAiBlock({ input, store, provider, workspace: typeof workspace !== 'undefined' ? workspace : undefined,
-        readFile: ({ blockId }) => files.execute('read_notion_file', { block_id: blockId }), signal: request.signal });
+        readFile: ({ blockId }) => files.execute('read_notion_file', { block_id: blockId }), ...(properties ? { readFileProperties: ({ pageId, propertyIds }) => properties.readProperties(pageId, propertyIds) } : {}), signal: request.signal });
     } catch (error) {
       const message = /^(?:AI block|当前页面|此 AI block|暂只支持|请填写|无法读取)/.test(error.message || '') ? error.message : 'AI block 生成未完成，请检查当前页面和模型配置。';
       log({ type: 'local-ai-block-failed', reason: 'generation_failed' });
