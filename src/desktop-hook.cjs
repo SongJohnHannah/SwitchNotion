@@ -101,7 +101,7 @@ const backgroundAgents = new BackgroundAgents({ root, memory, provider, workspac
 app.whenReady().then(() => backgroundAgents.start());
 app.on('will-quit', () => backgroundAgents.close());
 const transfer = new AiTransfer({ memory, agent: mock.agent, native: mock, approve: approveAi,
-  chooseSave: async defaultPath => { const result = await dialog.showSaveDialog({ title: '导出当前工作区 AI 数据', defaultPath, filters: [{ name: 'Notion AI 数据', extensions: ['json'] }] }); return result.canceled ? null : result.filePath; },
+  chooseSave: async (defaultPath, { format = 'json' } = {}) => { const result = await dialog.showSaveDialog({ title: format === 'html' ? '保存只读共享对话' : '导出当前工作区 AI 数据', defaultPath, filters: [{ name: format === 'html' ? '只读对话 HTML' : 'Notion AI 数据', extensions: [format] }] }); return result.canceled ? null : result.filePath; },
   chooseOpen: async () => { const result = await dialog.showOpenDialog({ title: '导入同一工作区 AI 数据', properties: ['openFile'], filters: [{ name: 'Notion AI 数据', extensions: ['json'] }] }); return result.canceled ? null : result.filePaths[0]; }
 });
 const databaseBuild = createNativeBuildService({ root, provider, log,

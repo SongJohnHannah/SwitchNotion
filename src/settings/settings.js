@@ -95,19 +95,25 @@ async function showMemory(container, key, saved) {
   connections.addEventListener('toggle', () => { if (connections.open && connections.childNodes.length === 1) void showMcp(connections, key); });
   const agents = element('details'); agents.append(element('summary', '', '后台 Agent 与通知')); container.append(agents);
   agents.addEventListener('toggle', () => { if (agents.open && agents.childNodes.length === 1) void showBackground(agents, key); });
-  const chats = element('details'); chats.append(element('summary', '', '对话导出与导入')); container.append(chats);
+  const chats = element('details'); chats.append(element('summary', '', '对话共享、导出与导入')); container.append(chats);
   chats.addEventListener('toggle', () => { if (chats.open && chats.childNodes.length === 1) void showChatTransfer(chats, key); });
 }
 async function showChatTransfer(container, key) {
   while (container.childNodes.length > 1) container.lastChild.remove();
   const r = await api.transferList({ key }); if (!r.ok) { container.append(element('p', 'inline-result error', r.error)); return; }
-  container.append(element('p', 'field-help', '用于你自己的 Windows、Mac 之间同步文字对话；只允许同一账号、同一工作区。原始附件需要重新上传。'));
+  container.append(element('p', 'field-help', 'JSON 导入导出用于你自己的 Windows、Mac 之间同步文字对话；只允许同一账号、同一工作区。原始附件需要重新上传。'));
   const select = element('select'); select.setAttribute('aria-label', '选择要导出的对话');
   r.result.threads.forEach(item => { const option = element('option', '', item.title + (item.running ? '（生成中）' : '')); option.value = item.id; option.disabled = item.running; select.append(option); }); container.append(select);
   for (const [label, method] of [['导出所选对话', 'exportChat'], ['导入文字对话', 'importChat']]) {
     const button = element('button', 'button secondary', label); button.type = 'button'; button.disabled = method === 'exportChat' && !r.result.threads.some(item => !item.running);
     button.addEventListener('click', () => operation(container, async () => { const response = await api[method]({ key, ...(method === 'exportChat' ? { id: select.value } : {}) }); toast(response.ok ? response.result.message : response.error); if (response.ok) await showChatTransfer(container, key); })); container.append(button);
   }
+  const share = element('div', 'memory-entry');
+  share.append(element('p', 'field-help', '共享只读 HTML，可直接在 Windows、Mac 浏览器打开。不会包含原始附件或配置密钥。未设密码时，持有文件的人可以查看；发出后无法远程撤回。'));
+  const passwordLabel = element('label', '', '查看密码（可选，8–128 个字符）'), password = element('input', 'memory-editor'); password.type = 'password'; password.maxLength = 128; password.autocomplete = 'new-password'; password.setAttribute('aria-label', '共享对话查看密码'); passwordLabel.append(password); share.append(passwordLabel);
+  const includeSources = element('input'); includeSources.type = 'checkbox'; const sourcesLabel = element('label', 'check-label'); sourcesLabel.append(includeSources, document.createTextNode('包含当时的引用资料（可能含页面正文）')); share.append(sourcesLabel);
+  const shareButton = element('button', 'button secondary', '共享所选对话为只读 HTML'); shareButton.type = 'button'; shareButton.dataset.unavailable = String(!r.result.threads.some(item => !item.running)); shareButton.disabled = shareButton.dataset.unavailable === 'true';
+  shareButton.addEventListener('click', () => operation(container, async () => { const response = await api.shareChat({ key, id: select.value, password: password.value, includeSources: includeSources.checked }); password.value = ''; toast(response.ok ? response.result.message : response.error); })); share.append(shareButton); container.append(share);
 }
 async function showBackground(container, key) {
   while (container.childNodes.length > 1) container.lastChild.remove();

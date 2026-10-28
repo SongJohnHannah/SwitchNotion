@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('notionSwitch', Object.freeze({
   backgroundRemove: input => request('agents.remove', input),
   transferList: input => request('transfer.list', input),
   exportChat: input => request('transfer.chat.export', input),
+  shareChat: input => request('transfer.chat.share', input),
   importChat: input => request('transfer.chat.import', input),
   exportMemory: input => request('transfer.memory.export', input),
   importMemory: input => request('transfer.memory.import', input),
