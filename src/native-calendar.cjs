@@ -44,7 +44,7 @@ function openNativeCalendar({ store, userId, spaceId, signal, now = () => new Da
     if (!response.calendars.length) fail('当前账号还没有可读取的已连接日历，请先在 Notion 中连接并显示日历。');
     if (response.calendars.some(calendar => !calendar || typeof calendar.id !== 'string' || !calendar.id || typeof calendar.accountId !== 'string' || !calendar.accountId)) fail('日历标识不完整，未当作完整结果。');
     const allCalendars = new Map(response.calendars.map(calendar => [calendar.accountId + '\0' + calendar.id, calendar]));
-    const calendars = new Map([...allCalendars].filter(([, calendar]) => calendar.selected !== false));
+    const calendars = new Map([...allCalendars].filter(([, calendar]) => calendar.selected === true));
     const events = [], busy = [], seen = new Map(); let skipped = 0, matched = 0, truncated = 0;
     for (const event of response.events) {
       const calendar = event && calendars.get(event.accountId + '\0' + event.calendarId);
