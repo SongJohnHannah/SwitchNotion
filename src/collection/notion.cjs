@@ -21,10 +21,24 @@ function textBlocks(node) {
   flush();
   return blocks;
 }
-function renderDocument(document, nodes, resources, analyses = {}, warnings = []) {
-  const result = [paragraph('来源：' + document.url), ...(document.author ? [paragraph('作者：' + document.author)] : [])];
+function extractionBlocks(extraction) {
+  if (!extraction?.text) return [];
+  const blocks = textBlocks({ kind: 'heading', level: 1, text: 'AI 提取结果 · ' + extraction.name });
+  if (extraction.note) blocks.push(paragraph(extraction.note));
+  let code = false;
+  for (const line of extraction.text.split('\n')) {
+    if (/^```/.test(line)) { code = !code; continue; }
+    if (!line.trim()) continue;
+    const heading = !code && line.match(/^(#{1,3})\s+(.+)/), bullet = !code && line.match(/^(?:[-*+] |\d+[.)] )(.+)/);
+    blocks.push(...textBlocks({ kind: code ? 'code' : heading ? 'heading' : bullet ? 'list' : line.startsWith('> ') ? 'quote' : 'paragraph', level: heading?.[1].length, text: heading?.[2] || bullet?.[1] || (line.startsWith('> ') ? line.slice(2) : line) }));
+  }
+  return blocks;
+}
+function renderDocument(document, nodes, resources, analyses = {}, warnings = [], extraction) {
+  const result = [paragraph('来源：' + (document.sourceKind === 'local' ? '本地文件 · ' + document.sourceName : document.url)), ...(document.author ? [paragraph('作者：' + document.author)] : [])];
   const positions = {}, slots = {};
   for (const [index, node] of nodes.entries()) {
+    if (['video', 'audio'].includes(node.kind) && index > 0 && !nodes.slice(0, index).some(previous => ['video', 'audio'].includes(previous.kind))) result.push(...textBlocks({ kind: 'heading', level: 2, text: '原始音视频' }));
     positions[node.id] = result.length;
     if (!mediaKinds.has(node.kind)) { result.push(...textBlocks(node)); slots[node.id] = { start: positions[node.id], count: result.length - positions[node.id] }; continue; }
     const resource = resources[node.id];
@@ -46,6 +60,7 @@ function renderDocument(document, nodes, resources, analyses = {}, warnings = []
     }
     for (const error of item.errors || []) result.push(paragraph('识别待完成：' + error));
   }
+  if (extraction?.text) result.push({ object: 'block', type: 'divider', divider: {} }, ...extractionBlocks(extraction));
   return { blocks: result, positions, slots };
 }
 function batches(blocks) {
@@ -133,12 +148,12 @@ class CollectionNotion {
       if (!title) throw Error('数据库未返回可写的标题字段。');
       const properties = { [title]: job.document.title };
       const set = (name, type, value) => { if (fields[name]?.type === type) properties[name] = value; };
-      set('来源链接', 'url', job.document.url.length <= 2000 ? job.document.url : null);
-      set('来源网站', 'rich_text', new URL(job.document.url).hostname);
+      set('来源链接', 'url', job.document.url && job.document.url.length <= 2000 ? job.document.url : null);
+      set('来源网站', 'rich_text', job.document.sourceKind === 'local' ? '本地文件' : new URL(job.document.url).hostname);
       set('收集时间', 'date', { start: new Date(Math.floor(Date.parse(job.createdAt || new Date().toISOString()) / 60000) * 60000).toISOString() });
       const types = [...new Set(nodesFor(job).map(node => ({ image: '图片', video: '视频', audio: '音频' }[node.kind] || '文章')))];
       if (fields['内容类型']?.type === 'multi_select' && types.every(t => fields['内容类型'].multi_select?.options?.some(o => o.name === t))) properties['内容类型'] = types;
-      const state = job.document.incomplete || Object.values(job.resources).some(r => r.error) || Object.values(job.analyses).some(a => a.errors?.length) ? '待补全' : '已保存';
+      const state = job.document.incomplete || job.extraction?.error || Object.values(job.resources).some(r => r.error) || Object.values(job.analyses).some(a => a.errors?.length) ? '待补全' : '已保存';
       if (fields['处理状态']?.type === 'select' && fields['处理状态'].select?.options?.some(o => o.name === state)) { properties['处理状态'] = state; job.managedStatus = state; }
       result = await c.session.execute('create_database_entry', { data_source_id: schema.data_source_id || c.target.dataSourceId, properties });
     }
@@ -213,7 +228,7 @@ class CollectionNotion {
   }
   async write(job, nodes, save, signal) {
     await this.createPage(job, save, signal);
-    const plan = renderDocument(job.document, nodes, job.resources, job.analyses, job.warnings);
+    const plan = renderDocument(job.document, nodes, job.resources, job.analyses, job.warnings, job.extraction);
     const fingerprint = hash(JSON.stringify(plan.blocks));
     if (job.writeFingerprint && job.writeFingerprint !== fingerprint && job.sourceSlots) return this.repair(job, nodes, plan, save, signal);
     job.writeGroups ||= batches(plan.blocks); const groups = job.writeGroups;
@@ -244,6 +259,7 @@ class CollectionNotion {
     const original = groups.flat();
     job.sourceSlots ||= Object.fromEntries(Object.entries(job.writeSlots).map(([id, slot]) => [id, { ...slot, ids: expected.slice(slot.start, slot.start + slot.count), original: original.slice(slot.start, slot.start + slot.count) }]));
     job.savedAnalysis ||= hash(JSON.stringify(job.writeAnalyses));
+    job.savedExtraction ||= job.extraction?.text ? hash(JSON.stringify(job.extraction)) : '';
     job.savedAnalysisItems ||= Object.fromEntries(Object.entries(job.writeAnalyses).flatMap(([id, item]) => ['transcript', 'vision'].filter(key => item[key]).map(key => [id + ':' + key, hash(JSON.stringify(item[key]))])));
     save();
     if (job.writeFingerprint !== fingerprint) return this.repair(job, nodes, plan, save, signal);
@@ -332,11 +348,20 @@ class CollectionNotion {
       job.savedAnalysis = analysisFingerprint;
       job.savedAnalysisItems = Object.fromEntries(Object.entries(job.analyses).flatMap(([id, item]) => ['transcript', 'vision'].filter(key => item[key]).map(key => [id + ':' + key, hash(JSON.stringify(item[key]))]))); save();
     }
+    if (job.extraction?.text && job.savedExtraction !== hash(JSON.stringify(job.extraction))) {
+      const fingerprint = hash(JSON.stringify(job.extraction));
+      job.extractionBatches ||= {}; const done = job.extractionBatches[fingerprint] ||= [];
+      for (const [i, group] of batches(extractionBlocks(job.extraction)).entries()) if (!done[i]) {
+        const response = await c.session.execute('append_blocks', { block_id: job.page.id, blocks: group });
+        if (!response.verified) throw Error('内容提取写入尚未核验。'); done[i] = response.created_block_ids; save();
+      }
+      job.savedExtraction = fingerprint; save();
+    }
     const ids = []; let cursor;
     do { const response = await c.session.execute('read_block_children', { block_id: job.page.id, ...(cursor ? { start_cursor: cursor } : {}) }); ids.push(...response.results.filter(b => !b.in_trash && !b.archived).map(b => b.id)); cursor = response.next_cursor; } while (cursor);
     let position = -1;
     for (const node of nodes) for (const id of job.sourceSlots[node.id]?.ids || []) { const next = ids.indexOf(id); if (next <= position) throw Error('补全后的原文顺序尚未核验，请检查页面。'); position = next; }
-    if (job.managedStatus === '待补全' && !job.document.incomplete && !Object.values(job.resources).some(r => r.error) && !Object.values(job.analyses).some(a => a.errors?.length)) {
+    if (job.managedStatus === '待补全' && !job.document.incomplete && !job.extraction?.error && !Object.values(job.resources).some(r => r.error) && !Object.values(job.analyses).some(a => a.errors?.length)) {
       const entry = await c.session.execute('read_database_entry', { page_id: job.page.id });
       if (entry.properties?.['处理状态'] === '待补全') {
         const response = await c.session.execute('update_database_entry', { page_id: job.page.id, property_revision: entry.property_revision, properties: { '处理状态': '已保存' } });
@@ -348,4 +373,4 @@ class CollectionNotion {
   }
 }
 function nodesFor(job) { const { selectedNodes } = require('./model.cjs'); return selectedNodes(job.document, job.options, job.selectedIds); }
-module.exports = { CollectionNotion, textSpans, textBlocks, renderDocument, batches, mimeFor };
+module.exports = { CollectionNotion, textSpans, textBlocks, renderDocument, batches, mimeFor, extractionBlocks };

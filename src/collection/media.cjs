@@ -8,6 +8,15 @@ function clock(value) { const match = String(value).match(/(\d+):(\d+):(\d+(?:\.
 const inputArgs = file => ['-protocol_whitelist', 'file,pipe,crypto,data', '-format_whitelist', 'mov,matroska,webm,avi,asf,mpeg,mpegts,aac,ac3,aiff,wav,ogg,flac,mp3,gif,apng,png_pipe,jpeg_pipe,webp_pipe,bmp_pipe,tiff_pipe,image2,image2pipe,hevc,h264', '-i', file];
 class CollectionMedia {
   constructor({ root, browser, binaries, speech, provider }) { Object.assign(this, { root, browser, binaries, speech, provider }); }
+  async importLocal(source, directory, { signal, progress = () => {} } = {}) {
+    const { checkLocal } = require('./local-media.cjs'); checkLocal(source); signal?.throwIfAborted();
+    progress('正在读取本地' + (source.kind === 'video' ? '视频' : '音频') + '…');
+    fs.mkdirSync(directory, { recursive: true }); const file = path.join(directory, 'original' + path.extname(source.path).toLowerCase());
+    await fs.promises.copyFile(source.path, file); signal?.throwIfAborted(); checkLocal(source);
+    const metadata = await this.probe(file, signal);
+    if (source.kind === 'video' ? !metadata.video : !metadata.audio) throw Error('本地文件没有对应的音视频流，请检查文件格式。');
+    return { path: file, kind: source.kind, ...metadata };
+  }
   ffmpeg() { const file = this.binaries.find('ffmpeg'); if (!file) throw Error('请先在内容收集中点击“检测并准备”，安装媒体处理组件。'); return file; }
   async probe(file, signal) {
     let output = ''; try { output = (await run(this.ffmpeg(), ['-hide_banner', ...inputArgs(file)], { signal, timeout: 30000 })).stderr; }

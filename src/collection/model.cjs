@@ -1,10 +1,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
+const { promptSettings } = require('./prompts.cjs');
 const kinds = new Set(['paragraph', 'heading', 'quote', 'list', 'code', 'divider', 'image', 'video', 'audio', 'link']);
 const mediaKinds = new Set(['image', 'video', 'audio']);
 const defaults = Object.freeze({ shortcut: 'CommandOrControl+Shift+J', transcribe: true, vision: true,
-  compress: true, quality: '720p', keepLocal: false, types: ['text', 'image', 'video', 'audio'],
+  compress: true, quality: '720p', keepLocal: false, keepHistory: false, extraction: Object.freeze(promptSettings()), types: ['text', 'image', 'video', 'audio'],
   browserPort: 19333, browserExecutable: '', browserProfile: '', proxy: '', outputDirectory: '', destination: null, favorites: [] });
 const hash = value => createHash('sha256').update(String(value)).digest('hex');
 function publicUrl(value) {
@@ -33,7 +34,8 @@ function destination(value) {
 function preferences(input = {}, base = defaults) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !Object.hasOwn(defaults, k))) throw Error('收集设置包含未知选项。');
   const result = { ...base, ...input };
-  for (const key of ['transcribe', 'vision', 'compress', 'keepLocal']) if (typeof result[key] !== 'boolean') throw Error('收集开关无效。');
+  for (const key of ['transcribe', 'vision', 'compress', 'keepLocal', 'keepHistory']) if (typeof result[key] !== 'boolean') throw Error('收集开关无效。');
+  result.extraction = promptSettings(input.extraction, base.extraction || defaults.extraction);
   if (!['720p', '1080p', 'original'].includes(result.quality)) throw Error('请选择有效的画质。');
   if (!Array.isArray(result.types) || !result.types.length || result.types.some(t => !['text', 'image', 'video', 'audio'].includes(t))) throw Error('请至少选择一种内容类型。');
   if (typeof result.shortcut !== 'string' || result.shortcut.length > 80 || !/^(?:(?:CommandOrControl|Command|Control|Ctrl|Alt|Option|Shift|Super)\+)+(?:[A-Z0-9]|Space|F\d{1,2})$/i.test(result.shortcut)) throw Error('快捷键需包含修饰键，例如 CommandOrControl+Shift+J。');
@@ -75,4 +77,8 @@ function atomicJson(file, value) {
   const temp = file + '.' + randomUUID() + '.tmp';
   fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flush: true }); fs.renameSync(temp, file);
 }
-module.exports = { defaults, kinds, mediaKinds, hash, publicUrl, extractUrls, destination, preferences, normalizeDocument, selectedNodes, atomicJson };
+function layoutNodes(nodes, layout) {
+  if (layout !== 'media-at-end') return nodes;
+  return [...nodes.filter(node => !['audio', 'video'].includes(node.kind)), ...nodes.filter(node => ['audio', 'video'].includes(node.kind))];
+}
+module.exports = { defaults, kinds, mediaKinds, hash, publicUrl, extractUrls, destination, preferences, normalizeDocument, selectedNodes, atomicJson, layoutNodes };

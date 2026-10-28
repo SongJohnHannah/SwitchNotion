@@ -3,10 +3,11 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
 <title>Switch Notion · 快捷收集</title><link rel="stylesheet" href="collection.css"><script src="collection.js" defer></script></head>
 <body><header><span class="brand">↓</span><strong>快捷收集</strong><span id="shortcut" class="key"></span><button id="hide" class="icon" aria-label="收起窗口">×</button></header>
-<main><form id="capture-form"><label class="sr-only" for="links">视频、音频、图片或文章链接</label><textarea id="links" rows="2" placeholder="粘贴视频、音频、图片或文章链接" spellcheck="false"></textarea>
+<main><form id="capture-form"><label class="sr-only" for="links">网页链接或本地音视频路径</label><textarea id="links" rows="3" placeholder="粘贴网页链接或本地音视频路径，多项可分行输入" spellcheck="false"></textarea>
 <div class="destination-row"><span>保存到</span><button id="destination-pill" type="button" class="destination">选择工作区、数据库或页面 ⌄</button></div>
-<div class="capture-actions"><button type="submit" class="primary" id="collect">全部收集 ↵</button><button type="button" id="preview" class="secondary">识别后选择</button></div></form>
-<div class="compact-footer"><span id="queue-state">支持混合内容，按原文顺序保存</span><button id="expand" class="text">展开选项与任务 ⌄</button></div>
+<div class="capture-actions"><div class="collect-group"><button type="submit" class="primary" id="collect">全部收集 ↵</button><button type="button" id="prompt-open" class="prompt-trigger" aria-haspopup="dialog" aria-controls="prompt-dialog">✧ 提取要求</button></div><button type="button" id="preview" class="secondary">识别后选择</button></div></form>
+<div class="compact-footer"><span id="queue-state">支持网页链接和本地音视频路径</span><button id="expand" class="text">展开选项 ⌄</button></div>
+<div class="prompt-status"><button id="prompt-status" class="text">自动提取 · 文章 / 音视频</button><button id="last-result" class="text" hidden>打开刚保存的 Notion ↗</button></div>
 <p id="message" role="status" hidden></p>
 <div id="expanded" hidden>
 <section><div class="section-heading"><h2>保存位置</h2><button id="connections" class="text">管理连接 ↗</button></div>
@@ -29,6 +30,15 @@
 <label>收集浏览器<div class="row"><input id="browser-path" readonly placeholder="自动检测 Chrome / Edge / Brave"><button id="choose-browser" class="secondary">选择</button></div></label>
 <label>浏览器登录资料目录<div class="row"><input id="browser-profile" readonly placeholder="默认使用 Switch Notion 的独立浏览器资料"><button id="choose-profile" class="secondary">选择</button><button id="reset-profile" class="text">默认</button></div></label><p class="hint">可选择以前 media-kit 使用的独立浏览器资料目录来复用登录；不要选择正在使用的普通 Chrome 默认资料目录。</p>
 <label>网络代理<input id="proxy" placeholder="可选：http://127.0.0.1:端口" spellcheck="false"></label><p class="hint">留空时沿用启动环境的 HTTP/HTTPS 代理。Windows 与 Apple Silicon Mac 共用设置，浏览器登录资料保存在当前电脑。</p><button id="save-advanced" class="secondary">保存高级设置</button></details>
-<section><div class="section-heading"><h2>收集任务</h2><select id="status-filter"><option value="all">全部任务</option><option value="active">处理中</option><option value="attention">待处理</option><option value="completed">已完成</option></select></div><input id="task-search" placeholder="搜索标题、来源或保存位置"><div id="tasks" class="tasks"></div></section>
-<footer>收起此窗口后任务继续运行；退出 Switch Notion 会保留进度，重新打开后可继续。</footer>
-</div></main></body></html>
+<label class="check history-setting"><input id="keep-history" type="checkbox">在本机保留已完成的收集历史</label><p class="hint">默认关闭。成功保存并核验后清理本机任务、临时文件与对应写入记录；正在处理和待补全内容保留恢复进度。Notion 和主动保留的本地副本不受影响。</p>
+<details id="tasks-section" hidden><summary id="tasks-summary">当前处理</summary><div class="section-heading"><span class="hint">仅显示处理中或需要继续的项目</span><select id="status-filter"><option value="all">全部</option><option value="active">处理中</option><option value="attention">待处理</option><option value="completed">已完成</option></select></div><input id="task-search" placeholder="搜索标题、来源或保存位置"><div id="tasks" class="tasks"></div></details>
+<footer>关闭窗口后继续处理。完成后到 Notion 查看，未完成内容可恢复。</footer>
+</div></main>
+<dialog id="prompt-dialog" aria-labelledby="prompt-title"><form id="prompt-form"><div class="dialog-heading"><div><span class="eyebrow">MINI SKILLS</span><h2 id="prompt-title">内容提取要求</h2></div><button id="prompt-close" type="button" class="icon" aria-label="关闭提取要求">×</button></div>
+<p class="dialog-intro">先保存原文、配图、媒体与逐字稿，再在页面最后追加独立的 AI / Skill 输出，不改写原始内容。</p>
+<label for="extraction-mode">本次及后续收集</label><select id="extraction-mode"><option value="auto">自动选择 · 文章 / 音视频</option><option value="article">固定使用 · 文章精读</option><option value="video">固定使用 · 音视频提取</option><option value="off">仅保存原文 · 不提取</option></select>
+<div class="prompt-tabs" role="tablist" aria-label="提取模板"><button id="tab-article" type="button" role="tab" aria-selected="true" aria-controls="prompt-editor">文章类</button><button id="tab-video" type="button" role="tab" aria-selected="false" aria-controls="prompt-editor">视频 / 音频类</button><button id="prompt-reset" type="button" class="text">恢复这份模板</button></div>
+<label id="prompt-label" for="prompt-editor">文章精读提示词 · 可自由修改</label><textarea id="prompt-editor" rows="13" maxlength="12000" spellcheck="false"></textarea>
+<p class="hint">正文、逐字稿和已开启的图片识别结果会交给 DeepSeek，关闭图片识别不影响正文与逐字稿提取。已开始的收集沿用提交时的模板。</p>
+<p id="prompt-error" role="status" hidden></p><div class="dialog-actions"><button id="prompt-cancel" type="button" class="secondary">取消</button><button id="prompt-save" type="submit" class="primary">保存并使用</button></div>
+</form></dialog></body></html>

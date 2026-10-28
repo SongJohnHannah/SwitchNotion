@@ -38,7 +38,7 @@ app.whenReady().then(async()=>{
  await secondary.loadFile(path.join(project,'src/collection/ui/index.html'));
  const denied=await secondary.webContents.executeJavaScript("window.collection.request('state')");assert.equal(denied.ok,false);secondary.destroy();
  await window.webContents.executeJavaScript("window.collection.request('expand',{expanded:true})");
- assert.ok(Math.abs(window.getBounds().width-780)<=2);window.close();assert.equal(window.isDestroyed(),false);assert.equal(window.isVisible(),false);
+ assert.ok(Math.abs(window.getBounds().width-820)<=2);window.close();assert.equal(window.isDestroyed(),false);assert.equal(window.isVisible(),false);
  const preferences=window.webContents.getLastWebPreferences();assert.equal(preferences.sandbox,true);assert.equal(preferences.nodeIntegration,false);assert.equal(preferences.contextIsolation,true);
  const result={ipc:true,unauthorizedWindowRejected:true,defaultVision:true,persistedVisionToggle:true,globalShortcut:true,closeKeepsWindow:true,sandbox:true,downloadWorkerNodeMode:true};
  fs.writeFileSync(path.join(directory,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));clearTimeout(deadline);app.quit();

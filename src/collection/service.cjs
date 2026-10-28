@@ -3,20 +3,24 @@ const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const { EventEmitter } = require('node:events');
-const { defaults, preferences, destination, extractUrls, selectedNodes, mediaKinds, atomicJson, hash } = require('./model.cjs');
+const { defaults, preferences, destination, extractUrls, selectedNodes, mediaKinds, atomicJson, hash, layoutNodes } = require('./model.cjs');
 const { CollectionBinaries } = require('./binaries.cjs');
 const { CollectionBrowser } = require('./browser.cjs');
 const { CollectionMedia } = require('./media.cjs');
 const { CollectionNotion } = require('./notion.cjs');
+const { CollectionExtraction } = require('./extraction.cjs');
+const { parseInputs, describeLocal, checkLocal, localDocument } = require('./local-media.cjs');
+const { clearCompleted } = require('./history.cjs');
+const { templates } = require('./prompts.cjs');
 const activeStates = new Set(['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving']);
-const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.compress, options.quality]));
+const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.compress, options.quality, options.keepLocal, options.extraction]));
 const safeError = error => {
   const text = String(error?.message || '操作未完成，请检查连接后重试。');
   if (/(?:sk-|ntn_|secret_)[\w-]{8}|Bearer\s|Cookie\s*[:=]/i.test(text)) return '连接或处理失败，请在配置中检查后重试。';
   return /^[\u3400-\u9fff]|^(Notion|DeepSeek|媒体|收集|资源|目标|此|本地|请选择|请先|无法|没有|下载)/.test(text) ? text.slice(0, 500) : '操作未完成，请检查网络、登录与组件状态后重试。';
 };
 class CollectionService extends EventEmitter {
-  constructor({ root, speech, provider, binaries, browser, media, notion } = {}) {
+  constructor({ root, speech, provider, binaries, browser, media, notion, extraction } = {}) {
     super(); this.root = root; this.directory = path.join(root, 'collection'); this.settingsFile = path.join(this.directory, 'settings.local.json');
     this.settings = preferences(); this.jobs = new Map(); this.queue = []; this.running = null; this.closed = false; this.lastError = ''; this.preparing = false;
     if (fs.existsSync(this.settingsFile)) try {
@@ -28,6 +32,7 @@ class CollectionService extends EventEmitter {
     this.browser = browser || new CollectionBrowser({ root, getSettings: () => this.settings, binaries: this.binaries });
     this.media = media || new CollectionMedia({ root, browser: this.browser, binaries: this.binaries, speech, provider });
     this.notion = notion || new CollectionNotion({ root });
+    this.extractor = extraction || new CollectionExtraction({ provider });
     const jobsDirectory = path.join(this.directory, 'jobs');
     if (fs.existsSync(jobsDirectory)) for (const name of fs.readdirSync(jobsDirectory)) {
       if (!/^[a-f\d-]{36}$/i.test(name)) continue;
@@ -36,9 +41,12 @@ class CollectionService extends EventEmitter {
         if (fs.lstatSync(path.dirname(file)).isSymbolicLink() || fs.lstatSync(file).isSymbolicLink()) continue;
         const job = JSON.parse(fs.readFileSync(file, 'utf8'));
         if (job.id !== name || job.version !== 1 || !job.options) continue;
-        job.options = preferences(job.options); extractUrls(job.url);
+        job.options = preferences({ ...job.options, ...(!job.options.extraction ? { extraction: { mode: 'off' } } : {}) });
+        if (job.localSource) { if (!path.isAbsolute(job.localSource.path) || !/^[a-f\d]{64}$/.test(job.localSource.signature)) continue; }
+        else extractUrls(job.url);
         if (activeStates.has(job.status)) { job.status = 'interrupted'; job.message = '上次运行已中断，已保留文件和写入进度，可继续。'; }
         this.jobs.set(job.id, job);
+        if (job.status === 'completed' && !this.settings.keepHistory) this.forgetCompleted(job);
       } catch { this.lastError = '部分任务记录无法读取，原文件已保留。'; }
     }
   }
@@ -52,8 +60,8 @@ class CollectionService extends EventEmitter {
   save(job) { job.updatedAt = new Date().toISOString(); atomicJson(path.join(this.location(job), 'job.json'), job); this.emit('change'); }
   status() {
     return { active: this.active, lastError: this.lastError, configError: this.configError || '', settings: structuredClone(this.settings),
-      binaries: this.binaries.status(), preparing: this.preparing,
-      jobs: [...this.jobs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(job => ({ id: job.id, url: job.url, title: job.document?.title || job.url,
+      binaries: this.binaries.status(), preparing: this.preparing, promptTemplates: templates, latestCompletion: this.latestCompletion || null,
+      jobs: [...this.jobs.values()].filter(job => !job.historyCleared && (this.settings.keepHistory || job.status !== 'completed')).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(job => ({ id: job.id, url: job.url, local: !!job.localSource, title: job.document?.title || job.url,
         status: job.status, message: job.message, createdAt: job.createdAt, page: job.page, options: job.options, warnings: job.warnings || [],
         selectedIds: job.selectedIds, preview: job.document ? { incomplete: job.document.incomplete, requiresLogin: job.document.requiresLogin,
           nodes: job.document.nodes.map(n => ({ id: n.id, kind: n.kind, text: n.text.slice(0, 600), caption: n.caption.slice(0,600), level: n.level })) } : null })) };
@@ -61,20 +69,29 @@ class CollectionService extends EventEmitter {
   async configure(input) {
     if (this.configError) throw Error(this.configError);
     const next = preferences(input, this.settings);
-    if (next.destination) await this.notion.verifyTarget(next.destination, AbortSignal.timeout(30000));
-    this.settings = next; atomicJson(this.settingsFile, { version: 1, platform: process.platform, settings: next }); this.emit('settings'); this.emit('change'); return { message: '内容收集设置已保存，新任务使用新设置。', settings: next };
+    if (Object.hasOwn(input, 'destination') && next.destination) await this.notion.verifyTarget(next.destination, AbortSignal.timeout(30000));
+    this.settings = next; atomicJson(this.settingsFile, { version: 1, platform: process.platform, settings: next });
+    if (!next.keepHistory) for (const job of this.jobs.values()) if (job.status === 'completed' && !job.historyCleared) this.forgetCompleted(job);
+    this.emit('settings'); this.emit('change'); return { message: '内容收集设置已保存，新任务使用新设置。', settings: next };
   }
   async create({ input, options = {}, preview = false, force = false }) {
     if (this.configError) throw Error(this.configError);
     const chosen = preferences(options, this.settings);
     if (!preview && !chosen.destination) throw Error('请先选择保存到哪个 Notion 数据库或父页面。');
     const results = [];
-    for (const url of extractUrls(input)) {
+    const sources = parseInputs(input).map(source => source.kind === 'local' ? { source: describeLocal(source.path) } : { url: source.url });
+    for (const entry of sources) {
+      const url = entry.url || 'local-media:' + entry.source.signature;
       const key = dedupeKey(url, chosen);
       const existing = !force && [...this.jobs.values()].find(job => job.dedupe === key);
-      if (existing) { if (['cancelled', 'failed', 'interrupted', 'partial'].includes(existing.status)) this.retry(existing.id); results.push({ id: existing.id, existing: true, page: existing.page }); continue; }
+      if (existing) {
+        if (['cancelled', 'failed', 'interrupted', 'partial'].includes(existing.status)) this.retry(existing.id);
+        if (existing.status === 'completed') this.latestCompletion = { id: existing.id, title: existing.document?.title || existing.url, page: existing.page };
+        results.push({ id: existing.id, existing: true, status: existing.status, page: existing.page }); continue;
+      }
       const job = { version: 1, id: randomUUID(), url, dedupe: key, createdAt: new Date().toISOString(), status: 'queued', message: '等待读取内容…',
-        options: structuredClone(chosen), previewOnly: preview, resources: {}, analyses: {}, warnings: [] };
+        options: structuredClone(chosen), previewOnly: preview, resources: {}, analyses: {}, warnings: [], layout: 'media-at-end',
+        ...(entry.source ? { localSource: entry.source, document: localDocument(entry.source) } : {}) };
       this.jobs.set(job.id, job); this.save(job); this.enqueue(job); results.push({ id: job.id });
     }
     return { jobs: results };
@@ -98,7 +115,7 @@ class CollectionService extends EventEmitter {
     if ((job.document.requiresLogin || job.document.incomplete) && !job.allowPartial) { job.status = 'needs_login'; progress('尚未取得完整内容，请登录或在原网页展开正文后重新读取；也可手动保存已获取的部分。'); return; }
     if (job.previewOnly) { job.status = 'awaiting_selection'; progress('已识别内容，请选择要保存的项目与位置。'); return; }
     if (!job.options.destination) throw Error('请先选择保存位置。');
-    const selected = selectedNodes(job.document, job.options, job.selectedIds);
+    const selected = layoutNodes(selectedNodes(job.document, job.options, job.selectedIds), job.layout);
     if (!selected.length) throw Error('请至少选择一项要保存的内容。');
     const { limit } = await this.notion.verifyTarget(job.options.destination, signal);
     for (const node of selected) {
@@ -108,7 +125,8 @@ class CollectionService extends EventEmitter {
       try {
         if (!resource.asset || !fs.existsSync(resource.asset.path)) {
           job.status = 'downloading'; save();
-          resource.asset = await this.media.acquire({ ...node, sourceUrl: job.document.url }, path.join(this.location(job), 'working', node.id), { signal, progress }); save();
+          const directory = path.join(this.location(job), 'working', node.id);
+          resource.asset = job.localSource ? await this.media.importLocal(job.localSource, directory, { signal, progress }) : await this.media.acquire({ ...node, sourceUrl: job.document.url }, directory, { signal, progress }); save();
         }
         if (job.options.transcribe && ['audio', 'video'].includes(node.kind) && !analysis.transcript) {
           job.status = 'processing'; save();
@@ -129,22 +147,41 @@ class CollectionService extends EventEmitter {
         }
       } catch (error) { signal.throwIfAborted(); resource.error = safeError(error); save(); }
     }
+    if (job.options.extraction.mode !== 'off') {
+      job.status = 'processing'; save();
+      try { job.extraction = await this.extractor.run(job, selected, { signal, progress, save }); }
+      catch (error) { signal.throwIfAborted(); job.extraction = { error: safeError(error) }; } save();
+    }
     const failures = selected.filter(node => mediaKinds.has(node.kind) && (job.resources[node.id]?.error || job.analyses[node.id]?.errors?.length));
     job.warnings = [...job.document.warnings, ...failures.map(node => `素材 ${selected.indexOf(node) + 1} 尚待补全：${job.resources[node.id]?.error || job.analyses[node.id].errors.join('；')}`)];
+    if (job.extraction?.error) job.warnings.push('内容提取待完成：' + job.extraction.error);
     job.status = 'saving'; progress('正在按原文顺序保存到 Notion，并核验内容…');
     await this.notion.write(job, selected, save, signal);
     if (job.options.keepLocal) this.exportLocal(job, selected);
-    job.status = failures.length || job.document.incomplete ? 'partial' : 'completed';
+    job.status = failures.length || job.document.incomplete || job.extraction?.error ? 'partial' : 'completed';
     job.message = job.status === 'completed' ? '已保存到 Notion，正文和媒体顺序已核验。' : '已保存获取到的内容；有未完成项目，可补登录或配置后重试。'; save();
     if (job.status === 'completed' && !job.options.keepLocal) this.releaseWorkingFiles(job);
-    this.emit('finished', { id: job.id, title: job.document.title, status: job.status, url: job.page?.url });
+    this.emit('finished', { id: job.id, title: job.document.title, status: job.status, url: job.page?.url, pageId: job.page?.id });
+    if (job.status === 'completed') {
+      this.latestCompletion = { id: job.id, title: job.document.title, page: job.page };
+      if (!this.settings.keepHistory) this.forgetCompleted(job);
+    }
+  }
+  forgetCompleted(job) {
+    try {
+      clearCompleted(this.root, this.directory, job.id);
+      const receipt = { id: job.id, version: 1, createdAt: job.createdAt, url: job.url, dedupe: job.dedupe, status: 'completed', message: '已保存到 Notion，本地临时记录已清理。',
+        options: job.options, page: job.page, document: { title: job.document?.title || job.url, nodes: [] }, historyCleared: true, ...(job.localSource ? { localSource: { name: job.localSource.name } } : {}) };
+      this.jobs.set(job.id, receipt);
+      const receipts = [...this.jobs.values()].filter(value => value.historyCleared); for (const old of receipts.slice(0, Math.max(0, receipts.length - 30))) this.jobs.delete(old.id);
+    } catch { this.lastError = '内容已保存到 Notion，但本地临时记录尚未清理，请检查文件占用或目录权限。'; }
   }
   exportLocal(job, nodes) {
     const slug = job.document.title.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 80) || 'collection';
     const directory = path.join(job.options.outputDirectory || path.join(os.homedir(), 'Downloads', 'Switch Notion'), '收集-' + slug + '-' + job.id.slice(0, 8));
     fs.mkdirSync(directory, { recursive: true });
     for (const node of nodes) { const file = job.resources[node.id]?.asset?.path; if (file && fs.existsSync(file)) fs.copyFileSync(file, path.join(directory, node.id + path.extname(file))); }
-    atomicJson(path.join(directory, 'content.json'), { source: job.document, selectedIds: nodes.map(n => n.id), analyses: job.analyses, notion: job.page });
+    atomicJson(path.join(directory, 'content.json'), { source: job.document, selectedIds: nodes.map(n => n.id), analyses: job.analyses, extraction: job.extraction, notion: job.page });
     job.exportDirectory = directory;
   }
   releaseWorkingFiles(job) {
@@ -189,7 +226,8 @@ class CollectionService extends EventEmitter {
   reread(id) {
     const job = this.jobs.get(id);
     if (!job || job.page || activeStates.has(job.status)) throw Error('只能重新读取尚未写入 Notion 的空闲任务。');
-    delete job.document; delete job.selectedIds; job.resources = {}; job.analyses = {}; job.warnings = [];
+    if (job.localSource) job.document = localDocument(checkLocal(job.localSource)); else delete job.document;
+    delete job.selectedIds; job.resources = {}; job.analyses = {}; job.warnings = [];
     this.save(job); this.enqueue(job); return { id };
   }
   async createLibrary(workspaceId, parentId) {
