@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('notionSwitch', Object.freeze({
   removeWorkspace: input => request('workspace.remove', input),
   saveDeepseek: input => request('deepseek.save', input),
   testDeepseek: input => request('deepseek.test', input),
+  saveWebSources: input => request('web.save', input),
+  testWebSources: input => request('web.test', input),
   openNotion: () => request('notion.open'),
   loginStatus: () => request('login.status'),
   syncLogin: () => request('login.sync'),

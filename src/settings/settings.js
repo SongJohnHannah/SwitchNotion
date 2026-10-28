@@ -37,6 +37,10 @@ function render() {
   $('deepseek-key-help').textContent = state.deepseek.keyConfigured ? '已保存的密钥不会回显。需要更换时，在这里粘贴新密钥。' : '密钥仅保存在本机。';
   $('deepseek-thinking').checked = state.deepseek.thinking; $('deepseek-effort').value = state.deepseek.reasoningEffort;
   $('deepseek-effort').disabled = !state.deepseek.thinking; $('multi-agent').checked = state.deepseek.multiAgent;
+  const web = state.webSources || { enabled: false, keyConfigured: false };
+  $('web-sources-enabled').checked = web.enabled; $('web-sources-forget').checked = false;
+  $('web-sources-key').placeholder = web.keyConfigured ? '已保存，留空保留现有搜索密钥' : '填写后启用网页搜索';
+  $('web-sources-help').textContent = web.message || (web.keyConfigured ? '已保存 Brave Search 密钥，不回显；留空保留。' : '搜索密钥独立于 DeepSeek 密钥；未配置时仅支持读取本轮明确提供的公开网址。');
 }
 function clearKey(id) { $(id).value = ''; $(id).type = 'password'; const button = document.querySelector('[data-toggle="' + id + '"]'); if (button) button.textContent = '显示'; }
 function openWorkspace(workspace) {
@@ -56,7 +60,7 @@ document.querySelectorAll('[data-view]').forEach(button => button.addEventListen
   $('speech-view').hidden = button.dataset.view !== 'speech';
   $('collection-view').hidden = button.dataset.view !== 'collection';
   if (button.dataset.view === 'collection') void checkCollection();
-  clearKey('deepseek-key'); result('provider-result', '');
+  clearKey('deepseek-key'); clearKey('web-sources-key'); result('provider-result', '');
   if (button.dataset.view === 'login') checkLogin();
   if (button.dataset.view === 'updates') checkUpdates();
   clearInterval(speechPoll);
@@ -84,6 +88,15 @@ $('remove-dialog').addEventListener('cancel', event => { if (busy) event.prevent
 $('confirm-remove').addEventListener('click', () => operation($('remove-dialog'), async () => { const r = await api.removeWorkspace({ id: removing.id }); if (r.ok) { $('remove-dialog').close(); removing = null; await load(); } toast(r.ok ? r.result.message : r.error); }));
 $('test-deepseek').addEventListener('click', () => operation($('deepseek-form'), async () => { result('provider-result', '正在检测 DeepSeek…'); const r = await api.testDeepseek({ apiKey: $('deepseek-key').value }); result('provider-result', r.ok ? r.result.message : r.error, !r.ok); }));
 $('deepseek-thinking').addEventListener('change', () => { $('deepseek-effort').disabled = !$('deepseek-thinking').checked; });
+$('test-web-sources').addEventListener('click', () => operation($('web-sources-form'), async () => {
+  result('web-sources-result', '正在用固定检测词检查搜索连接…'); const response = await api.testWebSources({ apiKey: $('web-sources-key').value });
+  result('web-sources-result', response.ok ? response.result.message : response.error, !response.ok);
+}));
+$('web-sources-form').addEventListener('submit', event => { event.preventDefault(); operation($('web-sources-form'), async () => {
+  const response = await api.saveWebSources({ enabled: $('web-sources-enabled').checked ? 'enabled' : 'disabled', apiKey: $('web-sources-key').value, forgetKey: $('web-sources-forget').checked ? 'enabled' : 'disabled' });
+  result('web-sources-result', response.ok ? response.result.message : response.error, !response.ok);
+  if (response.ok) { clearKey('web-sources-key'); await load(); toast(response.result.message); }
+}); });
 async function checkCollection() {
   const response = await api.collectionState();
   if (!response.ok) { result('collection-result', response.error, true); return; }

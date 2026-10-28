@@ -12,8 +12,9 @@ const marker = '--notion-switch-settings';
 const settingsContents = new WeakSet();
 let constructingSettings = false;
 function isSettings(contents) { return constructingSettings || settingsContents.has(contents); }
-function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () => false, getCompatibility = () => ({}), speech }) {
-  const service = new SettingsService({ root });
+function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () => false, getCompatibility = () => ({}), speech, webSources }) {
+  const service = new SettingsService({ root, webSources });
+  app.on('will-quit', () => service.webSources.close());
   speech ||= new SpeechSettings({ root, isBusy });
   const collection = setupCollection({ root, speech: speech.provider, platform, openSettings: () => open(), createWindow: options => {
     constructingSettings = true;

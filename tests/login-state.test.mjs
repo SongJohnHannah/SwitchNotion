@@ -20,7 +20,7 @@ function rootOnly(t) {
 function filesBelow(directory, prefix = '') {
   if (!fs.existsSync(directory)) return {};
   return Object.fromEntries(fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
-    const relative = path.join(prefix, entry.name), file = path.join(directory, entry.name);
+    const relative = path.posix.join(prefix, entry.name), file = path.join(directory, entry.name);
     return entry.isDirectory() ? Object.entries(filesBelow(file, relative)) : [[relative, digest(file)]];
   }));
 }
@@ -134,7 +134,7 @@ test('apply waits for prototype exit, keeps local rollback backup, and preserves
   assert.equal(fs.readFileSync(path.join(f.profile, 'page-content.db'), 'utf8') === 'target-page-content-must-remain', true);
   const backup = path.join(f.root, 'login-backups', result.backupId);
   assert.equal(digest(path.join(backup, 'Local State')) === targetBefore['Local State'], true);
-  for (const relative of PARTITIONS) assert.equal(digest(path.join(backup, relative)) === targetBefore[path.normalize(relative)], true);
+  for (const relative of PARTITIONS) assert.equal(digest(path.join(backup, relative)) === targetBefore[relative], true);
   const saved = fs.readFileSync(path.join(f.root, 'login-sync-result.json'), 'utf8');
   assert.equal(saved.includes(COOKIE_SECRET) || saved.includes(CRYPT_SECRET), false);
   const status = inspectLogin(f); assert.equal(status.hasLogin, true); assert.equal(status.serverValidated, false);

@@ -47,14 +47,16 @@ class NotionRouter {
     if (cfg.workspaceId && uuid(cfg.workspaceId) !== identity.id) throw Error('Notion 连接密钥所属工作区与配置不一致，已拒绝路由。');
     return identity;
   }
-  async prepare(signal) {
+  async prepare(signal, onlyWorkspaceId) {
     const workspaces = [], unavailable = [];
     for (const profile of this.profiles()) {
+      if (onlyWorkspaceId && profile?.workspaceId && uuid(profile.workspaceId) !== onlyWorkspaceId) continue;
       const client = this.client(profile);
       try {
         const cfg = client.config();
         if (!cfg.key || !cfg.enabled) { unavailable.push({ workspace_id: profile?.workspaceId || null, error: 'Notion 连接未启用或未填写本地密钥。' }); continue; }
         const identity = await this.identify(client, cfg, signal);
+        if (onlyWorkspaceId && identity.id !== onlyWorkspaceId) continue;
         if (workspaces.some(w => w.id === identity.id)) throw Error('Notion 同一工作区配置了重复连接。');
         workspaces.push({ ...identity, name: profile?.name?.trim() || identity.name, client, cfg: { ...cfg, workspaceId: identity.id } });
       } catch (error) {
@@ -72,12 +74,18 @@ class NotionRouter {
       return { configured: states.some(s => s.configured), enabled: states.some(s => s.enabled), readOnly: states.every(s => s.readOnly), scope: 'workspace-connections', apiVersion: '2026-03-11', connectionCount: profiles.length, workspaces: this.lastWorkspaces, contentTools: definitions.filter(d => states.some(s => s.enabled && s.configured && (!s.readOnly || !writeTools.has(d.function.name)))).map(d => d.function.name), requests: clients.reduce((n, c) => n + c.requests, 0), verifiedWrites: clients.reduce((n, c) => n + c.verifiedWrites, 0) };
     } catch { return { configured: false, configurationError: true }; }
   }
-  async open({ operationScope = 'local', signal, nativeContext = {} } = {}) {
-    const { workspaces, unavailable } = await this.prepare(signal);
+  async open({ operationScope = 'local', signal, nativeContext = {}, readScope } = {}) {
+    if (readScope && (!uuid(readScope.workspaceId) || nativeContext.workspace_id && uuid(nativeContext.workspace_id) !== uuid(readScope.workspaceId) ||
+        readScope.rootIds !== undefined && (!Array.isArray(readScope.rootIds) || !readScope.rootIds.length || readScope.rootIds.length > 32 || readScope.rootIds.some(value => !uuid(value))))) throw Error('Notion 研究工作区或页面范围无效。');
+    const prepared = await this.prepare(signal, uuid(readScope?.workspaceId)), workspaces = readScope ? prepared.workspaces.filter(w => w.id === uuid(readScope.workspaceId)) : prepared.workspaces,
+      unavailable = readScope ? prepared.unavailable.filter(w => uuid(w.workspace_id) === uuid(readScope.workspaceId)) : prepared.unavailable;
     const byId = new Map(workspaces.map(w => [w.id, w]));
-    const sessions = new Map(workspaces.map(w => [w.id, w.client.open({ operationScope: operationScope + ':' + w.id, signal, config: w.cfg })]));
-    const currentWorkspaceId = uuid(nativeContext.workspace_id), currentPageId = uuid(nativeContext.page_id);
-    const context = { current_workspace_id: currentWorkspaceId, current_page: currentPageId && currentWorkspaceId ? { page_id: currentPageId, workspace_id: currentWorkspaceId, source: 'native-request' } : null, workspaces: this.lastWorkspaces, unavailable };
+    const sessions = new Map(workspaces.map(w => [w.id, w.client.open({ operationScope: operationScope + ':' + w.id, signal,
+      config: readScope ? { ...w.cfg, readOnly: true } : w.cfg, scopePageIds: readScope?.rootIds })]));
+    const currentWorkspaceId = uuid(nativeContext.workspace_id) || uuid(readScope?.workspaceId), currentPageId = uuid(nativeContext.page_id);
+    const context = { current_workspace_id: currentWorkspaceId, current_page: currentPageId && currentWorkspaceId ? { page_id: currentPageId, workspace_id: currentWorkspaceId, source: 'native-request' } : null,
+      workspaces: readScope ? this.lastWorkspaces.filter(w => uuid(w.workspace_id) === currentWorkspaceId).map(w => ({ ...w, read_only: true })) : this.lastWorkspaces, unavailable,
+      ...(readScope ? { read_scope: { workspace_id: currentWorkspaceId, root_ids: readScope.rootIds || [], read_only: true } } : {}) };
     const routes = new Map(); let writeUncertain = false;
     const remember = (id, workspaceId) => { const set = routes.get(id) || new Set(); set.add(workspaceId); routes.set(id, set); };
     const select = (args, id) => {
@@ -92,6 +100,7 @@ class NotionRouter {
     const annotate = (result, w) => ({ ...result, workspace_id: w.id, workspace_name: w.name });
     const execute = async (name, args = {}) => {
       signal?.throwIfAborted();
+      if (readScope && (writeTools.has(name) || args?.workspace_id !== undefined && args.workspace_id !== 'current' && uuid(args.workspace_id) !== currentWorkspaceId)) throw Error('Notion 研究工具只允许读取本轮所选工作区，不能写入或扩大范围。');
       if (name === 'list_workspaces') {
         if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).length) throw Error('Notion list_workspaces 不接受额外参数。');
         return context;
@@ -152,10 +161,10 @@ class NotionRouter {
         return annotate(result, w);
       } catch (error) { if (writeTools.has(name) && !definitelyNotWritten(error)) writeUncertain = true; throw error; }
     };
-    const tools = definitions.filter(d => workspaces.length && (!writeTools.has(d.function.name) || workspaces.some(w => !w.cfg.readOnly))).map(d => {
+    const tools = definitions.filter(d => workspaces.length && (!writeTools.has(d.function.name) || !readScope && workspaces.some(w => !w.cfg.readOnly))).map(d => {
       const copy = structuredClone(d);
-      copy.function.description += ' workspace_id 默认当前原生工作区；明确跨工作区搜索时可用 all，其他操作须用目标所属工作区。资源 ID 使用 current 指本轮原生当前页，创建时 parent_page_id=current 表示在当前页下创建。';
-      copy.function.parameters.properties.workspace_id = { type: 'string', description: '工作区 UUID；省略或 current 为当前工作区。仅 search_pages/search_databases 支持 all，表示所有已配置工作区。' };
+      copy.function.description += readScope ? ' 本轮固定为所选工作区及来源，只允许读取。current 指本轮原生当前页。' : ' workspace_id 默认当前原生工作区；明确跨工作区搜索时可用 all，其他操作须用目标所属工作区。资源 ID 使用 current 指本轮原生当前页，创建时 parent_page_id=current 表示在当前页下创建。';
+      copy.function.parameters.properties.workspace_id = readScope ? { type: 'string', enum: ['current', currentWorkspaceId], description: '只允许本轮所选工作区。' } : { type: 'string', description: '工作区 UUID；省略或 current 为当前工作区。仅 search_pages/search_databases 支持 all，表示所有已配置工作区。' };
       return copy;
     });
     return { definitions: [listTool, ...tools], context, execute: async (name, args) => {

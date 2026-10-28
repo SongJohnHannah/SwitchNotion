@@ -101,7 +101,7 @@ function compact(messages, checkpoint, { force = false, aggressive = false, tool
   // Native selection snapshots are user-supplied source data. Retain them even
   // when old API evidence is removed; a later full-page read cannot replace an
   // exact text range selected at the time the question was sent.
-  const input = messages.slice(1).filter(m => m.notionSwitchSelection || m.role === 'user' && !m.notionSwitchMemory && !m.notionSwitchEvidence);
+  const input = messages.slice(1).filter(m => m.notionSwitchSelection || m.notionSwitchAttachment || m.role === 'user' && !m.notionSwitchMemory && !m.notionSwitchEvidence);
   const next = [system, memory, ...input];
   const retained = [];
   for (let index = messages.length - 1; !aggressive && index > 0; index--) {

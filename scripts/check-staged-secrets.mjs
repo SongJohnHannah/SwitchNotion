@@ -23,7 +23,9 @@ export function checkStagedSecrets(root = process.cwd()) {
   const needles = [...new Set(keys)].flatMap(key => [Buffer.from(key), Buffer.from(key, 'utf16le')]);
   const files = git(['ls-files', '--cached', '-z']).toString('utf8').split('\0').filter(Boolean), blocked = [];
   for (const file of files) {
-    const privatePath = file.split('/').some(part => /^(?:\.notion-switch|research|dist|node_modules|profiles?|user data|indexeddb|session storage|local storage|\.env(?:\..*)?|.*\.local\.json|.*api[-_]?key.*\.(?:txt|json)|.*\.(?:pem|key|p12|pfx)|cookies(?:-(?:journal|wal|shm))?|(?:login|web) data(?:-(?:journal|wal|shm))?|local state)$/i.test(part)) ||
+    // Root dist is a private build output. Reviewed vendored libraries also
+    // have nested dist source folders; their bytes still receive every scan.
+    const privatePath = file.split('/')[0].toLowerCase() === 'dist' || file.split('/').some(part => /^(?:\.notion-switch|research|node_modules|profiles?|user data|indexeddb|session storage|local storage|\.env(?:\..*)?|.*\.local\.json|.*api[-_]?key.*\.(?:txt|json)|.*\.(?:pem|key|p12|pfx)|cookies(?:-(?:journal|wal|shm))?|(?:login|web) data(?:-(?:journal|wal|shm))?|local state)$/i.test(part)) ||
       /\.(?:wav|mp3|m4a|aac|ogg|opus|flac|aiff?|caf|pcm|webm|mp4|m4v|mov|mkv|(?:sqlite3?|db)(?:-(?:wal|shm|journal))?)$/i.test(file);
     const bytes = git(['cat-file', 'blob', ':' + file]);
     const signature = bytes.subarray(0, 16).toString('latin1');

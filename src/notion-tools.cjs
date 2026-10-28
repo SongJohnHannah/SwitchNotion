@@ -84,21 +84,26 @@ class NotionWorkspace {
     if (data.object === 'async_task') throw Error('Notion 返回异步写入，结果未确定；请先读取页面核对。');
     return data;
   }
-  open({ operationScope = 'local', signal, config } = {}) {
-    const cfg = config || this.config(), seen = new Map(), running = new Set();
+  open({ operationScope = 'local', signal, config, scopePageIds } = {}) {
+    const originalConfig = config || this.config(), cfg = scopePageIds ? { ...originalConfig, readOnly: true } : originalConfig, seen = new Map(), running = new Set();
+    if (scopePageIds !== undefined && (!Array.isArray(scopePageIds) || !scopePageIds.length || scopePageIds.length > 32)) throw Error('Notion 研究来源范围无效。');
+    const scopeRoots = scopePageIds && new Set(scopePageIds.map(pageId));
     let writeUncertain = false, writeAttempts = 0;
     const allowed = new Set(cfg.pageIds || []);
     const request = (method, endpoint, body) => {
       if (!['GET', 'HEAD'].includes(method) && endpoint !== 'search' && !endpoint.endsWith('/query')) writeAttempts++;
       return this.request(cfg, method, endpoint, body, signal);
     };
-    const authorize = async (value, kind = 'page') => {
+    const authorizeLocal = async (value, kind = 'page') => {
       const id = pageId(value);
-      if (!cfg.pageIds?.length || allowed.has(id)) return id;
+      // A scoped research read must recheck both boundaries. Descendant cache
+      // entries from an earlier placement do not extend the connection roots.
+      const withinLocal = value => scopeRoots ? cfg.pageIds.includes(value) : allowed.has(value);
+      if (!cfg.pageIds?.length || withinLocal(id)) return id;
       let currentId = id, currentKind = kind;
       const visited = new Set();
       for (let depth = 0; depth < 24; depth++) {
-        if (allowed.has(currentId)) { for (const item of visited) allowed.add(item); return id; }
+        if (withinLocal(currentId)) { if (!scopeRoots) for (const item of visited) allowed.add(item); return id; }
         if (visited.has(currentId)) break;
         visited.add(currentId);
         const resource = { page: 'pages', block: 'blocks', database: 'databases', data_source: 'data_sources' }[currentKind];
@@ -112,6 +117,20 @@ class NotionWorkspace {
         currentId = pageId(parent[parentType]); currentKind = parentType.slice(0, -3);
       }
       throw Error('该页面或内容对象不在本地授权范围内。');
+    };
+    const authorize = async (value, kind = 'page') => {
+      const id = await authorizeLocal(value, kind);
+      if (!scopeRoots || scopeRoots.has(id)) return id;
+      let currentId = id, currentKind = kind; const visited = new Set();
+      for (let depth = 0; depth < 24; depth++) {
+        if (scopeRoots.has(currentId)) return id;
+        if (visited.has(currentId)) break; visited.add(currentId);
+        const resource = { page: 'pages', block: 'blocks', database: 'databases', data_source: 'data_sources' }[currentKind]; if (!resource) break;
+        const metadata = await request('GET', resource + '/' + currentId), parent = metadata.parent;
+        const type = ['page_id', 'block_id', 'database_id', 'data_source_id'].find(type => parent?.[type]); if (!type) break;
+        currentId = pageId(parent[type]); currentKind = type.slice(0, -3);
+      }
+      throw Object.assign(Error('Notion 此对象不在本轮研究选择的页面或数据库范围内。'), { code: 'NOTION_RESEARCH_SCOPE' });
     };
     const mutate = createMutator({ root: this.root, workspaceId: cfg.workspaceId || hash(cfg.key), operationScope, readOnly: cfg.readOnly, request, signal,
       isBlocked: () => writeUncertain, onUncertain: () => { writeUncertain = true; }, onVerified: () => { this.verifiedWrites++; }, log: this.log,
@@ -143,7 +162,15 @@ class NotionWorkspace {
         const results = [], skipped = [], incompletePages = []; let scanned = 0;
         for (const page of data.results || []) {
           const id = pageId(page.id);
-          if (cfg.pageIds?.length && !cfg.pageIds.includes(id) || page.archived || page.in_trash || page.is_archived) continue;
+          if (!scopeRoots && cfg.pageIds?.length && !cfg.pageIds.includes(id) || page.archived || page.in_trash || page.is_archived) continue;
+          if (scopeRoots) {
+            try { await authorize(id); }
+            catch (error) {
+              if (signal?.aborted) throw error;
+              if (error.code !== 'NOTION_RESEARCH_SCOPE') skipped.push({ page_id: id, error: 'Notion 研究来源范围或权限未能核对。' });
+              continue;
+            }
+          }
           const title = pageTitle(page);
           let markdown = '', incomplete = false;
           if (args.scope === 'content') {

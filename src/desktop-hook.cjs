@@ -9,15 +9,24 @@ const root = initializeRuntime({ app, dialog, platform });
 if (!root) return;
 disableBuiltinUpdates(root);
 const { NativeMock, json } = require('./native-mock.cjs');
+const { createInlineReferenceReader } = require('./inline-references.cjs');
 const { adaptResponse } = require('./compat/response.cjs');
 const { localRecords } = require('./local-records.cjs');
 const { ProviderRouter } = require('./provider.cjs');
+const { WebSources } = require('./web-sources.cjs');
 const { NotionRouter } = require('./notion-routing.cjs');
 const { nativeModelCatalog } = require('./native-models.cjs');
 const { setupSettings, isSettings } = require('./settings-window.cjs');
 const { createNativeImageAdapter, describeUploadResponse } = require('./native-images.cjs');
 const { LocalImageUploads, prefix: localUploadPrefix } = require('./local-image-uploads.cjs');
+const { LocalDocumentUploads, prefix: localDocumentUploadPrefix, previewPrefix: localDocumentPreviewPrefix } = require('./local-document-uploads.cjs');
+const { createNativeAttachmentAdapter } = require('./native-attachments.cjs');
+const { LocalInlineDocuments, uploadPrefix: inlineDocumentUploadPrefix, referencePrefix: inlineDocumentReferencePrefix } = require('./local-inline-documents.cjs');
 const { generateAiBlock } = require('./native-ai-block.cjs');
+const { NativeAutofillStore } = require('./native-autofill-store.cjs');
+const { createAutofillJobs, isLocalId: isLocalAutofillId } = require('./native-autofill-jobs.cjs');
+const { createNativeBuildService } = require('./native-build-service.cjs');
+const { NativeBuildStore } = require('./native-database-build-store.cjs');
 const { NativeSpeech, loopbackCsp } = require('./speech/native.cjs');
 const { isMeetingSummary, offlineSummaryResponse } = require('./speech/summary.cjs');
 const { MeetingNativeBridge } = require('./meeting-summary-native.cjs');
@@ -37,14 +46,29 @@ app.removeAsDefaultProtocolClient = () => false;
 platform.configureAppIdentity(app);
 
 const provider = new ProviderRouter({ root });
+const webSources = new WebSources({ root });
 const meetingBridge = new MeetingNativeBridge();
+const autofill = createAutofillJobs({ root, provider, log,
+  storeFactory: (info, meta) => new NativeAutofillStore({ native: meetingBridge.forRequest(meta.request, meta.session, info.spaceId) }) });
 const meetingSummaries = new MeetingSummaryService({ root, provider, log,
   storeFactory: (info, meta) => meta.store || meetingBridge.forRequest(meta.request, meta.session, info.spaceId) });
 const workspace = new NotionRouter({ root, log });
-const mock = new NativeMock({ log, stateFile: path.join(root, 'conversations.local.json'), provider, workspace });
+const mock = new NativeMock({ log, stateFile: path.join(root, 'conversations.local.json'), provider, workspace, webSources,
+  inlineReferences: createInlineReferenceReader({ workspace }) });
+const databaseBuild = createNativeBuildService({ root, provider, log,
+  storeFactory: (info, meta) => new NativeBuildStore({ native: meetingBridge.forRequest(meta.request, meta.session, info.spaceId) }) });
+const aiRecords = { record: (id, table, scope) => databaseBuild.record(id, table, scope) || autofill.record(id, table, scope) || mock.record(id, table, scope),
+  hasRecord: (id, table) => mock.hasRecord(id, table) || !!databaseBuild.findRecord?.(id, table) || !!databaseBuild.previewOwner?.(id, table) ||
+    ['workflow_automation_run', 'task_output'].includes(table) && !!autofill.find?.(id),
+  recordRole: (id, table, scope) => databaseBuild.recordRole(id, table, scope) };
 const localImages = new LocalImageUploads({ root, owns: input => mock.owns(input), record: id => mock.record(id) });
+const localDocuments = new LocalDocumentUploads({ root, record: (id, scope) => mock.record(id, 'thread', scope) });
+const localInlineDocuments = new LocalInlineDocuments({ root, store: localDocuments, reserve: scope => {
+  if (databaseBuild.owns({ threadId: scope.threadId })) throw Error('Notion 浮动附件不能使用建库对话。');
+  mock.reserveInlineUpload(scope);
+} });
 let recordings;
-const settings = setupSettings({ root, platform, isBusy: () => mock.status().activeTurns > 0 || meetingSummaries.active > 0 || recordings?.active > 0, getCompatibility: () => compatibility });
+const settings = setupSettings({ root, platform, webSources, isBusy: () => mock.status().activeTurns > 0 || databaseBuild.active > 0 || autofill.active > 0 || meetingSummaries.active > 0 || recordings?.active > 0, getCompatibility: () => compatibility });
 recordings = new MeetingRecordings({ root, provider: settings.speech.provider, enabled: () => settings.speech.autoAttachAudio,
   storeFactory: (info, signal) => meetingBridge.forRecording(info, signal), log });
 settings.speech.audioImports = recordings;
@@ -56,24 +80,54 @@ const endpoints = new Set(['runInferenceTranscript', 'createAgentThread', 'creat
 function isNotion(hostname) { return hostname === 'notion.so' || hostname.endsWith('.notion.so') || hostname === 'notion.com' || hostname.endsWith('.notion.com'); }
 async function route(request, passthrough, ses) {
   const url = new URL(request.url), endpoint = url.pathname.match(/\/api\/v\d+\/([^/]+)/)?.[1] || url.pathname.split('/').pop();
+  if (isNotion(url.hostname) && typeof localInlineDocuments !== 'undefined') {
+    if (url.pathname.startsWith(inlineDocumentUploadPrefix)) return localInlineDocuments.post(request);
+    if (url.pathname.startsWith(inlineDocumentReferencePrefix)) return localInlineDocuments.download(request);
+    if (url.pathname.includes('/api/') && endpoint === 'getUploadFileUrlForAssistantChatTranscriptUpload') {
+      const input = await request.clone().json();
+      if (localDocuments.handles(input.name)) {
+        try { return json(localInlineDocuments.create(input, request.headers.get('x-notion-active-user-header'), url.origin)); }
+        catch (error) { return json({ name: 'NotionSwitchInlineDocument', message: error.message }, 400); }
+      }
+    }
+    if (url.pathname.includes('/api/') && endpoint === 'processAgentAttachment') {
+      const input = await request.clone().json();
+      if (localInlineDocuments.handles(input.url)) {
+        if (request.headers.get('x-notion-switch-inline-documents-client') !== '1') return json({ name: 'NotionSwitchInlineDocument', message: 'Notion 当前附件客户端接口尚未审核，请更新后重新上传。' }, 409);
+        try { return json(await localInlineDocuments.process(input, request.headers.get('x-notion-active-user-header'), url.origin, request.signal)); }
+        catch (error) { return json({ name: 'NotionSwitchInlineDocument', message: error.message }, 400); }
+      }
+    }
+  }
   if (isNotion(url.hostname)) {
+    if (typeof localDocuments !== 'undefined' && url.pathname.startsWith(localDocumentPreviewPrefix)) return localDocuments.preview(request);
     if (url.pathname.startsWith('/notion-switch-local-image/') || url.pathname.startsWith('/image/')) {
       const preview = localImages.preview(request); if (preview) return preview;
     }
     if (url.pathname.includes('/api/') && endpoint === 'getFileContentURLForAgentThread') {
       const input = await request.clone().json();
+      if (typeof localDocuments !== 'undefined' && localDocuments.hasFile(input.fileId)) {
+        try { return json(localDocuments.resolve(input, request.headers.get('x-notion-active-user-header'), url.origin)); }
+        catch { return json({ message: '无法读取当前对话的文档附件。' }, 404); }
+      }
       if (localImages.hasFile(input.fileId)) {
         try { return json(localImages.resolve(input, request.headers.get('x-notion-active-user-header'), url.origin)); }
         catch { return json({ message: '无法读取当前对话的图片附件。' }, 404); }
       }
     }
   }
+  if (typeof localDocuments !== 'undefined' && isNotion(url.hostname) && url.pathname.startsWith(localDocumentUploadPrefix))
+    return localDocuments.put(url.pathname.slice(localDocumentUploadPrefix.length), request);
   if (isNotion(url.hostname) && url.pathname.startsWith(localUploadPrefix)) {
     return localImages.put(url.pathname.slice(localUploadPrefix.length), request);
   }
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && ['createAgentServiceFileUploadURL', 'completeAgentServiceFileUpload'].includes(endpoint)) {
     try {
       const input = await request.clone().json(), user = request.headers.get('x-notion-active-user-header');
+      if (typeof localDocuments !== 'undefined') {
+        if (endpoint === 'createAgentServiceFileUploadURL' && localDocuments.handles(input.filename) && localDocuments.handlesTarget(input.target)) return json(localDocuments.create(input, user, url.origin));
+        if (endpoint === 'completeAgentServiceFileUpload' && (localDocuments.hasPending(input.fileId) || localDocuments.hasFile(input.fileId))) return json(localDocuments.complete(input, user));
+      }
       if (endpoint === 'createAgentServiceFileUploadURL' && localImages.handlesTarget(input.target) &&
           ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(input.mediaType)) return json(localImages.create(input, user, url.origin));
       if (endpoint === 'completeAgentServiceFileUpload' && localImages.hasPending(input.fileId)) return json(localImages.complete(input, user));
@@ -96,6 +150,19 @@ async function route(request, passthrough, ses) {
     }
     return response;
   };
+  if (isNotion(url.hostname) && url.pathname.includes('/api/') &&
+      ['triggerLiteAgentAutofill', 'triggerAgentOverCollection', 'notionSwitchGetAutofillStatus', 'markWorkflowAutomationRunCancelled'].includes(endpoint)) {
+    const input = await request.clone().json(), localControl = endpoint === 'notionSwitchGetAutofillStatus' || endpoint === 'markWorkflowAutomationRunCancelled' && isLocalAutofillId(input.runId);
+    if (localControl || endpoint.startsWith('trigger')) {
+      if (!localControl && provider.status().mode !== 'deepseek')
+        return json({ name: 'NotionSwitchAutofill', message: 'Notion Autofill 请先在配置中启用 DeepSeek。' }, 400);
+      if (!localControl && request.headers.get('x-notion-switch-autofill-client') !== '1')
+        return json({ name: 'NotionSwitchAutofill', message: 'Notion Autofill 客户端尚未通过适配，请重新加载页面；本次未转交 Notion 托管 AI。' }, 501);
+      const response = await autofill.handle(endpoint, input, request.signal, { request, session: ses,
+        userId: request.headers.get('x-notion-active-user-header') });
+      if (response) return response;
+    }
+  }
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && endpoint === 'getAudioProcessorAuthToken' && settings.speech.enabled) {
     try { return json(await nativeSpeech.token({ userId: uuid(request.headers.get('x-notion-active-user-header')) })); }
     catch (error) { return json({ message: error.message, status: 503 }, 503); }
@@ -105,6 +172,18 @@ async function route(request, passthrough, ses) {
     if (isMeetingSummary(endpoint, input)) return settings.speech.autoSummary === false ? offlineSummaryResponse(endpoint, log) :
       meetingSummaries.handle(endpoint, input, request.signal, { request, session: ses });
   }
+  if (typeof databaseBuild !== 'undefined' && isNotion(url.hostname) && url.pathname.includes('/api/') &&
+      ['saveTransactionsFanout', 'queryCollection', 'runInferenceTranscript', 'stopWorkflowAutomationRunThread'].includes(endpoint)) {
+    const input = await request.clone().json(), meta = { request, session: ses, userId: request.headers.get('x-notion-active-user-header') };
+    if (endpoint === 'saveTransactionsFanout') { const response = await databaseBuild.transactions(input, request.signal, meta); if (response) return response; }
+    if (endpoint === 'queryCollection') { const response = databaseBuild.previewQuery(input, meta); if (response) return response; }
+    if (endpoint === 'runInferenceTranscript' && databaseBuild.accepts(input)) {
+      if (!databaseBuild.owns(input) && mock.hasRecord(input.threadId, 'thread')) return json({ message: '此对话属于其他本地 AI 入口，请新建建库对话。' }, 409);
+      if (settings.isLoginSyncing()) return json({ message: '本机登录同步正在准备重启，请等待重新打开后继续。' }, 409);
+      return databaseBuild.stream(input, request.signal, meta);
+    }
+    if (endpoint === 'stopWorkflowAutomationRunThread' && databaseBuild.owns(input)) return databaseBuild.stop(input, meta);
+  }
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && endpoint === 'getAvailableModels' && provider.status().mode === 'deepseek') {
     const input = await request.clone().json();
     if (input.surface !== 'workspace_model_settings') {
@@ -113,19 +192,33 @@ async function route(request, passthrough, ses) {
       return json(catalog);
     }
   }
+  if (isNotion(url.hostname) && url.pathname.includes('/api/') && endpoint === 'saveTransactionsFanout') {
+    const input = await request.clone().json(), response = mock.transactions?.(input, { userId: request.headers.get('x-notion-active-user-header') });
+    if (response) return response;
+  }
   if (isNotion(url.hostname) && ['syncRecordValues', 'syncRecordValuesSpace', 'syncRecordValuesMain', 'syncRecordValuesSpaceInitial', 'syncRecordValuesSpaceFanout', 'getRecordValues'].includes(endpoint)) {
-    return localRecords(request, await request.clone().json(), endpoint, mock, passthrough, log);
+    return localRecords(request, await request.clone().json(), endpoint, aiRecords, passthrough, log);
   }
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && endpoint === 'getInferenceTranscriptsForUser') {
     const input = await request.clone().json();
-    return mock.handle(endpoint, input, request.signal, { userId: request.headers.get('x-notion-active-user-header'), fetchHistory: async data => {
+    const historyAgent = typeof databaseBuild !== 'undefined' ? {
+      threads: new Map([...mock.historyThreads(), ...databaseBuild.historyThreads()]),
+      record: id => databaseBuild.historyRecord(id) || mock.historyRecord(id)
+    } : { threads: mock.historyThreads(), record: id => mock.historyRecord(id) };
+    return mock.handle(endpoint, input, request.signal, { historyAgent, userId: request.headers.get('x-notion-active-user-header'), fetchHistory: async data => {
       const headers = new Headers(request.headers); headers.delete('content-length');
       return passthrough(new Request(request, { headers, body: JSON.stringify(data) }));
     } });
   }
   if (isNotion(url.hostname) && ['getThreadSpaceId', 'recordAgentThreadView', 'markInferenceTranscriptSeen'].includes(endpoint)) {
-    const input = await request.clone().json(), record = mock.record(input.threadId);
+    const input = await request.clone().json();
+    if (typeof databaseBuild !== 'undefined' && databaseBuild.owns(input)) {
+      const record = databaseBuild.record(input.threadId, 'thread', { userId: request.headers.get('x-notion-active-user-header'), spaceId: input.spaceId });
+      return record ? json(endpoint === 'getThreadSpaceId' ? { spaceId: record.space_id } : {}) : json({ message: '建库对话不属于当前账号或工作区。' }, 403);
+    }
+    const record = mock.record(input.threadId, 'thread', { userId: request.headers.get('x-notion-active-user-header'), spaceId: input.spaceId ?? request.headers.get('x-notion-space-id') ?? undefined });
     if (record) return json(endpoint === 'getThreadSpaceId' ? { spaceId: record.space_id } : {});
+    if (mock.hasRecord(input.threadId, 'thread')) return json({ message: '本地 AI 对话不属于当前账号或工作区。' }, 403);
   }
   if (url.hostname === 'app.notion.com' && /^\/_assets\/\d+-[a-f\d]{16}\.js$/.test(url.pathname)) {
     const compatAsset = url.pathname.split('/').pop();
@@ -140,8 +233,8 @@ async function route(request, passthrough, ses) {
       if (adapted.kinds.includes('recording') && nativeSpeech.enabled && adapted.changed) nativeSpeech.lifecycleReady = true;
       if (adapted.kinds.includes('connection') && nativeSpeech.enabled) nativeSpeech.drainTransportReady = true;
     }
-    catch {
-      nativeSpeech.lifecycleReady = false;
+    catch (error) {
+      if (!['autofill', 'attachments'].includes(error.notionSwitchKind)) nativeSpeech.lifecycleReady = false;
       if (!compatibility.unsupportedAssets.includes(compatAsset)) { compatibility.unsupportedAssets.push(compatAsset); log({ type: 'local-provider-ui-unsupported', asset: compatAsset }); }
       return response;
     }
@@ -167,6 +260,8 @@ async function route(request, passthrough, ses) {
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && (localRead || endpoints.has(endpoint) || /^(runInference|create.*Agent.*Thread|sendEventTo.*Thread)/.test(endpoint))) {
     try {
       const input = await request.clone().json();
+      if (typeof databaseBuild !== 'undefined' && ['createAgentThread', 'createCalendarAgentThread'].includes(endpoint) && databaseBuild.owns(input))
+        return json({ message: '此对话属于本地建库入口，请新建侧栏对话。' }, 409);
       if (settings.isLoginSyncing() && /^(?:create|sendEventTo|runInference)/.test(endpoint)) return json({ name: 'NotionSwitchPrototype', message: '本机登录同步正在准备重启，请等待重新打开后继续。' }, 409);
       if (localRead && !mock.owns(input)) return passthrough(request);
       const images = createNativeImageAdapter({
@@ -181,7 +276,11 @@ async function route(request, passthrough, ses) {
         },
         fetchImage: (target, options) => ses.fetch(target, { ...options, bypassCustomProtocolHandlers: true })
       });
-      return await mock.handle(endpoint, input, request.signal, { userId: request.headers.get('x-notion-active-user-header'), images });
+      const attachments = typeof localDocuments !== 'undefined' ? createNativeAttachmentAdapter({ images,
+        readLocalDocument: scope => localDocuments.read({ ...scope, userId: request.headers.get('x-notion-active-user-header') }) }) : images;
+      return await mock.handle(endpoint, input, request.signal, { userId: request.headers.get('x-notion-active-user-header'), spaceId: request.headers.get('x-notion-space-id') ?? undefined, images: attachments,
+        ...(typeof localInlineDocuments !== 'undefined' ? { inlineAttachment: scope => localInlineDocuments.prepare({ ...scope,
+          userId: request.headers.get('x-notion-active-user-header'), origin: url.origin }) } : {}) });
     }
     catch (error) { log({ type: 'adapter-error', endpoint, message: error.message }); return json({ name: 'NotionSwitchPrototype', message: error.message }, 500); }
   }
@@ -206,6 +305,9 @@ function install(ses) {
 }
 app.on('session-created', install);
 app.on('before-quit', () => { try { mock.agent.save(); } catch { log({ type: 'local-conversation-save-failed' }); } });
+app.on('before-quit', () => mock.close());
+app.on('before-quit', () => autofill.close());
+app.on('before-quit', () => databaseBuild.close());
 app.on('web-contents-created', (_event, contents) => {
   if (isSettings(contents)) return;
   install(contents.session);
@@ -248,7 +350,7 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/status' && req.method === 'GET') {
     const state = mock.status(), speechBusy = settings.speech.provider.leases > 0 || settings.speech.provider.status().busy || nativeSpeech.connections.size > 0;
     res.end(JSON.stringify({ pid: process.pid, appReady: app.isReady(), windows: BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), minimized: win.isMinimized(), destroyed: win.isDestroyed() })), ...state,
-      activeTurns: state.activeTurns + (speechBusy ? 1 : 0) + meetingSummaries.active + recordings.active + (settings.collection?.service.active || 0), collection: settings.collection?.status(), meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
+      activeTurns: state.activeTurns + databaseBuild.active + autofill.active + (speechBusy ? 1 : 0) + meetingSummaries.active + recordings.active + (settings.collection?.service.active || 0), databaseBuild: { active: databaseBuild.active, available: databaseBuild.available }, autofill: { active: autofill.active, available: autofill.available }, collection: settings.collection?.status(), meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
       compatibility, notion: workspace.status(), settings: settings.status(), speech: { ...settings.speech.status(), native: nativeSpeech.status() } }));
   }
   else if (req.url === '/collection/open' && req.method === 'POST') {

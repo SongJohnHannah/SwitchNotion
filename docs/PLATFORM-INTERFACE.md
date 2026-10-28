@@ -1,6 +1,6 @@
 # 桌面平台接口
 
-平台接口提供 Windows x64 和 Apple Silicon M1 Mac 的安装查找、隔离准备与启动。Windows 已实测；Mac 双击入口与 `.app` 分发已生成并通过合成流程测试，尚未完成 M1 真机验收。使用入口见项目 `MAC-使用说明.md`。
+平台接口提供 Windows x64 和 Apple Silicon M1 Mac 的安装查找、隔离准备与启动。用户已确认现有 Mac 版本正常使用；2026-10-28 的检查在 Windows 上进行，保留现有 Mac 平台运行实现。新增 AI 引用能力共用同一模块并验证两种分发包，不能据此新增 Mac 硬件实测结论。使用入口见项目 `MAC-使用说明.md`。
 
 ## 入口与复用范围
 
@@ -52,10 +52,10 @@ Electron 内检测安装与读取归档使用 `original-fs`，避免 Electron �
 | --- | --- | --- |
 | 安装自动查找 | 用户目录、Program Files、注册表、手动选择 | `~/Applications/Notion.app`、`/Applications/Notion.app`、保存位置 |
 | 官方程序布局 | `Notion.exe`、`resources/app.asar` | `Notion.app/Contents/MacOS/Notion`、`Contents/Resources/app.asar` |
-| 隔离布局 | `runtime/Notion.exe` | `runtime/Notion.app/Contents/...` |
-| 准备与启动 | 已接入并验证 | M1 能力接入，使用 ditto 保留包结构、本机签名后启动；未实机验证 |
+| 隔离布局 | `runtime/Notion.exe` | `runtime/SwitchNotion.app/Contents/...`，兼容既有 `runtime/Notion.app` |
+| 准备与启动 | 已接入并验证 | 保留既有 ditto 复制、本机签名和启动实现；用户已确认可用 |
 | 兼容校验 | Windows 自己的已审核版本和结构检查 | 官方 Mac 7.40.1 独立 ASAR 哈希、结构和发行者签名检查，不继承 Windows 哈希 |
-| 登录 | 既有本机 Windows 登录同步 | 交互登录策略；不执行 Windows Cookie 加密资料复制 |
+| 登录 | 既有本机 Windows 登录同步 | ARM64 使用既有 `macos-keychain-copy`，其余为交互策略；不执行 Windows Cookie 加密资料复制 |
 
 配置中的登录状态返回 `syncSupported` 和 `loginStrategy`；不支持复制时禁用同步按钮，仍可通过 Electron 检查隔离窗口已登录的状态。该检查不代表服务端会话仍有效。
 
@@ -65,10 +65,10 @@ Electron 内检测安装与读取归档使用 `original-fs`，避免 Electron �
 
 1. `macos.cjs` 配置官方 Mac 7.40.1 的独立 ASAR 哈希与 Electron 44 策略；`macos-runtime.cjs` 校验 ARM64 Mach-O、官方签名和发行者要求。
 2. stageInstallation 验证内部链接，使用系统 ditto 保留 `.app` 结构及权限，拒绝外部链接。源码和独立副本分别检查。
-3. finalizeRuntime 设置 Switch Notion 名称及独立应用标识，保留图标并更新 ASAR 完整性哈希，随后本机签名和验证；失败保留上一个版本。不关闭系统安全检查。
+3. finalizeRuntime 设置 SwitchNotion 包名称及既有应用标识，保留图标并更新 ASAR 完整性哈希，随后本机签名和验证；失败保留上一个版本。不关闭系统安全检查。
 4. `.command` 为源码双击入口；`.app` 为可搬到“应用程序”的入口。缺少 Node 时由窗口提示后下载固定 ARM64 版本并核对校验和。Mac 原生工具与 Finder 行为仍需实机验证。
-5. 源码模式在项目内保存状态；分发 `.app` 使用用户 Library/Application Support。更新工具使用记录的项目位置。Mac 登录采用交互流程，Keychain 不自动复制。
-6. M1 上仍需验收首次启动、签名、登录、单实例、原生选区、侧栏、停止/续聊、数据库与跨工作区写入、音频录制和失败恢复。正式下载分发还需 Developer ID 签名及公证。当前不考虑 Intel Mac。
+5. 源码模式在项目内保存状态；分发 `.app` 使用用户 Library/Application Support。更新工具使用记录的项目位置。ARM64 登录沿用已有 Keychain 复制实现，本轮不修改其行为；类型声明现与该策略一致。
+6. 已有 Mac 原生 AI 回复选区验收记录见 [引用覆盖](AI-REFERENCE-COVERAGE.md)。新增浮动框附加引用和 AI block 指定页面的原生控件仍需在 Mac 上复核；本轮不重复调整已经可用的启动、签名、登录和录音流程。正式下载分发还需 Developer ID 签名及公证。当前不考虑 Intel Mac。
 
 共享的 Agent 和页面工具不应加入 macOS 路径判断。API Key 保持各电脑本地配置，不把 Windows 登录、密钥或用户状态打进 Mac 包。
 

@@ -6,7 +6,7 @@ import { inflateRawSync } from 'node:zlib';
 import { stageMac } from '../scripts/package-macos.mjs';
 import { zipDirectory } from '../scripts/portable-zip.mjs';
 import { verifyPackagedImagePreview } from './helpers/packaged-image-preview.mjs';
-import { verifyPackagedReferences } from './helpers/packaged-references.mjs';
+import { verifyPackagedReferences, verifyPackagedInlineReferences, verifyPackagedAiBlockSources, verifyPackagedFormulaPreview, verifyPackagedAutofill, verifyPackagedDatabaseBuild, verifyPackagedInstructionSelection, verifyPackagedConversationScope, verifyPackagedWebSources, verifyPackagedResearchScope, verifyPackagedNativeWebResearch } from './helpers/packaged-references.mjs';
 const project = path.resolve(import.meta.dirname, '..');
 
 test('Mac package is relocatable, reuses Notion icon and preserves double-click executable bits without bundling private data', async t => {
@@ -30,6 +30,16 @@ test('Mac package is relocatable, reuses Notion icon and preserves double-click 
   assert.deepEqual(fs.readFileSync(path.join(result.app, 'Contents/Resources/project/src/runtime-bootstrap.cjs')), fs.readFileSync(path.join(project, 'src/runtime-bootstrap.cjs')));
   await verifyPackagedImagePreview(path.join(result.app, 'Contents/Resources/project/src'), path.join(base, 'Mac 用户资料', 'Application Support', 'Switch Notion'));
   await verifyPackagedReferences(path.join(result.app, 'Contents/Resources/project/src'), path.join(base, 'Mac 用户资料', '引用 state'));
+  await verifyPackagedInlineReferences(path.join(result.app, 'Contents/Resources/project/src'), path.join(base, 'Mac 用户资料', '浮动引用 state'));
+  await verifyPackagedAiBlockSources(path.join(result.app, 'Contents/Resources/project/src'));
+  await verifyPackagedFormulaPreview(path.join(result.app, 'Contents/Resources/project/src'));
+  await verifyPackagedAutofill(path.join(result.app, 'Contents/Resources/project/src'), path.join(base, 'Mac 用户资料', '填充 state'));
+  await verifyPackagedDatabaseBuild(path.join(result.app, 'Contents/Resources/project/src'));
+  verifyPackagedInstructionSelection(path.join(result.app, 'Contents/Resources/project/src'));
+  await verifyPackagedConversationScope(path.join(result.app, 'Contents/Resources/project/src'));
+  await verifyPackagedWebSources(path.join(result.app, 'Contents/Resources/project/src'), path.join(base, 'Mac 用户资料', 'Application Support', '网页 sources'));
+  await verifyPackagedResearchScope(path.join(result.app, 'Contents/Resources/project/src'), path.join(base, 'Mac 用户资料', '研究 scope'));
+  await verifyPackagedNativeWebResearch(path.join(result.app, 'Contents/Resources/project/src'), path.join(base, 'Mac 用户资料', '网页研究 conversations'));
   const archive = path.join(base, 'mac.zip'); zipDirectory({ directory: result.directory, output: archive });
   const bytes = fs.readFileSync(archive), end = bytes.length - 22, start = bytes.readUInt32LE(end + 16), count = bytes.readUInt16LE(end + 10);
   let at = start; const modes = new Map();
@@ -38,7 +48,8 @@ test('Mac package is relocatable, reuses Notion icon and preserves double-click 
     const length = bytes.readUInt16LE(at + 28), extra = bytes.readUInt16LE(at + 30), comment = bytes.readUInt16LE(at + 32);
     const name = bytes.subarray(at + 46, at + 46 + length).toString('utf8');
     modes.set(name, bytes.readUInt32LE(at + 38) >>> 16 & 0o777);
-    assert.ok(!/(?:\.notion-switch|research|deepseek-api-key|app\.asar|Notion\.exe|model\.bin)/.test(name));
+    assert.ok(!name.split('/').some(part => ['.notion-switch', 'research'].includes(part)));
+    assert.ok(!/(?:deepseek-api-key|app\.asar|Notion\.exe|model\.bin)/.test(name));
     const local = bytes.readUInt32LE(at + 42), nameLength = bytes.readUInt16LE(local + 26), localExtra = bytes.readUInt16LE(local + 28), compressed = bytes.readUInt32LE(at + 20);
     const data = inflateRawSync(bytes.subarray(local + 30 + nameLength + localExtra, local + 30 + nameLength + localExtra + compressed));
     assert.equal(data.length, bytes.readUInt32LE(at + 24));

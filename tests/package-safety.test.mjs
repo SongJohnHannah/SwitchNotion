@@ -29,3 +29,10 @@ test('the actual locally configured key is checked in UTF-8 and UTF-16 without e
   }
   assert.doesNotThrow(() => assertDistributionFiles(f.root, [f.write('src/clean.cjs', 'module.exports={};')], keys));
 });
+
+test('a configured Brave search key is excluded and scanned even when it has no DeepSeek key prefix', t => {
+  const f = fixture(t), key = 'synthetic-brave-private-value';
+  f.write('.notion-switch/web-sources.local.json', JSON.stringify({ version: 1, enabled: true, braveApiKey: key }));
+  const keys = localDeepSeekKeys(f.root, {}); assert.deepEqual(keys, [key]);
+  assert.throws(() => assertDistributionFiles(f.root, [f.write('src/accidental.cjs', 'value=' + key)], keys), error => /停止打包/.test(error.message) && !error.message.includes(key));
+});

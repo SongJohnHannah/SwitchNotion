@@ -4,6 +4,7 @@ const { createHash } = require('node:crypto');
 const { NotionRouter, registryName, consolidateConnections, saveConnections } = require('./notion-routing.cjs');
 const { ProviderRouter } = require('./provider.cjs');
 const { models } = require('./native-models.cjs');
+const { WebSources } = require('./web-sources.cjs');
 const idFor = profile => createHash('sha256').update(profile.workspaceId || profile.apiKey || profile.apiKeyFile).digest('hex').slice(0, 24);
 const keyText = value => {
   if (typeof value !== 'string' || !value.trim() || value.length > 1024 || /[\r\n]/.test(value.trim())) throw Error('请填写有效的 API Key。');
@@ -15,10 +16,11 @@ const label = value => {
   return value.trim();
 };
 class SettingsService {
-  constructor({ root, fetchImpl = fetch, intervalMs = 350 }) {
+  constructor({ root, fetchImpl = fetch, intervalMs = 350, webSources }) {
     this.root = root; this.fetchImpl = fetchImpl;
     this.router = new NotionRouter({ root, fetchImpl, intervalMs });
     this.provider = new ProviderRouter({ root, fetchImpl });
+    this.webSources = webSources || new WebSources({ root });
     this.queue = Promise.resolve(); this.health = new Map();
   }
   async profiles() {
@@ -37,7 +39,7 @@ class SettingsService {
   }
   async state() {
     const profiles = await this.profiles(), status = this.provider.status();
-    return { workspaces: profiles.map(p => this.publicProfile(p)), deepseek: { keyConfigured: status.keyConfigured === true, model: models.some(m => m.apiId === status.model) ? status.model : 'deepseek-flash', thinking: status.thinking === true, reasoningEffort: status.reasoningEffort || 'high', multiAgent: status.multiAgent !== false, models: models.map(m => ({ id: m.apiId, name: m.label })) } };
+    return { workspaces: profiles.map(p => this.publicProfile(p)), webSources: this.webSources.state(), deepseek: { keyConfigured: status.keyConfigured === true, model: models.some(m => m.apiId === status.model) ? status.model : 'deepseek-flash', thinking: status.thinking === true, reasoningEffort: status.reasoningEffort || 'high', multiAgent: status.multiAgent !== false, models: models.map(m => ({ id: m.apiId, name: m.label })) } };
   }
   async identity(apiKey) {
     const profile = { apiKey }, client = this.router.client(profile);
@@ -114,8 +116,8 @@ class SettingsService {
     return { message: 'DeepSeek 已保存，下一轮 AI 对话生效' };
   }
   request(action, input = {}) {
-    const methods = { state: 'state', 'workspace.save': 'saveWorkspace', 'workspace.test': 'testWorkspace', 'workspace.remove': 'removeWorkspace', 'deepseek.save': 'saveDeepseek', 'deepseek.test': 'testDeepseek' };
-    const allowed = { state: [], 'workspace.save': ['id', 'name', 'apiKey'], 'workspace.test': ['id', 'apiKey'], 'workspace.remove': ['id'], 'deepseek.save': ['apiKey', 'model', 'thinking', 'reasoningEffort', 'multiAgent'], 'deepseek.test': ['apiKey'] };
+    const methods = { state: 'state', 'workspace.save': 'saveWorkspace', 'workspace.test': 'testWorkspace', 'workspace.remove': 'removeWorkspace', 'deepseek.save': 'saveDeepseek', 'deepseek.test': 'testDeepseek', 'web.save': 'saveWebSources', 'web.test': 'testWebSources' };
+    const allowed = { state: [], 'workspace.save': ['id', 'name', 'apiKey'], 'workspace.test': ['id', 'apiKey'], 'workspace.remove': ['id'], 'deepseek.save': ['apiKey', 'model', 'thinking', 'reasoningEffort', 'multiAgent'], 'deepseek.test': ['apiKey'], 'web.save': ['enabled', 'apiKey', 'forgetKey'], 'web.test': ['apiKey'] };
     const job = async () => {
       if (!Object.hasOwn(methods, action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !allowed[action].includes(k)) || Object.values(input).some(v => typeof v !== 'string' || v.length > 1024)) return { ok: false, error: '无法识别这项操作，请刷新后重试。' };
       try { return { ok: true, result: await this[methods[action]](input) }; }
@@ -124,11 +126,13 @@ class SettingsService {
         if (/^Notion API 返回 HTTP 401\b/.test(message)) return { ok: false, error: 'Notion API Key 无效，请重新复制连接密钥。' };
         if (/^Notion API 返回 HTTP (?:403|404)\b/.test(message)) return { ok: false, error: '无法访问页面，请检查连接权限，并在 Notion 中授权页面。' };
         // Never forward raw parser, transport or upstream response errors.
-        const safe = /^(请|该工作区|这个|当前|目前|DeepSeek |Notion (?:API 返回 HTTP|当前连接未返回|统一配置写入核验失败|统一工作区配置不是有效 JSON|工作区连接配置))/.test(message) && !/(?:ntn_|secret_|sk-)[a-zA-Z0-9_-]{8}/.test(message);
+        const safe = /^(请|该工作区|这个|当前|目前|DeepSeek |Notion (?:联网|API 返回 HTTP|当前连接未返回|统一配置写入核验失败|统一工作区配置不是有效 JSON|工作区连接配置))/.test(message) && !/(?:ntn_|secret_|sk-)[a-zA-Z0-9_-]{8}/.test(message);
         return { ok: false, error: safe ? message : '操作未完成，请检查网络和 API Key 后重试。' };
       }
     };
     const next = this.queue.then(job); this.queue = next.catch(() => {}); return next;
   }
+  saveWebSources(input) { return this.webSources.save(input); }
+  testWebSources(input) { return this.webSources.test(input); }
 }
 module.exports = { SettingsService };

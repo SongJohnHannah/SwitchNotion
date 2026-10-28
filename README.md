@@ -1,6 +1,6 @@
 # NotionSwitch
 
-在 Notion 桌面版的原生 AI 界面中使用自己的 DeepSeek API Key，支持当前页面上下文、跨页面操作和多个已授权工作区。应用显示名为 Switch Notion，复用 Notion 图标。Windows 已实测；M1 Mac 启动与打包代码已实现，待真机验收。
+在 Notion 桌面版的原生 AI 界面中使用自己的 DeepSeek API Key，支持当前页面上下文、跨页面操作和多个已授权工作区。应用显示名为 Switch Notion，复用 Notion 图标。Windows 已实测；用户已确认现有 M1 Mac 版本可正常使用，新增能力的验证边界见下方覆盖文档。
 
 项目通过本机隔离副本和协议适配器接入 DeepSeek。原版 Notion 安装保持原样，Notion 页面内容通过官方 API 读取和修改。本项目是独立原型，与 Notion、DeepSeek 官方没有隶属关系。
 
@@ -8,17 +8,22 @@
 
 - 保留页面右下角原生 AI 入口、侧栏对话、流式回复、停止和续聊。
 - 在原生模型菜单切换已接入的 DeepSeek Flash / Pro，并在配置中设置思考模式和多 Agent 协同。
+- 侧栏个人 Agent 可选启用公开网页阅读及 Brave Search，在配置的 DeepSeek 页保存联网开关和搜索密钥；支持来源链接、长文分页、停止与续问。默认关闭，搜索需独立密钥；交互式浏览器仍待接入。见 [联网来源接口](docs/WEB-SOURCES-INTERFACE.md)。
+- 原生 Research Mode 已接通明确“仅网页”的报告、来源、本地历史、停止及重启续问；工作区页面/数据库及全部来源研究仍等待正文接入授权。见 [研究模式范围](docs/NATIVE-RESEARCH-INTERFACE.md)。
 - 自动识别当前页面和工作区，支持“总结此页面”“修改当前页”。
 - 搜索和读取已授权页面，创建、修改、移动和归档页面，操作内容块、表格、数据库及相关内容工具。
 - 在配置界面添加多个工作区连接，只需名称和 API Key；工作区标识自动识别。
 - 本机保存历史对话、任务进度和写入核验记录，支持上下文压缩和自动续跑。
-- 支持选区引用和原生浮动 AI 编辑预览。
+- 支持选区引用和原生浮动 AI 编辑预览；浮动框可读取附加页面、表格、数据库属性及截断文字范围，引用随原生历史恢复。尚未支持的附件正文会明确提示。
 - 支持引用 AI 回复片段，并在历史恢复和上下文整理后保留；引用类型、实际验收结果及尚未对接的 AI 功能见 [引用与 AI 功能覆盖](docs/AI-REFERENCE-COVERAGE.md)。
-- 原生 AI block 支持当前页面摘要、关键要点和自定义输出；生成时将当前页面文字发送给 DeepSeek。暂不支持指定其他页面或连接器作为上下文。
+- 原生 AI block 支持摘要、关键要点和自定义输出；可明确选择同一工作区的页面或数据库，读取记录属性和自身正文，生成后复核来源及权限。数据库范围不会冒充当前筛选视图；搜索和外部连接器尚未接入。见 [来源接口](docs/NATIVE-AI-BLOCK-INTERFACE.md)。
+- 独立公式编辑器已接入 DeepSeek 生成/修复预览，使用字段结构与编译错误，不发送样本行；保留原生校验和用户确认保存流程。协议与验收边界见 [公式接口](docs/NATIVE-FORMULA-INTERFACE.md)。
+- 原生基础 Autofill 的所选记录及最多 200 条的完整筛选视图可使用本地生成、受限字段写回与核验、任务进度及单行停止；其余字段/工作流类型仍待接入，真实服务器/桌面控件仍需验收。见 [Autofill 接口](docs/NATIVE-AUTOFILL-INTERFACE.md)。
 - 整个普通表格、数据库或记录的选区即使没有文字预览，也能保留引用并读取对应行、字段和记录；记录选区不会自动扩展为整库。视图筛选信息无法确认时会说明范围。
 - Flash 支持图片输入，Windows 与 Apple Silicon Mac 共用本地图片上传、聊天缩略图和预览逻辑；已有对话中的图片引用会恢复为可显示附件。两种分发包均有图片链路测试，Windows 桌面界面仍需实机复核。
+- 原生侧栏聊天可解析主动上传的文字型 PDF、DOCX、XLSX、TXT/Markdown、CSV/TSV 和 JSON，并供同账号/工作区/对话的续问使用。Flash/Pro 均可读取文档文字；扫描 OCR、旧版 DOC/XLS 和音视频理解仍待实现。[支持范围与验收](docs/NATIVE-DOCUMENTS-INTERFACE.md)。
+- 浮动 AI 框也已接入支持文档的本地上传、处理回执、文字预览和历史续问；保持原生菜单的可接受类型，不读取任意旧远程附件或 Agent 下载。实际路由与合成模型验收通过，原生窗口控件仍待复核。
 - 提供 Windows 一键启动与登录同步，新增 M1 Mac 双击启动和 `.app` 分发入口、兼容版本同步和上一版本恢复。
-
 - 独立内容收集窗口：按 `Ctrl/⌘+Shift+J` 粘贴链接，识别正文、原图、视频和音频，可逐项选择并按原文顺序上传到指定 Notion 数据库或父页面。本地逐字稿和默认开启的 DeepSeek 画面识别可单独关闭；登录、保存位置与快捷键均在配置中管理。见 [内容收集说明](docs/CONTENT-COLLECTION.md)。
 
 跨工作区操作需要分别配置连接并给目标页面授权。默认使用当前工作区；需要跨区时明确指定工作区或要求跨工作区搜索。未授权页面无法通过连接访问。
@@ -29,7 +34,7 @@
 
 下载源码后双击根目录的 `Switch Notion 启动.command`；配置入口为 `Switch Notion 配置.command`。Mac 分发包可双击 `SwitchNotion.app`，或把应用拖入“应用程序”后打开。首次自动查找官方 Notion，缺少运行环境时由窗口提示准备，无需输入终端命令。
 
-Mac 代码和分发包已生成并通过合成流程测试，M1 真机尚未验收，也尚未提供 Apple Developer ID 公证。安装、首次系统确认及本机资料位置见 [Mac 使用说明](MAC-使用说明.md)。
+现有 Mac 版本由用户确认可用，新增 AI 引用链路通过两种分发包自动测试；本次 Windows 环境未执行新增功能的 Mac 原生控件验收。尚未提供 Apple Developer ID 公证。安装、首次系统确认及本机资料位置见 [Mac 使用说明](MAC-使用说明.md)。
 
 ## Windows 使用
 
@@ -68,14 +73,17 @@ npm run status
 npm run stop
 npm test
 npm run check:secrets
+npm run check:windows
 npm run package:windows
 ```
 
 Windows 迁移包构建产物保存在 `dist/`，不创建桌面文件。配置界面保存后，下一轮 AI 对话使用新设置。
 
+`npm run check:windows` 只读检测 Windows 环境、Node、Notion 安装、隔离副本、登录辅助程序位置和离线语音配置；不会下载组件或读取 Cookie/密钥。实机验证步骤见 [Windows 验证清单](docs/WINDOWS-VALIDATION-CHECKLIST.md)。
+
 ## 密钥和本机资料
 
-**DeepSeek Key、Notion 连接密钥、登录资料和本机聊天记录只在本机保存，不提交到 Git，也不打包分发。** 调用 DeepSeek 时，Key 通过官方 HTTPS API 用于认证，不传给 Notion。选定的页面内容会作为任务上下文发送给 DeepSeek。
+**DeepSeek Key、可选 Brave Search Key、Notion 连接密钥、登录资料和本机聊天记录只在本机保存，不提交到 Git，也不打包分发。** 调用 DeepSeek 时，Key 通过官方 HTTPS API 用于认证，不传给 Notion。选定的页面内容会作为任务上下文发送给 DeepSeek。启用联网来源后，搜索词发送到 Brave Search，读到的公开网页正文作为资料发送给 DeepSeek。
 
 - 本机运行资料集中保存在 `.notion-switch/`；整个目录已忽略。
 - `research/` 包含本机验证记录，`dist/` 包含构建产物，均不提交。
@@ -101,13 +109,13 @@ Windows 迁移包构建产物保存在 `dist/`，不创建桌面文件。配置�
 
 本地校验失败、官方明确的参数拒绝与结果不确定的写入分别记录。明确未执行的请求不会锁住整轮其他操作；断网、服务端未知错误及写入后的读回失败仍停止后续写入。中间插入使用当前 `position` 参数，通过插入前后的块 ID、顺序和内容核验，回包中的已有相邻块不会被当成新建块。
 
-自动测试覆盖 Agent、工具调用、凭据隔离、模型路由、流式中断、历史、选区、更新与打包等行为；真实 Notion 界面和未来网页版本仍需另行验收。浮动编辑预览已验证，应用修改及浮动框后续追问的完整验收仍有限。旧协议和未知协议不会自动回退到 Notion 托管推理。
+自动测试覆盖 Agent、工具调用、凭据隔离、模型路由、流式中断、历史、选区、更新与打包等行为；真实 Notion 界面和未来网页版本仍需另行验收。浮动编辑预览已验证，应用修改及浮动框后续追问的完整验收仍有限。已接管的聊天、浮动编辑、公式与基础 Autofill 不会因本地失败而回退到 Notion 托管推理；其他原生功能仍需逐项核对，配置 DeepSeek 不等于替换所有 AI 入口。完整边界见 [对接检查记录](docs/AI-INTEGRATION-AUDIT.md)。
 
-依赖已审核 Notion 网页缓存的四项兼容测试，在没有对应本机缓存时明确跳过；第三方网页代码不随本项目分发。其余测试可在干净源码目录运行。
+依赖已审核 Notion 网页缓存的兼容测试，在没有对应本机缓存时明确跳过；第三方网页代码不随本项目分发。真实 GPU 推理测试需显式启用；跳过原因和本轮结果见 [Windows 验收清单](docs/WINDOWS-VALIDATION-CHECKLIST.md)。
 
-本机聊天记录不会同步到 Notion 云端或其他设备。目前仅接入 DeepSeek。
+本机聊天记录不会同步到 Notion 云端或其他设备。模型服务目前仅接入 DeepSeek，可选搜索服务为 Brave Search。
 
-配置的“离线语音”支持 Medium / Large-v3 Turbo 模型选择、缺失组件自动下载和直接麦克风录音测试。Windows 使用 NVIDIA CUDA FP16，M1 等 Apple Silicon Mac 使用 CPU INT8；M1 和完整 Mac Notion 桌面版尚未实机验收。原生录音按片段离线识别，支持尾段收尾和去重。停止后默认把转录文字与手写笔记交给 DeepSeek，生成原生“摘要”标签并读回核验；原转录、手写笔记保留。可在配置关闭自动摘要，仅使用本机转写。`npm run package:speech` 可导出不包含模型、运行环境或用户资料的独立转写模块。详见 [跨平台转写接口](docs/SPEECH-INTERFACE.md)、[原生速记适配](docs/OFFLINE-SPEECH.md) 和 [摘要接口](docs/MEETING-SUMMARY-INTERFACE.md)。
+配置的“离线语音”支持 Medium / Large-v3 Turbo 模型选择、缺失组件自动下载和直接麦克风录音测试。Windows 使用 NVIDIA CUDA FP16，M1 等 Apple Silicon Mac 使用 CPU INT8；本轮没有新增 Mac 硬件推理或真人录音验收。原生录音按片段离线识别，支持尾段收尾和去重。停止后默认把转录文字与手写笔记交给 DeepSeek，生成原生“摘要”标签并读回核验；原转录、手写笔记保留。可在配置关闭自动摘要，仅使用本机转写。`npm run package:speech` 可导出不包含模型、运行环境或用户资料的独立转写模块。详见 [跨平台转写接口](docs/SPEECH-INTERFACE.md)、[原生速记适配](docs/OFFLINE-SPEECH.md) 和 [摘要接口](docs/MEETING-SUMMARY-INTERFACE.md)。
 
 ## 许可证
 

@@ -71,6 +71,6 @@ test('an update helper started from the runtime releases that directory for the 
     await ready;
     assert.doesNotThrow(() => fs.renameSync(runtime, previous), 'the helper must not keep the runtime busy during its own update');
   } finally {
-    if (worker && worker.exitCode === null) { const exited = once(worker, 'exit'); worker.kill(); await exited; }
+    if (worker && worker.exitCode === null) { worker.ref(); const exited = once(worker, 'exit'); worker.kill(); await exited; }
   }
 });

@@ -5,6 +5,19 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { checkStagedSecrets } from '../scripts/check-staged-secrets.mjs';
 
+test('vendored dist source remains scanned while root build output stays private', t => {
+  const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-git-vendor-dist-'));
+  t.after(() => { assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
+  const git = args => execFileSync('git', args, { cwd: root, windowsHide: true, stdio: 'pipe' }); git(['init', '-q']);
+  const source = 'src/vendor/unpdf/dist/pdfjs.mjs'; fs.mkdirSync(path.dirname(path.join(root, source)), { recursive: true }); fs.writeFileSync(path.join(root, source), 'export const synthetic = true;'); git(['add', source]);
+  assert.equal(checkStagedSecrets(root).privateFilesFound, false);
+  fs.mkdirSync(path.join(root, 'dist')); fs.writeFileSync(path.join(root, 'dist/private.txt'), 'private fixture'); git(['add', '-f', 'dist/private.txt']);
+  assert.throws(() => checkStagedSecrets(root), /停止提交/); git(['rm', '--cached', '-q', 'dist/private.txt']);
+  fs.mkdirSync(path.join(root, '.notion-switch')); const key = 'fixture-vendor-key-must-stay-private'; fs.writeFileSync(path.join(root, '.notion-switch/deepseek-api-key.txt'), key);
+  fs.writeFileSync(path.join(root, source), `export const fixture = '${key}';`); git(['add', source]);
+  assert.throws(() => checkStagedSecrets(root), error => !error.message.includes(key) && error.message.includes('停止提交'));
+});
+
 test('the Git guard inspects staged blobs, rejects local key values and blocks forced private files', t => {
   const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-git-secrets-'));
   t.after(() => { assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });

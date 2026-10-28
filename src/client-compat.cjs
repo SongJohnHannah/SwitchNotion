@@ -2,6 +2,8 @@ const { createHash } = require('node:crypto');
 const { compatibleModule } = require('./client-module-compat.cjs');
 const { adaptRecordingClient } = require('./speech/client.cjs');
 const { adaptAutomatic } = require('./compat/automatic.cjs');
+const { adaptAutofill, isAutofillCandidate } = require('./compat/autofill.cjs');
+const { adaptInlineDocuments, isInlineDocumentCandidate } = require('./compat/inline-documents.cjs');
 // This local provider uses the native chat controls independently of Notion credits.
 // Keep workspace restriction checks above this insertion, and all other features intact.
 // Both reviewed releases contain the same 811656 availability module.
@@ -18,6 +20,14 @@ const reviewedAssets = {
 };
 const anchor = /let [A-Za-z_$][\w$]*=\(null==\(r=\(o=e\[u\]\)\.isOverrideAllowed\)\?void 0:r\.call\(o,n\.data\)\)\?\?!0/g;
 function adaptClient(source, asset, { localSpeechEnabled = false, audioEndpoint, inputMode = 'meeting', onAdaptation } = {}) {
+  if (isInlineDocumentCandidate(source, asset)) {
+    try { return adaptInlineDocuments(source, asset, onAdaptation); }
+    catch (error) { error.notionSwitchKind = 'attachments'; throw error; }
+  }
+  if (isAutofillCandidate(source, asset)) {
+    try { return adaptAutofill(source, asset, onAdaptation); }
+    catch (error) { error.notionSwitchKind = 'autofill'; throw error; }
+  }
   if (reviewedAssets[asset]) {
     if (createHash('sha256').update(source).digest('hex') !== reviewedAssets[asset]) throw Error('Unreviewed native client asset');
   } else if (!compatibleModule(source, asset)) {
@@ -49,6 +59,8 @@ function adaptClient(source, asset, { localSpeechEnabled = false, audioEndpoint,
   return source.replace(matches[0][0], 'if(u==="ai_usage")return{type:"available",limit:{type:"per_use",amount:"unlimited"}};if(u==="ai_model_selection")return{type:"available",limit:{type:"none"}};' + speech + matches[0][0]);
 }
 async function adaptClientAsync(source, asset, options = {}) {
+  if (isInlineDocumentCandidate(source, asset)) return adaptClient(source, asset, options);
+  if (isAutofillCandidate(source, asset)) return adaptClient(source, asset, options);
   if (reviewedAssets[asset] || compatibleModule(source, asset)) return adaptClient(source, asset, options);
   return require('./compat/background.cjs').adaptInBackground(source, asset, options);
 }

@@ -6,10 +6,10 @@ const { modules: macModules } = require('./macos-reviewed.json');
 const { stopWithAudioFlush } = require('../speech/client.cjs');
 const cache = new Map(), ids = Object.keys(reviewed);
 const hint = new RegExp('(?:^|[,{])\\s*(?:' + ids.join('|') + ')\\s*\\(');
-const knownAsset = /^(?:95271|96975|32453|17521|89269|17048)-[a-f\d]{16}\.js$/;
+const knownAsset = /^(?:95271|96975|32453|17521|89269|17048|57590|51103)-[a-f\d]{16}\.js$/;
 const scriptAsset = /^\d+-[a-f\d]{16}\.js$/;
 const digest = source => createHash('sha256').update(source).digest('hex');
-const likelyTarget = (source, asset) => knownAsset.test(asset) || typeof source === 'string' && hint.test(source);
+const likelyTarget = (source, asset) => knownAsset.test(asset) || typeof source === 'string' && (hint.test(source) || /[,{]\s*(?:414741|175529)\s*\(/.test(source));
 
 function modulesIn(source) {
   if (typeof source !== 'string' || source.length > 2 * 1024 * 1024) throw Error('Unsupported script size');

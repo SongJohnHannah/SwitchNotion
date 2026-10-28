@@ -151,7 +151,7 @@ function createSession({ request, authorize, mutate, signal }) {
       const data = await request('POST', 'search', { query: args.query, filter: { value: 'data_source', property: 'object' }, page_size: 25, ...(args.start_cursor ? { start_cursor: args.start_cursor } : {}) });
       const results = [], skipped = [];
       for (const source of data.results || []) {
-        try { await authorize(source.id, 'data_source'); } catch (error) { if (signal?.aborted) throw error; skipped.push({ data_source_id: source.id, error: 'Notion 数据源不在本地授权范围。' }); continue; }
+        try { await authorize(source.id, 'data_source'); } catch (error) { if (signal?.aborted) throw error; if (error.code !== 'NOTION_RESEARCH_SCOPE') skipped.push({ data_source_id: source.id, error: 'Notion 数据源不在本地授权范围。' }); continue; }
         results.push({ data_source_id: uuid(source.id), database_id: source.parent?.database_id || null, title: plain(source.title), url: source.url || urlFor(source.parent?.database_id || source.id) });
       }
       return { results, scanned: (data.results || []).length, skipped, incomplete_pages: [], has_more: !!data.has_more, next_cursor: data.next_cursor || null, complete: !data.has_more && !skipped.length };

@@ -33,6 +33,21 @@ test('foreign origins, ports and windows cannot borrow a previously observed nat
   }
 });
 
+test('Autofill view queries retain the selected native account and workspace routing', async () => {
+  const calls = [], bridge = new MeetingNativeBridge(), session = { async fetch(url, options) {
+    calls.push({ url, options }); return new Response(JSON.stringify({ result: { reducerResults: { results: { type: 'results', blockIds: [], hasMore: false } } } }));
+  } };
+  const request = new Request('https://app.notion.com/api/v3/triggerLiteAgentAutofill', { headers: {
+    'x-notion-active-user-header': ids.user, 'x-notion-space-id': ids.space, 'x-notion-cell-hint': 'view-query-cell'
+  } }), store = bridge.forRequest(request, session, ids.space);
+  const payload = { source: { type: 'collection', id: ids.notes, spaceId: ids.space }, loader: { searchQuery: 'synthetic-only' } };
+  await store.api('queryCollection', payload, { spaceId: ids.space });
+  assert.equal(calls[0].url, 'https://app.notion.com/api/v3/queryCollection');
+  assert.equal(calls[0].options.headers['x-notion-active-user-header'], ids.user);
+  assert.equal(calls[0].options.headers['x-notion-cell-hint'], 'view-query-cell');
+  assert.equal(calls[0].options.credentials, 'include'); assert.deepEqual(JSON.parse(calls[0].options.body), payload);
+});
+
 test('recording resumes only under its original account and omits native cookies from object-storage uploads', async () => {
   const calls = [], bridge = new MeetingNativeBridge({ uploadFetch: async (url, options) => { calls.push({ url, options }); return new Response(''); } });
   const session = { async fetch(url, options) {

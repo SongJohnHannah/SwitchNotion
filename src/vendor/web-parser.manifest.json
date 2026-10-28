@@ -1,0 +1,134 @@
+[
+  {
+    "name": "entities",
+    "version": "4.5.0",
+    "license": "BSD-2-Clause",
+    "url": "https://registry.npmjs.org/entities/-/entities-4.5.0.tgz",
+    "integrity": "sha512-V0hjH4dGPh9Ao5p0MoRY6BVqtwCjhz6vI5LT8AJ55H+4g9/4vbHx1I54fS0XuclLhDHArPQCiMjDxjaL8fPxhw==",
+    "modifiedRequires": false,
+    "files": [
+      {
+        "file": "LICENSE",
+        "sha256": "cb992345949ccd6e8394b2cd6c465f7b897c864f845937dbf64e8997f389e164"
+      },
+      {
+        "file": "lib/decode_codepoint.js",
+        "sha256": "353d795ba2d5122db249498a1d04ec47271bf39facf732cf1c0e9c12c2f3fb83"
+      },
+      {
+        "file": "lib/generated/decode-data-html.js",
+        "sha256": "ab101d8fe05c8ab8d87260d073b839fe7db39a34d8dbb1a1f316585c9a393730"
+      },
+      {
+        "file": "lib/generated/decode-data-xml.js",
+        "sha256": "df2b60bce1de9276201f1a3e42a12c60553f812685c5fe190dc46489f4bcaccd"
+      },
+      {
+        "file": "lib/decode.js",
+        "sha256": "40dc92b31b1bcdebc537607db1ea05c6788586a2c6b128d54d2557a7d529aec6"
+      },
+      {
+        "file": "lib/generated/encode-html.js",
+        "sha256": "729d927ec33d872cb2a7323e7e521711b11552f9cc9d7a2ad81a567b2261be71"
+      },
+      {
+        "file": "lib/encode.js",
+        "sha256": "9f12a86e9cb0f3f86e8b2dde36e81fe950efce94d47add0b627c9f765319d381"
+      },
+      {
+        "file": "lib/escape.js",
+        "sha256": "4577d8d88666f89232f19ca0e989318a02521373ef900cbec3abb055360897b8"
+      },
+      {
+        "file": "lib/index.js",
+        "sha256": "da5c4857d419965b32a58c137e07267ec0170235cd7a903df8f4e8f778344dad"
+      },
+      {
+        "file": "package.json",
+        "sha256": "c92f657f679669a91bc32cd98f0b4812b3f4a9c6f3b3af3022a70cb25b7efc7c"
+      }
+    ]
+  },
+  {
+    "name": "parse5",
+    "version": "7.2.1",
+    "license": "MIT",
+    "url": "https://registry.npmjs.org/parse5/-/parse5-7.2.1.tgz",
+    "integrity": "sha512-BuBYQYlv1ckiPdQi/ohiivi9Sagc9JG+Ozs0r7b/0iK3sKmrb0b9FdWdBbOdx6hBCM/F9Ir82ofnBhtZOjCRPQ==",
+    "modifiedRequires": true,
+    "files": [
+      {
+        "file": "LICENSE",
+        "sha256": "8c535800331e1e4439835555b3f9edc7fe9dee2fab0d8bbbd5a982e8b8343d4d"
+      },
+      {
+        "file": "dist/cjs/tree-adapters/default.js",
+        "sha256": "b2ac880ea08ee723a47e1bd00e0a144e4ecb185405709327d60abe46558020f6"
+      },
+      {
+        "file": "dist/cjs/common/doctype.js",
+        "sha256": "dec89870f895809fe6218dbbf8ad9cff37022f08c1a5ea6f6d871dc650e0a52b"
+      },
+      {
+        "file": "dist/cjs/common/error-codes.js",
+        "sha256": "e7d80ffd892f6862ab5810ac745b85bf95addfd7ef31279d3f9be5677929f1b1"
+      },
+      {
+        "file": "dist/cjs/common/foreign-content.js",
+        "sha256": "d602e9fa1a43cd6e671ef0d14f1ac50d617a882ac134cf18b07c07cd97847321"
+      },
+      {
+        "file": "dist/cjs/parser/formatting-element-list.js",
+        "sha256": "189aa89f6f573797b0bcdae848329cac396555e19e9f4f1f77143a5946e5eab1"
+      },
+      {
+        "file": "dist/cjs/common/html.js",
+        "sha256": "5fde09fb7c94e30a013f99386954b724105b33504e3f505ffc370f7c21074d1e"
+      },
+      {
+        "file": "dist/cjs/index.js",
+        "sha256": "78db255973138b7c9293ace340b700a9a557e0ada14b5eda7cde56017bf78480"
+      },
+      {
+        "file": "dist/cjs/parser/index.js",
+        "sha256": "e9f585f7810990d6e87edea0d544512f1a8a6f8c658b600b90eea43cc4bf28e2"
+      },
+      {
+        "file": "dist/cjs/serializer/index.js",
+        "sha256": "d8123f4543fe298093a676d28c9611a01d66f103978c4c2f2afb3b9aac77bed0"
+      },
+      {
+        "file": "dist/cjs/tokenizer/index.js",
+        "sha256": "78d7070daa7324a6eb26a634dfc81f052cc956bb76dbef9e140d863e7fe887e1"
+      },
+      {
+        "file": "dist/cjs/tree-adapters/interface.js",
+        "sha256": "d43aa81f5bc89faa359e0f97c814ba25155591ff078fbb9bfd40f8c7c9683230"
+      },
+      {
+        "file": "dist/cjs/parser/open-element-stack.js",
+        "sha256": "ae85a9e207271daee8f32d4b0178ef58db8a899b4e4069542b8fa0c97f85a7a0"
+      },
+      {
+        "file": "dist/cjs/tokenizer/preprocessor.js",
+        "sha256": "4fd0f415ea391eabd05acd7069ebe8c61b11e8e9c3d141cc1aafe25c67af4496"
+      },
+      {
+        "file": "dist/cjs/common/token.js",
+        "sha256": "294877dbb8f11cfd790b93488dc3baa8be5f5390204e471cb5d486f984981fbb"
+      },
+      {
+        "file": "dist/cjs/common/unicode.js",
+        "sha256": "0f4ca9d0f95735a952dbd0eee5741f6a09194724d5df3ab1e31a6fcc80aa0ea8"
+      },
+      {
+        "file": "dist/cjs/package.json",
+        "sha256": "dbf8353f77358bc12169b7bb7301e1978d5b503e002ee927229a8993672818fc"
+      },
+      {
+        "file": "package.json",
+        "sha256": "b44cccf4b2cf4b4d07a2464b3021aa284f9b3d2222f9ef0503dc66b4f8f4f197"
+      }
+    ]
+  }
+]

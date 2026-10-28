@@ -53,6 +53,19 @@ test('floating writer never silently drops additional page or file references', 
   }
 });
 
+test('floating writer never answers after silently dropping a native attachment or unknown source step', async () => {
+  let requested = false;
+  const native = new NativeMock({ provider: { status: () => ({ mode: 'deepseek' }), config: () => ({}), async* generate() { requested = true; yield 'bad'; } } });
+  for (const source of [{ type: 'attachment', fileUrl: 'https://file.notion.so/f/f/synthetic', fileName: '资料.pdf', contentType: 'application/pdf' },
+    { type: 'computer-file', fileUrl: 'https://file.notion.so/f/f/synthetic', fileName: '资料.csv', contentType: 'text/csv' },
+    { type: 'future-source', value: { source: 'must not ignore' } }]) {
+    const payload = input(); payload.transcript.splice(3, 0, { id: '99999999-9999-4999-8999-999999999999', ...source });
+    const response = await native.handle('runInferenceTranscript', payload);
+    assert.ok((await response.text()).includes('尚未支持'), source.type);
+    assert.equal(requested, false, source.type);
+  }
+});
+
 test('closing or stopping inline preview cancels the provider without applying text', async () => {
   let modelSignal;
   const native = new NativeMock({ provider: { status: () => ({ mode: 'deepseek' }), config: () => ({ mode: 'deepseek' }), async* generate({ signal }) { modelSignal = signal; yield 'partial'; await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true })); signal.throwIfAborted(); } } });

@@ -1,6 +1,6 @@
 const { NativeMeetingStore } = require('./meeting-summary-store.cjs');
 const { uuid } = require('./native-context.cjs');
-const allowed = new Set(['getRecordValues', 'saveTransactionsFanout', 'getUploadSpaceFileUrl']);
+const allowed = new Set(['getRecordValues', 'queryCollection', 'saveTransactionsFanout', 'getUploadSpaceFileUrl']);
 class MeetingNativeBridge {
   constructor({ uploadFetch = globalThis.fetch } = {}) { this.contexts = []; this.uploadFetch = uploadFetch; }
   observe(request, session) {

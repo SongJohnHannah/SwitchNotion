@@ -282,7 +282,16 @@ class LoginService {
     try {
       const file = within(this.root, 'launcher.local.json'), settings = readJson(file), executable = settings.nodeExecutable;
       if (!this.platform.isNodeExecutable(executable)) throw failure('helper_unavailable');
-      const project = usesMacKeychain(this.platform) ? fs.realpathSync(settings.projectDirectory) : path.dirname(this.root), helper = path.join(project, 'scripts', 'login-helper.cjs'), reopen = path.join(project, 'scripts', 'open-settings.mjs');
+      let project;
+      if (usesMacKeychain(this.platform)) project = fs.realpathSync(settings.projectDirectory);
+      else {
+        // Windows also supports state outside the project. Use the recorded
+        // project, retaining the legacy default when no record was saved.
+        const recorded = settings.projectDirectory;
+        if (recorded !== undefined && (typeof recorded !== 'string' || !path.isAbsolute(recorded))) throw failure('helper_unavailable');
+        project = recorded ? fs.realpathSync(recorded) : path.dirname(this.root);
+      }
+      const helper = path.join(project, 'scripts', 'login-helper.cjs'), reopen = path.join(project, 'scripts', 'open-settings.mjs');
       if (!fs.statSync(helper).isFile() || !fs.statSync(reopen).isFile()) throw failure('helper_unavailable');
       return { executable, helper };
     } catch { throw failure('helper_unavailable'); }
@@ -291,7 +300,7 @@ class LoginService {
     requireLoginSync(this.platform);
     const { executable, helper } = this.runtime();
     return new Promise((resolve, reject) => {
-      this.execFileImpl(executable, [helper, action, '--root', this.root], { windowsHide: true, timeout: 30000, maxBuffer: 65536, env: { ...process.env, NODE_NO_WARNINGS: '1' } }, (error, stdout) => {
+      this.execFileImpl(executable, [helper, action, '--root', this.root], { ...(this.platform.id === 'win32' ? { cwd: path.dirname(path.dirname(helper)) } : {}), windowsHide: true, timeout: 30000, maxBuffer: 65536, env: { ...process.env, ...(this.platform.id === 'win32' ? { NOTION_SWITCH_ROOT: this.root } : {}), NODE_NO_WARNINGS: '1' } }, (error, stdout) => {
         try { const result = JSON.parse(stdout || '{}'); if (!result.ok) throw failure(Object.hasOwn(messages, result.code) ? result.code : 'helper_unavailable'); if (error) throw failure('helper_unavailable'); resolve(result.result); }
         catch (caught) { reject(safeError(caught, 'helper_unavailable')); }
       });
@@ -301,7 +310,7 @@ class LoginService {
     requireLoginSync(this.platform);
     const { executable, helper } = this.runtime();
     return new Promise((resolve, reject) => {
-      const child = this.spawnImpl(executable, [helper, 'apply-and-restart', '--root', this.root, '--stage', stageId, '--parent-pid', String(this.currentPid)], { windowsHide: true, detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: { ...process.env, NODE_NO_WARNINGS: '1' } });
+      const child = this.spawnImpl(executable, [helper, 'apply-and-restart', '--root', this.root, '--stage', stageId, '--parent-pid', String(this.currentPid)], { ...(this.platform.id === 'win32' ? { cwd: path.dirname(path.dirname(helper)) } : {}), windowsHide: true, detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: { ...process.env, ...(this.platform.id === 'win32' ? { NOTION_SWITCH_ROOT: this.root } : {}), NODE_NO_WARNINGS: '1' } });
       let settled = false;
       const timeout = setTimeout(() => finish(false), 10000);
       const finish = accepted => {

@@ -1,16 +1,18 @@
-# NotionSwitch Windows 迁移包
+# NotionSwitch Windows 使用说明
 
-这是 Windows x64 包，附带 Node.js 运行环境。无需安装 Node.js、修改配置文件或运行命令。Mac 使用独立的 Apple Silicon 版本，见 `MAC-使用说明.md`。
+当前项目在 Windows 直接双击根目录 **Switch Notion.exe** 即可使用，无需重新打包。迁移包附带 Node.js 运行环境；本机已经完成配置的项目继续使用现有入口和资料。Mac 的既有使用方式见 `MAC-使用说明.md`，本次不重新打包 Mac。
 
 接手验证、修复和后续实现请使用 [Windows 待验证与修复清单](docs/WINDOWS-VALIDATION-CHECKLIST.md)。清单已包含最新引用修复、Mac 原生验收证据、Windows 引用逐项矩阵及尚未对接的 AI 功能待办；请分别记录待实现和实机验收结果。
 
 ## 第一次启动
 
-1. 将 ZIP 完整解压到一个可写文件夹；不要直接在压缩包中运行。
+1. 将项目放在可写文件夹；如果拿到的是 ZIP，先完整解压。
 2. 双击项目或解压目录根部的 **Switch Notion.exe**（兼容入口 **NotionSwitch.exe**）。程序会自动查找本机官方 Notion 桌面版，并在当前文件夹内准备隔离副本。
 3. 如果没有安装 Notion，会出现准备窗口。点击“打开 Notion 官网”，安装并登录后点“重新检测”。也可以选择其他位置已安装的 Notion.exe。
 4. 双击 **NotionSwitch 配置.exe**，填写 DeepSeek 和需要访问的 Notion 工作区连接密钥。Notion 登录页中可从本机 Notion 同步登录；先确认页面已同步并退出原版 Notion。
 5. 从隔离原型右下角的原生 AI 入口使用 DeepSeek。
+
+可选联网来源：在配置中心 **DeepSeek → 联网搜索与网页阅读** 启用并保存。读取公开网址无需额外密钥；网页搜索需填写独立的 Brave Search API Key。该功能默认关闭，搜索词发送到 Brave，读到的正文作为资料发送给 DeepSeek。覆盖侧栏个人 Agent，以及原生研究模式明确选择“仅网页”的分支；包含 Notion 页面/数据库或全部来源的研究仍等待正文接入授权。详见 [联网来源说明](docs/WEB-SOURCES-INTERFACE.md) 和 [研究模式范围](docs/NATIVE-RESEARCH-INTERFACE.md)。
 
 迁移包不包含 Notion 客户端，也不包含这台电脑的 API Key、登录资料或聊天历史。新电脑需要重新配置密钥和登录。Notion 中已保存的页面仍在原来的账号和工作区中。
 
@@ -28,6 +30,12 @@
 ## 图片聊天
 
 选择 DeepSeek Flash 后，可从原生输入框上传 PNG、JPEG、GIF 或 WebP 图片。发送后，图片保留在聊天记录中，可查看缩略图和打开预览；升级前已保存的图片消息也会恢复展示。图片文件保存在本机资料目录的 `image-attachments` 中，与 Mac 使用同一套展示和读取逻辑。Windows 分发包已通过上传、预览和重启读取的自动测试，桌面界面仍需 Windows 实机复核。
+
+## 文档聊天
+
+在原生侧栏输入框主动上传 TXT、Markdown、CSV/TSV、JSON、文字型 PDF、DOCX 或 XLSX，并输入处理问题后发送。必要正文、文件名、页码或单元格位置会交给已配置的 DeepSeek；同账号、工作区和对话的后续问题可继续使用这些附件。文档可使用 Flash 或 Pro；当前消息混合图片时仍需 Flash。
+
+单文件最多 16 MiB，本轮当前与历史附件合计最多 8 个、24 MiB、240,000 个解析资料字符。扫描 PDF 需要 OCR，当前不支持；宏、脚本和公式不执行，缺失的公式缓存会提示。原始文档保存在既有资料目录的 `document-attachments`，不自动读取 Notion 页面里的文件；详见 [文档附件接口](docs/NATIVE-DOCUMENTS-INTERFACE.md)。实际路由和合成模型验收通过，原生上传/下载控件仍待手工验收。已有进程请正常退出后重新双击入口加载新源码。
 
 ## 许可
 

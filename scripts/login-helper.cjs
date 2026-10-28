@@ -16,7 +16,15 @@ function argumentsFor(values) {
     options[key] = values[index + 1];
   }
   const root = path.resolve(options['--root'] || fixedRoot);
-  if (!allowedRoots.some(allowed => platform.samePath(root, allowed))) throw Error('Invalid helper root');
+  if (!allowedRoots.some(allowed => platform.samePath(root, allowed))) {
+    const selected = process.env.NOTION_SWITCH_ROOT;
+    // A custom state directory must be selected by the calling launcher and
+    // bound to this exact project. An arbitrary --root is still rejected.
+    if (platform.id !== 'win32' || typeof selected !== 'string' || !path.isAbsolute(selected) || !platform.samePath(root, selected)) throw Error('Invalid helper root');
+    const launcher = JSON.parse(fs.readFileSync(path.join(root, 'launcher.local.json'), 'utf8'));
+    if (typeof launcher.projectDirectory !== 'string' || !path.isAbsolute(launcher.projectDirectory) ||
+        !platform.samePath(fs.realpathSync(launcher.projectDirectory), fs.realpathSync(project))) throw Error('Invalid helper project');
+  }
   return { action, root, stageId: options['--stage'], parentPid: Number(options['--parent-pid']) };
 }
 function reopenSettings(root) {

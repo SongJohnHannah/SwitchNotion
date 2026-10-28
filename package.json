@@ -21,6 +21,8 @@
     "prepare:launchers": "node scripts/prepare-root-launchers.mjs",
     "package:speech": "node scripts/package-speech.mjs",
     "check:secrets": "node scripts/check-staged-secrets.mjs",
+    "check:windows": "node scripts/check-windows.mjs",
+    "check:ai-runtime": "node scripts/check-ai-runtime.mjs",
     "pretest": "node -e \"require('node:fs').mkdirSync('.notion-switch',{recursive:true})\"",
     "test": "node --test tests/*.test.mjs"
   }

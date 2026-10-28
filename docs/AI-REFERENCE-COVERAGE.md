@@ -1,13 +1,22 @@
 # AI 引用验收与功能对接范围
 
-检查日期：2026-10-27。范围是当前 SwitchNotion 代码、原生请求结构和可用的合成测试资料；界面显示一个入口不代表它已接入本地模型。后续 Notion 新功能需要重新核对协议。
+检查日期：2026-10-28。已拉取基线 `e8ba1ea`，本轮按用户最终要求通过现有 `main` 分支交付。范围是当前 SwitchNotion 代码、原生请求结构和可用的合成测试资料；界面显示一个入口不代表它已接入本地模型。后续 Notion 新功能需要重新核对协议。逐份文档核对见 [对接检查记录](AI-INTEGRATION-AUDIT.md)。
+
+附件阶段结束时 HEAD 已由另一任务推进至采集模块提交 `06e3734`；本任务保留其变更，未验收采集模块。
+
+用户最新核对范围是已有 AI 对接、客户端需要原生/非公开协议适配的 AI 流程，以及 Mac 兼容性。下方未实现项是差距记录，不能自动视为本轮全部新建的任务。Mac 基础流程和 AI 回复引用的既有证据，与新增功能的共用源码测试、尚缺的原生控件验收分开记录。
 
 ## 本次修复
 
 - 从 AI 回复中选中文字后“Ask AI”，原生请求使用 `threadContext.annotations[].type = chat_selection`。此前此字段被忽略，现在会作为引用资料传给模型，并保留在原生消息、本地历史、重启恢复和上下文整理中。
 - 混合页面选区与对话片段时保留两种来源。引用中的文字与 comment 作为资料处理；对话事件 ID 不能当作页面 ID 使用。字段类型、数量和总长度不合法时明确失败，不退回整页回答。
-- 浮动文字编辑框的额外 `pointers` 引用尚无读取通道。此前会被静默忽略，现在在调用模型前提示转到侧栏 Agent，避免缺少资料时继续生成。
+- 浮动文字编辑框的 `pointers` 已接入共用只读读取器，保留额外页面、块、表格和数据库属性来源。空容器选区、截断文字选区现在会读取完整内容，继续分页；读取失败或超限时不调用模型，不用整页替代文字范围。引用指针保存到原生历史，获取的附加正文不重复保存。
+- 浮动框已接入本机主动上传的 `attachment`/`computer-file` 文字文档和历史恢复；任意旧远程附件、Agent 下载和未知步骤仍明确失败，不静默忽略后回答。页面媒体和未知块保留实际类型、字段、链接及正文不可用标记；待办状态、代码语言、页面提及等原始字段随读取保留。
+- AI block 增加明确指定的同工作区页面与数据库来源，去重并保留顺序；未选的当前页正文不读取。数据库完整读取最多 200 条活动记录的属性和自身正文，明确标注未应用视图筛选；生成结束复核字段、配置、记录范围、正文和权限。搜索、连接器及跨工作区来源仍明确拒绝。见 [来源接口](NATIVE-AI-BLOCK-INTERFACE.md)。
+- 独立公式编辑器接入原生 `formulas` 请求和 `generate-formula` JSON 事件；提取字段结构、现有公式与编译错误，排除样本行和用户记录。结果交回原生编辑器校验，由用户确认保存，取消不返回可应用公式。见 [公式接口](NATIVE-FORMULA-INTERFACE.md)。
+- 数据库基础 Autofill 增加所选记录与最多 200 条的完整筛选视图链路：原生排队、字段归属与来源检查、生成/选项校验、受限写入和读回、单行停止、重试/重启及进度恢复。每个窗口使用自己的有效筛选/排序/搜索快照；范围不完整或发生变化时拒绝旧结果。公开生产者和实际路由重放已通过真实 DeepSeek 合成验收；其他字段/工作流类型仍待实现，见 [Autofill 接口](NATIVE-AUTOFILL-INTERFACE.md)。
 - 明确区分“读取链接/附件元数据”和“读取正文/识别媒体”。模型不能仅凭 URL 或说明声称已浏览网页、阅读 PDF、看见图片或听过音视频。
+- 侧栏与浮动框本地对话增加账号/工作区核对，覆盖创建重试、历史/监听、续聊、停止、记录批量读取和元数据入口；首次引用读取期间也保留归属，防止并发请求抢占。被拒绝的本地记录返回无权限，不转交远程读取。旧记录缺少创建账号时保留原文件，要求当前账号新建对话，不能自动认领。
 
 ## 引用逐项结果
 
@@ -28,7 +37,9 @@
 | 数据库视图链接 | 有数据库 ID 和视图 ID 时先读筛选/排序；仅有数据库块不能证明当前 UI 视图范围 | API 与模型实测 Default view；视图、筛选自动测试 |
 | AI 回复选区 | 已修复丢失，作为对话引用资料保留 | 模型实测正确复述合成颜色和数字；Mac 原生 Add to chat、发送、回复及重新加载验收通过；历史、压缩、混合引用测试 |
 | 浮动编辑框文字选区 | 解释、润色、翻译等原生文字预览可用 | 原生协议自动测试；不提供直接写入工具 |
-| 浮动框整表/整库、额外页面/文件 pointers、截断预览 | 明确提示使用侧栏 Agent；这些入口仍未实现完整读取 | 自动测试确认不调用模型、不静默丢弃 |
+| 浮动框附加页面/块 pointers | 按显式工作区读取已授权来源，保留历史；子页面链接不自动展开 | 真实 DeepSeek 合成资料、读取/权限/取消测试、两种实际暂存包链路 |
+| 浮动框整表/整库、截断预览 | 表格继续读取行和分页；数据库读取记录属性及长字段，不自动读取所有记录正文；文字范围用字素位置精确读取 | 真实模型表格分页、既有合成数据库只读 API、字素/嵌套/跨块/过期选区测试 |
+| 浮动框文件附件与未知来源 | 已接通本地 multipart 上传、处理回执、文档资料、原生预览及历史续问；旧远程 URL、Agent 下载和未知来源明确失败 | 14 项新增协议/归属/客户端检查及真实模型新合成文件；原生窗口仍待验收，见[文档接口](NATIVE-DOCUMENTS-INTERFACE.md) |
 | 聊天图片上传、粘贴、缩略图、预览、恢复 | Flash 支持 PNG/JPEG/GIF/WebP；Pro 输入图片明确失败 | 图片协议、模型路由、本地上传、恢复与两种分发包自动测试；本次未新增真机图片上传验收 |
 | 页面图片、PDF、文件、音频、视频块 | 可读类型、链接、说明；尚未把这些块的二进制正文自动转换成模型输入 | 分发包模拟读取与媒体限制；不能等同“附件正文已读” |
 | 书签、嵌入、link_preview | 可读已有元数据，尚无网页抓取工具 | 书签/嵌入 API 和模型实测；link_preview 模拟测试 |
@@ -40,11 +51,15 @@ API 验收共 39 项：38 通过，1 项评论权限受限。覆盖 31 个块实
 
 ## Mac 与 Windows 验证边界
 
+最新补充（2026-10-28）：两份先前缺失的 Mac 公共协议样本已恢复并通过哈希、指纹及适配检查；新增两种资料目录的跨调用目录测试。项目回归 634 项，631 通过、3 项显式 GPU 用例跳过，0 失败/取消，排除打包与采集。71 个生产模块的 136 处静态相对引用没有大小写不匹配。此处证明源码/协议/路径契约，不新增 Mac 设备或原生窗口验收结论，详见 [Mac 核对矩阵](AI-INTEGRATION-AUDIT.md#mac-兼容核对补充)。
+
 两种打包测试会加载**实际暂存到包里的源文件**，执行原生选区 → Agent → 工作区路由 → 模拟 HTTP → 工具结果 → 模型 → 本地历史恢复的完整流程。覆盖 35 种块类型、混合多块、表格分页、只读限制，以及中文和空格路径；独立图片链路同时验证两种包。
 
 35 种模拟类型包括：paragraph、heading_1/2/3/4、bulleted_list_item、numbered_list_item、quote、to_do、toggle、callout、code、equation、divider、breadcrumb、table_of_contents、table、table_row、column_list、column、synced_block、link_to_page、child_page、child_database、image、video、audio、file、pdf、bookmark、embed、link_preview、tab、meeting_notes、unsupported。模拟可读不表示官方允许创建每一种类型。
 
-本次完整回归：382 项，362 通过、20 跳过、0 失败。跳过项目需要未随源码分发的官方样本、显式 GPU 验收或 Windows 真机环境。本机是 Apple Silicon Mac；没有 Windows 桌面环境，不能把共用代码和分发包测试称为 Windows 窗口实测。Windows 真机步骤见 [验收清单](WINDOWS-VALIDATION-CHECKLIST.md)。
+历史 Mac 回归（2026-10-27）：382 项，362 通过、20 跳过、0 失败；跳过项目需要未随源码分发的官方样本、显式 GPU 验收或 Windows 环境。下段 Mac 原生证据属于该次检查。
+
+2026-10-28 新增检查在 Windows x64 / Notion 7.41.0 上进行：保留现有 Mac 平台运行实现，新增引用读取器和 AI block 来源逻辑不含平台路径、Shell 或 Electron 依赖，两种包都加载实际暂存源文件验证。真实 GPU、Python、DeepSeek 合成资料和合成数据库只读结果见 [Windows 记录](WINDOWS-VALIDATION-CHECKLIST.md#2026-10-28-windows-本地检查记录)。本轮未完成 Windows/Mac 新增控件的逐项界面验收，不把包内测试当成窗口实测。
 
 补充 Mac 原生界面验收（Notion 7.41.0）：解锁后确认应用运行文件与提交的修复一致。在 AI 回复中选中合成文字，通过 Add to chat 添加为引用后提问，界面保留 `1 selection` 和“引用的 AI 对话”，模型正确返回“颜色是青色，数字是 927”。本地消息保存了原生 `chat_selection` 注释；重新加载窗口后，引用标记、片段、问题和回答均恢复，未出现错误。测试未读取或修改页面内容。
 
@@ -52,7 +67,7 @@ API 验收共 39 项：38 通过，1 项评论权限受限。覆盖 31 个块实
 
 ```sh
 npm test
-node --test tests/native-selection.test.mjs tests/native-inline.test.mjs tests/notion-blocks.test.mjs tests/notion-databases.test.mjs tests/notion-collaboration.test.mjs tests/notion-routing.test.mjs tests/package-macos.test.mjs tests/package-windows.test.mjs
+node --test tests/native-selection.test.mjs tests/native-inline.test.mjs tests/inline-references.test.mjs tests/inline-reference-reader.test.mjs tests/native-ai-block.test.mjs tests/notion-blocks.test.mjs tests/notion-databases.test.mjs tests/notion-collaboration.test.mjs tests/notion-routing.test.mjs tests/package-macos.test.mjs tests/package-windows.test.mjs
 npm run check:secrets
 ```
 
@@ -65,17 +80,21 @@ npm run check:secrets
 | 侧栏对话、流式回复、停止、续聊、历史 | 已对接；Flash/Pro 路由与长任务进度共用本地实现 |
 | 页面、块、数据库、记录、视图操作 | 已对接已授权范围的工具；修改前读取并核验写入结果 |
 | 选中文字浮动编辑 | 已对接文字预览；额外来源与容器读取的边界见上表 |
-| AI block 摘要、要点、自定义输出 | 已对接 Current page only；其他页、连接器和搜索上下文未接入 |
-| AI 会议转写、摘要、自定义摘要指令、录音归档 | 已有本地实现和测试；仍有设备、官方样本与 Windows 真机验收项，不能声称全平台均已验收 |
-| 数据库原生 AI Autofill（摘要、翻译、分类、自定义填充） | 未对接原生 Autofill 入口；侧栏手动要求读取并写入字段是另一条现有能力。[官方 Autofill 说明](https://www.notion.com/help/autofill) |
-| Build with AI 数据库创建向导、独立公式编辑器 AI 入口 | 未对接这些专用原生协议；侧栏可以创建数据库、设置支持的字段与公式 |
-| Skills、Personalize 指令页与记忆 | 未读取原生技能注册或个性化设置；不能因按钮可见就声称已生效 |
-| Web search、Web Browser、Research Mode | 未接入搜索引擎、网页正文抓取、浏览器操作或官方研究模式；现有多 Agent 只读协作局限于已授权 Notion 工具。[官方浏览器说明](https://www.notion.com/help/turn-on-web-browser-for-notion-agent) |
+| AI block 摘要、要点、自定义输出 | 已对接同工作区页面与最多 200 条完整活动记录的数据库来源，读取属性和自身正文；数据库范围与当前视图区分。配置/字段/记录范围/正文和权限变化阻止旧结果返回；连接器、搜索和跨工作区来源未接入。[来源接口](NATIVE-AI-BLOCK-INTERFACE.md) |
+| AI 会议转写、摘要、自定义摘要指令、录音归档 | 已有本地实现；本轮真实 GPU 双语/尾音、Python 编码、新旧摘要入口的 DeepSeek 合成样例通过；真人录音控件和实际归档仍需对应设备验收 |
+| 数据库原生 AI Autofill（摘要、翻译、分类、自定义填充） | 基础工作流的明确所选记录和最多 200 条的完整筛选视图已接入本地生成、写回核验、停止和原生进度；两种包内链路和真实模型合成重放通过。其他字段/工作流、大型或多来源/跨工作区视图及真实服务器/原生控件仍待完成；未审核客户端明确失败，不转交托管 AI。[接口与边界](NATIVE-AUTOFILL-INTERFACE.md) |
+| 独立公式编辑器 AI 入口 | 已接入生成/修复预览、取消和错误说明；两种包内链路及真实 DeepSeek 合成公式通过，原生控件及完整编译效果仍需逐项验收 |
+| Build with AI 数据库创建向导 | onboarding 入口已接通六种布局、桌面路由、预览、原生确认/拒绝、本地历史和重启核对；多视图字段/排序绑定、空分组及六视图真实模型/包内合成链路通过。页面/Home 独立布局向导、其余字段及真实服务器/原生控件仍待完成。[实现记录](NATIVE-DATABASE-BUILD-INTERFACE.md) |
+| Skills、Personalize 指令页与记忆 | 已核对个人设置、默认/分组技能和显式引用协议，完成按账号/工作区检查的纯选择内核；14 项合成及两种暂存包检查通过。真实正文读取和模型接入补丁被自动审批拒绝，等待新增授权；尚未运行时接线，记忆等仍待实现。[范围与证据](NATIVE-INSTRUCTIONS-INTERFACE.md) |
+| Web search 与公开网页阅读 | 侧栏个人 Agent 已接入默认关闭的联网设置、Brave Search 和公开网页正文读取；含分页、来源链接、停止、历史续问与只读协作。实际桌面路由/两平台包内及真实模型合成链路通过，真实公开 IANA 页读取通过；真实 Brave 搜索、原生菜单/管理员策略与控件仍待验收。[接口与边界](WEB-SOURCES-INTERFACE.md) |
+| Research Mode | 已接通两种配置的明确“仅网页”报告流、本地事务/历史、停止、超时和重启续问；实际桌面路由、两平台暂存包及真实 DeepSeek 新合成网页验收通过。工作区/混合来源正文接入被自动审批拒绝、等待授权；原生窗口与管理员策略仍待完成。[范围与证据](NATIVE-RESEARCH-INTERFACE.md) |
+| Web Browser | 未接入交互式浏览器操作；公开静态网页阅读与只读协作不能替代此入口。[官方浏览器说明](https://www.notion.com/help/turn-on-web-browser-for-notion-agent) |
 | AI Connectors 与跨应用 Enterprise Search | 未接入 Slack、Drive、GitHub 等原生连接器索引；当前只搜索配置的 Notion 连接已授权页面 |
-| 原生 Custom Agents、定时/事件触发、外部 Agents/MCP | 未对接官方 Agent 管理与执行协议；本地多 Agent 分析不等于后台自动化或外部代理 |
+| 原生 Custom Agents、定时/事件触发、外部 Agents/MCP | 本项目尚未接入。2026-10-28 复核发现已有[官方 Agent API 公测](https://developers.notion.com/guides/notion-agent-apis/overview)，后续先评估 API；官方 Agent 服务与本地 DeepSeek、原生触发管理分别验收，不重复逆向已公开接口 |
 | Calendar/Mail 上下文、日程操作 | 没有相应读取或操作工具；`createCalendarAgentThread` 仅接管对话，不等于接入日历资料 |
-| PDF/Word/Excel/音视频附件全文理解 | 未实现通用解析、OCR、视频理解和聊天音频理解；已有离线会议转写是独立入口 |
+| 侧栏主动上传的 PDF/Word/Excel/文字附件 | 已接通文字型 PDF、DOCX、XLSX、TXT/Markdown、CSV/TSV、JSON 的本地上传、解析、模型输入、下载与重启续问；实际桌面路由及真实 DeepSeek 新合成文档验收通过，原生控件仍待手工验收。[支持范围](NATIVE-DOCUMENTS-INTERFACE.md) |
+| OCR、旧版 DOC/XLS、页面文件与音视频附件理解 | 扫描 OCR、旧版二进制 Office、自动读取页面文件及聊天音视频理解仍未实现；已有离线会议转写是独立入口 |
 | 生成/编辑图片、生成可下载 PDF/表格/幻灯片、运行代码的计算机工作区 | 未实现文件生成、图像生成或沙箱执行工具；文字回答不能当成已生成附件 |
 | 原生计划审批、通知推送、共享本地 AI 聊天 | 未实现对应完整协议；现有写入版本检查和本地回执不等于原生审批流程 |
 
-最关键的剩余缺口是：原生 Autofill、技能/个性化、外部连接器与浏览器、通用文件解析。它们需要单独实现与验收，无法通过更改一个引用字段获得。
+剩余主要缺口包括 Autofill 的其他类型与真实原生验收、技能/个性化、外部连接器与浏览器、OCR 和页面文件。2026-10-28 复核还确认[官方 Skills API](https://developers.notion.com/guides/agent-skills/overview) 可用，应优先用于授权技能的获取；本项目尚未接入它，客户端的当前选择与 DeepSeek 应用仍需适配。用户已要求后续直接使用当前 Windows 项目，不再打包 Mac 或生成 Windows 分发包；既有 Mac 平台运行逻辑保留。

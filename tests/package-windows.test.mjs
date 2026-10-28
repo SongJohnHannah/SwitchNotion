@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { stageWindows } from '../scripts/package-windows.mjs';
 import { verifyPackagedImagePreview } from './helpers/packaged-image-preview.mjs';
-import { verifyPackagedReferences } from './helpers/packaged-references.mjs';
+import { verifyPackagedReferences, verifyPackagedInlineReferences, verifyPackagedAiBlockSources, verifyPackagedFormulaPreview, verifyPackagedAutofill, verifyPackagedDatabaseBuild, verifyPackagedInstructionSelection, verifyPackagedConversationScope, verifyPackagedWebSources, verifyPackagedResearchScope, verifyPackagedNativeWebResearch } from './helpers/packaged-references.mjs';
 test('the portable package uses an allowlist, carries its runtime and licenses, and excludes private state and Notion binaries', async t => {
   const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-package-')), project = path.join(root, 'project');
   fs.mkdirSync(project); t.after(() => { assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
@@ -21,7 +21,29 @@ test('the portable package uses an allowlist, carries its runtime and licenses, 
   assert.equal(manifest.requiresOfficialNotion, true); assert.equal(manifest.includesUserData, false); assert.equal(manifest.license, 'MIT');
   assert.ok(manifest.files.some(item => item.file === 'NotionSwitch.exe'));
   assert.equal(manifest.files.some(item => /Notion\.exe|private\.txt|deepseek-api-key\.txt/.test(item.file)), false);
+  const documents = ['WINDOWS-使用说明.md'], visited = new Set();
+  while (documents.length) {
+    const name = documents.shift(); if (visited.has(name)) continue; visited.add(name);
+    const content = fs.readFileSync(path.join(destination, name), 'utf8');
+    for (const [, target] of content.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
+      if (/^[a-z][a-z\d+.-]*:|^#/i.test(target)) continue;
+      const linked = path.normalize(path.join(path.dirname(name), decodeURIComponent(target.split('#')[0])));
+      assert.ok(fs.existsSync(path.join(destination, linked)), `${name} links to a missing packaged document: ${linked}`);
+      if (/\.md$/i.test(linked)) documents.push(linked);
+    }
+  }
+  assert.ok(visited.has(path.normalize('docs/WINDOWS-VALIDATION-CHECKLIST.md')));
   await verifyPackagedImagePreview(path.join(destination, 'src'), path.join(root, 'Windows 用户资料', 'image state'));
   await verifyPackagedReferences(path.join(destination, 'src'), path.join(root, 'Windows 用户资料', '引用 state'));
+  await verifyPackagedInlineReferences(path.join(destination, 'src'), path.join(root, 'Windows 用户资料', '浮动引用 state'));
+  await verifyPackagedAiBlockSources(path.join(destination, 'src'));
+  await verifyPackagedFormulaPreview(path.join(destination, 'src'));
+  await verifyPackagedAutofill(path.join(destination, 'src'), path.join(root, 'Windows 用户资料', '填充 state'));
+  await verifyPackagedDatabaseBuild(path.join(destination, 'src'));
+  verifyPackagedInstructionSelection(path.join(destination, 'src'));
+  await verifyPackagedConversationScope(path.join(destination, 'src'));
+  await verifyPackagedWebSources(path.join(destination, 'src'), path.join(root, 'Windows 用户资料', '网页 sources'));
+  await verifyPackagedResearchScope(path.join(destination, 'src'), path.join(root, 'Windows 用户资料', '研究 scope'));
+  await verifyPackagedNativeWebResearch(path.join(destination, 'src'), path.join(root, 'Windows 用户资料', '网页研究 conversations'));
   assert.throws(() => stageWindows({ sourceProject: project, destination: path.join(root, 'outside') }), /dist/);
 });

@@ -31,12 +31,12 @@ export interface DesktopPlatform {
   readonly label: string;
   readonly capabilities: Readonly<Record<Capability, boolean>>;
   readonly compatibility: Readonly<CompatibilityPolicy>;
-  readonly login: Readonly<{ strategy: 'windows-local-copy' | 'interactive'; sourceRoot: string | null }>;
+  readonly login: Readonly<{ strategy: 'windows-local-copy' | 'macos-keychain-copy' | 'interactive'; sourceRoot: string | null }>;
   /** Throws code PLATFORM_CAPABILITY_UNAVAILABLE before side effects. */
   requireCapability(capability: Capability): void;
   /** Pure layout, no existence or compatibility guarantee. */
   installationLayout(candidate: string): InstallationLayout;
-  /** Pure layout; container encloses Notion.app on macOS. */
+  /** Pure layout; macOS uses SwitchNotion.app, with legacy Notion.app support. */
   runtimeLayout(container: string): InstallationLayout;
   /** Requires absolute paths; excludes the isolated state directory and aliases. */
   findInstallation(candidate: string, stateRoot?: string): InstallationLayout | null;
