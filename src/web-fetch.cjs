@@ -23,6 +23,20 @@ function publicUrl(value) {
   if (!host || /^(?:localhost|local|metadata|metadata\.google\.internal)$/.test(host) || /\.(?:localhost|local|internal|home\.arpa|onion)$/.test(host) || isIP(host) && !publicAddress(host)) fail('不支持本机、内网或保留地址。');
   url.hash = ''; return url;
 }
+function normalizeDomains(value) {
+  if (value === undefined) return;
+  if (!Array.isArray(value) || value.length > 32 || value.some(item => typeof item !== 'string' || !item || item.length > 253 || /[\s/:@?#\\]/.test(item))) fail('网页域名范围无效。');
+  const domains = [...new Set(value.map(item => {
+    const host = new URL('https://' + item.replace(/^\*\./, '')).hostname.toLowerCase().replace(/\.$/, '');
+    if (!host.includes('.') || isIP(host) || !/^[a-z\d](?:[a-z\d.-]*[a-z\d])?$/.test(host) || host.includes('..')) fail('网页域名范围无效。');
+    return host;
+  }))];
+  return domains.length ? domains.sort() : undefined;
+}
+function domainAllowed(value, domains) {
+  const host = publicUrl(value).hostname.toLowerCase().replace(/\.$/, '');
+  return !domains || domains.some(domain => host === domain || host.endsWith('.' + domain));
+}
 function abortable(promise, signal) {
   if (!signal) return promise;
   signal.throwIfAborted();
@@ -60,11 +74,13 @@ function requestOnce(url, { addresses, headers, signal, limit }) {
   });
 }
 function createPublicFetcher({ lookup = (host, options) => dns.lookup(host, options), transport = requestOnce } = {}) {
-  return async function fetchPublic(value, { signal: parentSignal, headers = {}, limit = 2 * 1024 * 1024, redirect = true, timeoutMs = 20000 } = {}) {
+  return async function fetchPublic(value, { signal: parentSignal, headers = {}, limit = 2 * 1024 * 1024, redirect = true, timeoutMs = 20000, allowedDomains } = {}) {
     let url = publicUrl(value); const signal = parentSignal ? AbortSignal.any([parentSignal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs), visited = new Set();
+    const domains = normalizeDomains(allowedDomains);
     for (const key of Object.keys(headers)) if (!['accept', 'user-agent', 'x-subscription-token'].includes(key.toLowerCase()) || key.toLowerCase() === 'x-subscription-token' && (url.origin !== 'https://api.search.brave.com' || redirect)) fail('请求头范围无效。');
     for (let hop = 0; hop <= 5; hop++) {
       signal.throwIfAborted();
+      if (!domainAllowed(url.href, domains)) fail('目标或跳转超出工作流允许的网页域名。');
       if (visited.has(url.href)) fail('遇到重复跳转。'); visited.add(url.href);
       const host = url.hostname.replace(/^\[|\]$/g, '');
       const addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await abortable(lookup(host, { all: true, verbatim: true }), signal);
@@ -83,4 +99,4 @@ function createPublicFetcher({ lookup = (host, options) => dns.lookup(host, opti
     }
   };
 }
-module.exports = { publicAddress, publicUrl, createPublicFetcher, requestOnce };
+module.exports = { publicAddress, publicUrl, createPublicFetcher, requestOnce, normalizeDomains, domainAllowed };

@@ -3,6 +3,7 @@ const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { sourceDate } = require('./native-autofill-date.cjs');
 const { emptyProperty, pendingState } = require('./native-autofill-store.cjs');
+const { generateWithSources, verifySources } = require('./native-autofill-sources.cjs');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = message => { throw Error('Notion Autofill ' + message); };
 const plain = value => Array.isArray(value) ? value.map(span => typeof span?.[0] === 'string' ? span[0] : '').join('') : '';
@@ -16,6 +17,7 @@ function messages(snapshot, row) {
     { role: 'user', content: JSON.stringify({ target_fields: snapshot.fields, row_id: row.pageId,
       source_fields: fields, source_text: row.text, unread_media: row.unreadMedia }) }
   ];
+  if (snapshot.sourcePolicy) result[0].content += '\n这是高级 Autofill。可按工作流来源权限使用只读工具；只生成所选字段。条件不满足或要求保留原值时，该字段输出 {"$skip":true}，不要用 null 代替“不操作”。null 表示实际清空。仍需返回所有目标字段的键。不得调用页面修改工具；本次写回由程序统一校验。';
   if (format) result.splice(2, 0, format); return result;
 }
 function outputObject(text) {
@@ -76,17 +78,27 @@ class AutofillExecutor {
       if (!propertyIds.length) { skipped.add(row.pageId); notify({ stage: 'skipped', rowId: row.pageId }); continue; }
       const target = emptyOnly ? { ...snapshot, info: { ...snapshot.info, propertyIds }, fields: snapshot.fields.filter(field => propertyIds.includes(field.id)) } : snapshot;
       const identity = [store.userId, info.spaceId, info.collectionId, info.workflowId, row.pageId, [...propertyIds].sort()];
-      if (emptyOnly) identity.push(pendingState(row, info.propertyIds));
+      if (emptyOnly || snapshot.sourcePolicy) identity.push(pendingState(row, info.propertyIds));
       const key = hash(identity);
       let job = this.jobs.get(key);
+      if (snapshot.sourcePolicy && job && ['prepared', 'rejected', 'verified'].includes(job.status) && [job.plan.sourceHash, job.plan.afterHash].includes(row.sourceHash)) {
+        try { await verifySources(store, job.plan.sourceEvidence, snapshot.sourcePolicy, active); }
+        catch {
+          if (rowSignal?.aborted && !signal?.aborted) { stopRow(); continue; }
+          active.throwIfAborted(); job = undefined;
+        }
+      }
       if (job?.status === 'verified' && row.sourceHash === job.plan.afterHash) {
         const actual = await store.verify(job.plan, signal);
         if (actual.ok) { prepared.push({ job, reused: true }); Object.assign(recordMap.block, actual.recordMap.block); continue; }
       }
       if (!job || !['prepared', 'rejected'].includes(job.status) || job.plan.sourceHash !== row.sourceHash) {
-        notify({ stage: 'generating', rowId: row.pageId }); let output = '';
+        notify({ stage: 'generating', rowId: row.pageId }); let output = '', sourceEvidence;
         try {
-          for await (const delta of this.provider.generate({ config: { ...config, maxTokens: Math.min(config.maxTokens || 16384, 16384) },
+          if (target.sourcePolicy) {
+            const result = await generateWithSources({ store, snapshot: target, row, provider: this.provider, config: { ...config, maxTokens: Math.min(config.maxTokens || 16384, 16384) }, messages: messages(target, row), signal: active });
+            output = result.output; sourceEvidence = result.evidence;
+          } else for await (const delta of this.provider.generate({ config: { ...config, maxTokens: Math.min(config.maxTokens || 16384, 16384) },
             messages: messages(target, row), signal: active })) {
             active.throwIfAborted(); output += delta; if (output.length > 40000) fail('模型字段结果过长，未提交不完整结果。');
           }
@@ -97,6 +109,8 @@ class AutofillExecutor {
         }
         signal?.throwIfAborted();
         job = { key, scope, status: 'prepared', plan: store.plan(target, row, outputObject(output), emptyOnly ? { statusPropertyIds: info.propertyIds } : undefined), createdAt: new Date().toISOString() };
+        if (sourceEvidence) job.plan.sourceEvidence = sourceEvidence;
+        if (!job.plan.propertyIds.length) { skipped.add(row.pageId); notify({ stage: 'skipped', rowId: row.pageId }); continue; }
         this.jobs.set(key, job); this.save();
       }
       prepared.push({ job, reused: false });

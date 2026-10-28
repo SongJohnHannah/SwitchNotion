@@ -2,6 +2,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { uuid } = require('./native-context.cjs');
 const { normalizeViewSnapshot, resolveViewInfo } = require('./native-autofill-view.cjs');
 const { dateProperty } = require('./native-autofill-date.cjs');
+const { workflowSources, verifySources } = require('./native-autofill-sources.cjs');
 const fail = message => { throw Error('Notion Autofill ' + message); };
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
@@ -55,8 +56,8 @@ function nativeEntry(value) {
   }
 }
 class NativeAutofillStore {
-  constructor({ native }) {
-    this.native = native; this.spaceId = uuid(native.spaceId); this.userId = uuid(native.userId); this.roles = new Map();
+  constructor({ native, workspace, webSources }) {
+    Object.assign(this, { native, workspace, webSources }); this.spaceId = uuid(native.spaceId); this.userId = uuid(native.userId); this.roles = new Map();
     if (!this.spaceId || !this.userId || typeof native.api !== 'function') fail('当前账号的原生读取会话尚未就绪。');
   }
   async read(table, ids, signal, editable = false) {
@@ -84,7 +85,7 @@ class NativeAutofillStore {
     const collection = (await this.read('collection', [info.collectionId], signal)).get(info.collectionId);
     const workflow = (await this.read('workflow', [info.workflowId], signal)).get(info.workflowId);
     if (!object(collection.schema) || workflow.parent_table !== 'block' || workflow.parent_id !== collection.parent_id ||
-        workflow.data?.isLite !== true || !Array.isArray(workflow.data.modules) || workflow.data.modules.length !== 1 || workflow.data.modules[0].type !== 'notion') fail('工作流不属于此数据库或不是已支持的基础填充模式。');
+        !Array.isArray(workflow.data?.modules) || workflow.data.modules.length !== 1 || workflow.data.modules[0].type !== 'notion') fail('工作流不属于此数据库或模块类型尚未支持。');
     const owned = workflow.data.modules[0].state?.ownedByDatabasePropertyIds;
     if (!Array.isArray(owned) || info.propertyIds.some(id => !owned.includes(id))) fail('目标字段未授权给所选填充工作流。');
     const fields = info.propertyIds.map(id => {
@@ -97,9 +98,10 @@ class NativeAutofillStore {
     });
     const instructionSpans = workflow.data.instructions || [];
     if (!Array.isArray(instructionSpans) || instructionSpans.some(span => !Array.isArray(span) || typeof span[0] !== 'string' ||
-        span[1]?.some(annotation => !['b', 'i', 's', 'u', 'c', 'a', '_'].includes(annotation[0])))) fail('工作流指令含尚未读取的引用，未忽略来源继续填充。');
+        span[1]?.some(annotation => !['b', 'i', 's', 'u', 'c', 'a', '_', ...(workflow.data.isLite !== true ? ['p'] : [])].includes(annotation[0])))) fail('工作流指令含尚未读取的引用，未忽略来源继续填充。');
     const instructions = plain(instructionSpans).trim() || '根据记录正文和字段配置填充明确选择的字段。';
     if (instructions.length > 12000) fail('工作流指令过长。');
+    const sourcePolicy = workflowSources(workflow, this.spaceId);
     const rows = [];
     for (const pageId of info.rowIds) {
       const root = (await this.read('block', [pageId], signal, true)).get(pageId);
@@ -131,7 +133,7 @@ class NativeAutofillStore {
       if (JSON.stringify(row).length > 200000) fail('记录正文或字段过长，未使用截断资料填充。');
       rows.push(row);
     }
-    const snapshot = { info: structuredClone(info), collection, workflow, fields, instructions, rows };
+    const snapshot = { info: structuredClone(info), collection, workflow, fields, instructions, rows, ...(sourcePolicy ? { sourcePolicy } : {}) };
     if (JSON.stringify(snapshot).length > 4000000) fail('本批记录资料过长，请减少所选记录。');
     for (const row of rows) row.sourceHash = sourceHash(snapshot, row);
     return snapshot;
@@ -146,6 +148,7 @@ class NativeAutofillStore {
     const properties = {};
     for (const field of snapshot.fields) {
       const value = output[field.id];
+      if (snapshot.sourcePolicy && object(value) && value.$skip === true && Object.keys(value).length === 1) continue;
       if (value === null) { properties[field.id] = []; continue; }
       if (field.type === 'date') { properties[field.id] = dateProperty(value); continue; }
       if (field.type === 'number') {
@@ -165,10 +168,12 @@ class NativeAutofillStore {
       if (field.type === 'url' && value && !/^https?:\/\/[^\s]+$/i.test(value)) fail('模型 URL 字段结果格式无效。');
       properties[field.id] = value ? [[value]] : [];
     }
+    const propertyIds = Object.keys(properties);
+    statusPropertyIds ||= snapshot.sourcePolicy ? snapshot.info.propertyIds : undefined;
     return { id: randomUUID(), transactionId: randomUUID(), spaceId: this.spaceId, userId: this.userId,
-      rowId: row.pageId, propertyIds: [...snapshot.info.propertyIds], info: { ...snapshot.info, rowIds: [row.pageId] },
+      rowId: row.pageId, propertyIds, info: { ...snapshot.info, propertyIds, rowIds: [row.pageId] },
       ...(statusPropertyIds ? { statusPropertyIds: [...statusPropertyIds], statusBefore: pendingState(row, statusPropertyIds) } : {}),
-      sourceHash: row.sourceHash, before: Object.fromEntries(snapshot.info.propertyIds.map(id => [id, row.properties[id] || []])), properties,
+      sourceHash: row.sourceHash, before: Object.fromEntries(propertyIds.map(id => [id, row.properties[id] || []])), properties,
       afterHash: sourceHash(snapshot, row, { ...row.properties, ...properties }) };
   }
   async submit(snapshot, plan, signal, onSubmit = () => {}) {
@@ -177,6 +182,11 @@ class NativeAutofillStore {
     const statusIds = plan.statusPropertyIds || plan.propertyIds;
     if (!Array.isArray(statusIds) || !statusIds.length || new Set(statusIds).size !== statusIds.length || statusIds.some(id => !snapshot.info.propertyIds.includes(id)) ||
         plan.propertyIds.some(id => !statusIds.includes(id)) || hash([...plan.propertyIds].sort()) !== hash(Object.keys(plan.properties).sort()) || hash([...plan.info.propertyIds].sort()) !== hash([...plan.propertyIds].sort())) fail('字段或任务状态超出本次选择范围。');
+    if (snapshot.sourcePolicy) {
+      const workflow = (await this.read('workflow', [snapshot.info.workflowId], signal)).get(snapshot.info.workflowId);
+      if (hash([workflow.parent_table, workflow.parent_id, workflow.data]) !== hash([snapshot.workflow.parent_table, snapshot.workflow.parent_id, snapshot.workflow.data])) fail('工作流来源权限或指令已变化，未继续读取旧来源。');
+      await verifySources(this, plan.sourceEvidence, snapshot.sourcePolicy, signal);
+    }
     const fresh = await this.load({ ...plan.info, propertyIds: statusIds }, signal);
     if (fresh.rows[0].sourceHash !== plan.sourceHash) fail('记录、字段结构或指令在生成期间发生变化，未提交旧结果。');
     if (plan.statusBefore && hash(pendingState(fresh.rows[0], statusIds)) !== hash(plan.statusBefore)) fail('目标字段任务已变化，未覆盖新的填充任务。');
