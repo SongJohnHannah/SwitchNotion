@@ -54,6 +54,8 @@ document.querySelectorAll('[data-view]').forEach(button => button.addEventListen
   $('workspaces-view').hidden = button.dataset.view !== 'workspaces'; $('deepseek-view').hidden = button.dataset.view !== 'deepseek'; $('login-view').hidden = button.dataset.view !== 'login';
   $('updates-view').hidden = button.dataset.view !== 'updates';
   $('speech-view').hidden = button.dataset.view !== 'speech';
+  $('collection-view').hidden = button.dataset.view !== 'collection';
+  if (button.dataset.view === 'collection') void checkCollection();
   clearKey('deepseek-key'); result('provider-result', '');
   if (button.dataset.view === 'login') checkLogin();
   if (button.dataset.view === 'updates') checkUpdates();
@@ -82,6 +84,20 @@ $('remove-dialog').addEventListener('cancel', event => { if (busy) event.prevent
 $('confirm-remove').addEventListener('click', () => operation($('remove-dialog'), async () => { const r = await api.removeWorkspace({ id: removing.id }); if (r.ok) { $('remove-dialog').close(); removing = null; await load(); } toast(r.ok ? r.result.message : r.error); }));
 $('test-deepseek').addEventListener('click', () => operation($('deepseek-form'), async () => { result('provider-result', '正在检测 DeepSeek…'); const r = await api.testDeepseek({ apiKey: $('deepseek-key').value }); result('provider-result', r.ok ? r.result.message : r.error, !r.ok); }));
 $('deepseek-thinking').addEventListener('change', () => { $('deepseek-effort').disabled = !$('deepseek-thinking').checked; });
+async function checkCollection() {
+  const response = await api.collectionState();
+  if (!response.ok) { result('collection-result', response.error, true); return; }
+  const settings = response.result.settings;
+  $('collection-transcribe').checked = settings.transcribe; $('collection-vision').checked = settings.vision;
+  $('collection-compress').checked = settings.compress; $('collection-local').checked = settings.keepLocal; $('collection-quality').value = settings.quality;
+  $('collection-destination').textContent = settings.destination ? '默认保存到：' + settings.destination.workspaceName + ' / ' + settings.destination.label : '尚未设置默认位置，请在收集窗口中搜索并选择。';
+}
+$('open-collection').addEventListener('click', async () => { const response = await api.openCollection(); if (!response.ok) toast(response.error); });
+$('collection-form').addEventListener('submit', event => { event.preventDefault(); operation($('collection-form'), async () => {
+  const response = await api.saveCollection({ transcribe: $('collection-transcribe').checked, vision: $('collection-vision').checked, compress: $('collection-compress').checked,
+    keepLocal: $('collection-local').checked, quality: $('collection-quality').value });
+  result('collection-result', response.ok ? response.result.message : response.error, !response.ok);
+}); });
 async function checkLogin() {
   const r = await api.loginStatus();
   if (!r.ok) { result('login-result', r.error, true); return; }

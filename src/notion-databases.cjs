@@ -133,6 +133,14 @@ function createSession({ request, authorize, mutate, signal }) {
   };
   const propertiesMatch = (actual, expected) => Object.entries(expected).every(([name, value]) => {
     const found = actual[name] || Object.values(actual).find(field => field.id === name);
+    if (found && typeOf(value) === 'date') {
+      const normalized = property => {
+        const date = simpleValue(property);
+        const instant = text => text && /T/.test(text) && /(?:Z|[+-]\d{2}:\d{2})$/.test(text) && Number.isFinite(Date.parse(text)) ? new Date(text).toISOString() : text;
+        return date && { ...date, start: instant(date.start), end: instant(date.end) };
+      };
+      return stable(normalized(found)) === stable(normalized(value));
+    }
     return !!found && stable(simpleValue(found)) === stable(simpleValue(value));
   });
   const execute = async (name, args = {}) => {

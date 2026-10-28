@@ -248,8 +248,11 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/status' && req.method === 'GET') {
     const state = mock.status(), speechBusy = settings.speech.provider.leases > 0 || settings.speech.provider.status().busy || nativeSpeech.connections.size > 0;
     res.end(JSON.stringify({ pid: process.pid, appReady: app.isReady(), windows: BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), minimized: win.isMinimized(), destroyed: win.isDestroyed() })), ...state,
-      activeTurns: state.activeTurns + (speechBusy ? 1 : 0) + meetingSummaries.active + recordings.active, meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
+      activeTurns: state.activeTurns + (speechBusy ? 1 : 0) + meetingSummaries.active + recordings.active + (settings.collection?.service.active || 0), collection: settings.collection?.status(), meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
       compatibility, notion: workspace.status(), settings: settings.status(), speech: { ...settings.speech.status(), native: nativeSpeech.status() } }));
+  }
+  else if (req.url === '/collection/open' && req.method === 'POST') {
+    await settings.collection.open(); res.end(JSON.stringify({ opened: true }));
   }
   else if (['/meetings/inspect', '/meetings/summarize'].includes(req.url) && req.method === 'POST') {
     const abort = new AbortController(); res.on('close', () => { if (!res.writableEnded) abort.abort(); });

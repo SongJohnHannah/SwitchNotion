@@ -17,6 +17,7 @@
       <button class="nav-item active" data-view="workspaces"><span class="nav-icon">▦</span>Notion 工作区<span id="nav-count" class="nav-count">0</span></button>
       <button class="nav-item" data-view="deepseek"><span class="nav-icon">✧</span>DeepSeek</button>
       <button class="nav-item" data-view="speech"><span class="nav-icon">◉</span>离线语音</button>
+      <button class="nav-item" data-view="collection"><span class="nav-icon">↓</span>内容收集</button>
       <button class="nav-item" data-view="login"><span class="nav-icon">↔</span>Notion 登录</button>
       <button class="nav-item" data-view="updates"><span class="nav-icon">↻</span>版本与更新</button>
     </nav>
@@ -47,6 +48,20 @@
           <div class="form-actions"><button id="test-deepseek" type="button" class="button secondary">检测连接</button><button type="submit" class="button primary">保存设置</button></div>
         </form>
         <div class="note"><span class="local-dot"></span>保存后，下一轮 AI 对话自动生效。</div>
+      </section>
+      <section id="collection-view" hidden>
+        <div class="page-heading"><div><span class="eyebrow">CONTENT COLLECTION</span><h1>快捷收集到 Notion</h1><p>视频、音频、图片和文章，按原文顺序保存到指定数据库或父页面。</p></div><button id="open-collection" class="button primary">打开收集窗口 ↗</button></div>
+        <form id="collection-form" class="provider-card">
+          <h2>默认处理选项</h2><p class="field-help">每次收集可以临时修改；已开始的任务保留提交时的选项。</p>
+          <label class="check-label"><input id="collection-transcribe" type="checkbox" checked> 视频和音频生成本地逐字稿</label>
+          <label class="check-label"><input id="collection-vision" type="checkbox" checked> 默认开启 DeepSeek 图片与视频画面识别</label><p class="field-help">复用本机配置的 DeepSeek Key，使用 Flash 图片能力。图片或视频关键帧会发送给 DeepSeek，识别结果单独保存。</p>
+          <label class="check-label"><input id="collection-compress" type="checkbox" checked> 压缩视频，保留完整时长</label>
+          <label class="check-label"><input id="collection-local" type="checkbox"> 同时保留本地原始副本</label>
+          <label for="collection-quality">压缩画质</label><select id="collection-quality"><option value="720p">清晰优先 · 720p</option><option value="1080p">更清晰 · 1080p</option><option value="original">保留原始分辨率</option></select>
+          <p id="collection-destination" class="field-help">在收集窗口中搜索并设置默认保存位置。</p>
+          <p class="field-help">网站登录、浏览器、快捷键、下载组件和本地目录统一在收集窗口的展开选项中管理。支持 Windows x64 和 Apple Silicon Mac。</p>
+          <div id="collection-result" class="inline-result" role="status" hidden></div><div class="form-actions"><button type="submit" class="button primary">保存默认选项</button></div>
+        </form>
       </section>
       <section id="speech-view" hidden>
         <div class="page-heading"><div><span class="eyebrow">OFFLINE SPEECH</span><h1>离线语音转写</h1><p id="speech-backend">faster-whisper · Medium 多语言模型</p></div><span id="speech-status" class="badge">尚未检测</span></div>

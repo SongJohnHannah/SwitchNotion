@@ -7,7 +7,7 @@ test('uncompressed root launchers include both systems, keep code current and pr
   const parent = path.resolve('.notion-switch'); fs.mkdirSync(parent, { recursive: true });
   const root = fs.mkdtempSync(path.join(parent, 'test-root-launchers-'));
   t.after(() => { assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
-  for (const dir of ['src', 'scripts', 'assets']) fs.cpSync(path.resolve(dir), path.join(root, dir), { recursive: true });
+  for (const dir of ['src', 'scripts', 'assets', 'docs']) fs.cpSync(path.resolve(dir), path.join(root, dir), { recursive: true });
   for (const file of ['package.json', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'MAC-使用说明.md', 'Switch Notion 启动.command', 'Switch Notion 配置.command']) fs.copyFileSync(path.resolve(file), path.join(root, file));
   fs.mkdirSync(path.join(root, '.notion-switch')); fs.writeFileSync(path.join(root, '.notion-switch/private.txt'), 'untouched private state');
   const binary = path.join(root, 'fixture-node.exe'), license = path.join(root, 'fixture-license.txt');

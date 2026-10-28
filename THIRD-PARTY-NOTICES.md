@@ -11,3 +11,6 @@ NotionSwitch 自写源代码采用根目录的 MIT 许可证。
 - 网页自动兼容检查内置 Acorn 8.16.0（MIT）、eslint-scope 8.4.0、esrecurse 4.3.0 和 estraverse 5.3.0（BSD-2-Clause）；完整许可位于 `src/compat/VENDOR-LICENSES.txt`。构建依赖不随运行包分发。解析与作用域检查在本机执行，不执行待检查的脚本，不上传账号或页面内容。
 
 项目不附带任何 Notion AI 或 DeepSeek 服务额度。
+
+- 快捷收集内置 [SongJohnHannah/media-kit](https://github.com/SongJohnHannah/media-kit) 1.1.0 的独立运行代码，按上游声明的 MIT 许可使用。原始文件哈希、来源和本地适配说明位于 `src/collection/media-kit/manifest.json` 与 `NOTICE.md`。
+- yt-dlp 与 FFmpeg 在需要时从各自发布来源下载到本机，不随迁移包携带。FFmpeg 对应平台的完整许可保存在本机收集组件目录 `collection/bin/FFMPEG-LICENSE.txt`；项目 MIT 许可证不替代这些组件的原有许可。

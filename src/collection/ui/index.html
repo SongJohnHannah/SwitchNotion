@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Switch Notion · 快捷收集</title><link rel="stylesheet" href="collection.css"><script src="collection.js" defer></script></head>
+<body><header><span class="brand">↓</span><strong>快捷收集</strong><span id="shortcut" class="key"></span><button id="hide" class="icon" aria-label="收起窗口">×</button></header>
+<main><form id="capture-form"><label class="sr-only" for="links">视频、音频、图片或文章链接</label><textarea id="links" rows="2" placeholder="粘贴视频、音频、图片或文章链接" spellcheck="false"></textarea>
+<div class="destination-row"><span>保存到</span><button id="destination-pill" type="button" class="destination">选择工作区、数据库或页面 ⌄</button></div>
+<div class="capture-actions"><button type="submit" class="primary" id="collect">全部收集 ↵</button><button type="button" id="preview" class="secondary">识别后选择</button></div></form>
+<div class="compact-footer"><span id="queue-state">支持混合内容，按原文顺序保存</span><button id="expand" class="text">展开选项与任务 ⌄</button></div>
+<p id="message" role="status" hidden></p>
+<div id="expanded" hidden>
+<section><div class="section-heading"><h2>保存位置</h2><button id="connections" class="text">管理连接 ↗</button></div>
+<label for="workspace">Notion 工作区</label><div class="row"><select id="workspace"><option value="">加载工作区…</option></select><button id="refresh-workspaces" class="secondary">刷新</button></div>
+<div class="search-row"><input id="destination-search" placeholder="搜索数据库或父页面，也可粘贴 Notion 链接"><button id="search" class="secondary">搜索</button></div>
+<div id="destinations" class="destinations"></div><button id="more-destinations" class="text" hidden>加载更多位置</button><div id="favorites" class="favorites"></div>
+<div class="row"><button id="favorite" class="text">☆ 收藏当前位置</button><button id="default-destination" class="text">设为默认保存位置</button><button id="open-destination" class="text">打开保存位置 ↗</button><button id="create-library" class="text">在所选父页面下新建收集库</button></div></section>
+<section><h2>本次处理选项</h2><div class="options-grid">
+<label class="check"><input id="transcribe" type="checkbox" checked>生成语音逐字稿</label><label class="check"><input id="vision" type="checkbox" checked>DeepSeek 图片／画面识别</label>
+<label class="check"><input id="compress" type="checkbox" checked>压缩视频，保留完整时长</label><label class="check"><input id="keepLocal" type="checkbox">保留本地原始副本</label>
+<label>压缩画质<select id="quality"><option value="720p">清晰优先 · 720p</option><option value="1080p">更清晰 · 1080p</option><option value="original">保留原始分辨率</option></select></label>
+<div><span class="label">收集类型</span><div id="type-options" class="type-options"><label><input type="checkbox" value="text" checked>正文</label><label><input type="checkbox" value="image" checked>图片</label><label><input type="checkbox" value="video" checked>视频</label><label><input type="checkbox" value="audio" checked>音频</label></div></div></div>
+<p class="hint">逐字稿在本机生成。开启 DeepSeek 识别会将图片或视频关键帧发送给已配置的 Flash 模型；分析单独保存，不改写原文。</p>
+<div class="row"><button id="save-defaults" class="secondary">保存以上选项为默认</button><button id="choose-directory" class="text">选择本地目录</button></div><p id="local-directory" class="hint"></p></section>
+<section id="selection-section" hidden><div class="section-heading"><h2>选择要收集的内容</h2><button id="select-all" class="text">全选／清空</button></div><p id="selection-title"></p><div id="selection-list" class="selection-list"></div><div class="row"><button id="save-selected" class="primary">收集所选内容</button><button id="reread" class="secondary">登录后重新读取</button></div></section>
+<section><div class="section-heading"><h2>平台账号</h2><button id="check-accounts" class="text">检测登录资料</button></div><div id="accounts" class="accounts"></div>
+<div class="search-row"><input id="custom-site" placeholder="其他网站地址，如 https://example.com"><button id="login-site" class="secondary">打开登录</button></div><p class="hint">使用收集浏览器独立保存登录。存在登录资料不代表会话仍有效，访问权限以实际读取为准。</p></section>
+<details><summary>组件、快捷键与高级设置</summary><p id="components" class="hint"></p><button id="prepare" class="secondary">检测并准备下载／压缩组件</button>
+<div class="options-grid advanced"><label>全局快捷键<input id="shortcut-input" placeholder="CommandOrControl+Shift+J"></label><label>浏览器调试端口<input id="browser-port" type="number" min="1024" max="65535"></label></div>
+<label>收集浏览器<div class="row"><input id="browser-path" readonly placeholder="自动检测 Chrome / Edge / Brave"><button id="choose-browser" class="secondary">选择</button></div></label>
+<label>浏览器登录资料目录<div class="row"><input id="browser-profile" readonly placeholder="默认使用 Switch Notion 的独立浏览器资料"><button id="choose-profile" class="secondary">选择</button><button id="reset-profile" class="text">默认</button></div></label><p class="hint">可选择以前 media-kit 使用的独立浏览器资料目录来复用登录；不要选择正在使用的普通 Chrome 默认资料目录。</p>
+<label>网络代理<input id="proxy" placeholder="可选：http://127.0.0.1:端口" spellcheck="false"></label><p class="hint">留空时沿用启动环境的 HTTP/HTTPS 代理。Windows 与 Apple Silicon Mac 共用设置，浏览器登录资料保存在当前电脑。</p><button id="save-advanced" class="secondary">保存高级设置</button></details>
+<section><div class="section-heading"><h2>收集任务</h2><select id="status-filter"><option value="all">全部任务</option><option value="active">处理中</option><option value="attention">待处理</option><option value="completed">已完成</option></select></div><input id="task-search" placeholder="搜索标题、来源或保存位置"><div id="tasks" class="tasks"></div></section>
+<footer>收起此窗口后任务继续运行；退出 Switch Notion 会保留进度，重新打开后可继续。</footer>
+</div></main></body></html>

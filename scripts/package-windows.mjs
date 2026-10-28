@@ -5,8 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { assertDistributionFiles, localDeepSeekKeys } from './package-safety.mjs';
 const project = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const runtimeScripts = ['asar.mjs', 'native-fs.mjs', 'desktop-compat.mjs', 'runtime-update.mjs', 'runtime-health.mjs', 'source-discovery.mjs', 'find-notion.mjs', 'bootstrap-windows.ps1', 'launch.ps1', 'launch-lock.mjs', 'prepare-desktop.mjs', 'start-desktop.mjs', 'open-notion.mjs', 'open-settings.mjs', 'open-update.mjs', 'update-helper.mjs', 'login-helper.cjs'];
-const publicFiles = ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'WINDOWS-使用说明.md', 'package.json', 'NotionSwitch 启动.vbs', 'NotionSwitch 配置.vbs', 'NotionSwitch 更新.vbs'];
+const runtimeScripts = ['asar.mjs', 'native-fs.mjs', 'desktop-compat.mjs', 'runtime-update.mjs', 'runtime-health.mjs', 'source-discovery.mjs', 'find-notion.mjs', 'bootstrap-windows.ps1', 'launch.ps1', 'launch-lock.mjs', 'prepare-desktop.mjs', 'start-desktop.mjs', 'open-notion.mjs', 'open-settings.mjs', 'open-collection.mjs', 'open-update.mjs', 'update-helper.mjs', 'login-helper.cjs'];
+const publicFiles = ['docs/CONTENT-COLLECTION.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'WINDOWS-使用说明.md', 'package.json', 'NotionSwitch 启动.vbs', 'NotionSwitch 配置.vbs', 'NotionSwitch 更新.vbs'];
 const hash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 function buildLaunchers(destination, sourceProject) {
   const file = path.join(destination, 'NotionSwitch.exe');
@@ -26,7 +26,10 @@ export function stageWindows({ sourceProject = project, destination, nodeExecuta
   const keys = localDeepSeekKeys(sourceProject);
   assertDistributionFiles(sourceProject, [...publicFiles.map(file => path.join(sourceProject, file)), ...runtimeScripts.map(file => path.join(sourceProject, 'scripts', file)), ...descendants(path.join(sourceProject, 'src'))], keys);
   fs.mkdirSync(path.join(destination, 'scripts'), { recursive: true }); fs.mkdirSync(path.join(destination, 'bin')); fs.mkdirSync(path.join(destination, 'licenses'));
-  for (const file of publicFiles) fs.copyFileSync(path.join(sourceProject, file), path.join(destination, file));
+  for (const file of publicFiles) {
+    fs.mkdirSync(path.dirname(path.join(destination, file)), { recursive: true });
+    fs.copyFileSync(path.join(sourceProject, file), path.join(destination, file));
+  }
   for (const file of runtimeScripts) fs.copyFileSync(path.join(sourceProject, 'scripts', file), path.join(destination, 'scripts', file));
   descendants(path.join(sourceProject, 'src'));
   fs.cpSync(path.join(sourceProject, 'src'), path.join(destination, 'src'), { recursive: true });

@@ -6,6 +6,20 @@ const { AgentMock } = createRequire(import.meta.url)('../src/agent-mock.cjs');
 const PARENT = '11111111-1111-4111-8111-111111111111', DB = '22222222-2222-4222-8222-222222222222', SOURCE = '33333333-3333-4333-8333-333333333333', ENTRY = '44444444-4444-4444-8444-444444444444', OTHER = '55555555-5555-4555-8555-555555555555';
 const clone = value => structuredClone(value);
 const spans = content => [{ type: 'text', plain_text: content, text: { content } }];
+test('date readback accepts equal instants in another UTC offset but rejects a different minute', async () => {
+  for (const readback of ['2026-10-28T02:18:00+08:00', '2026-10-28T02:19:00+08:00']) {
+    let page;
+    const request = async (method, endpoint, body) => {
+      if (endpoint === 'data_sources/' + SOURCE) return { id: SOURCE, properties: { 标题: { type: 'title', title: {} }, 收集时间: { type: 'date', date: {} } } };
+      if (endpoint === 'pages' && method === 'POST') { page = { id: ENTRY, parent: body.parent, properties: { ...body.properties, 收集时间: { type: 'date', date: { start: readback, end: null, time_zone: null } } } }; return page; }
+      if (endpoint === 'pages/' + ENTRY) return page;
+      throw Error(endpoint);
+    };
+    const session = createSession({ request, authorize: async id => id, mutate: async operation => operation.verify(await request(operation.method, operation.endpoint, operation.body)) });
+    const result = await session.execute('create_database_entry', { data_source_id: SOURCE, properties: { 标题: '验收', 收集时间: { start: '2026-10-27T18:18:00.000Z' } } });
+    assert.equal(result.verified, readback.includes('02:18:00'));
+  }
+});
 for (const kind of ['database', 'record']) test('native ' + kind + ' selection without a preview reads fields before updating only the authorized record', async () => {
   const f = fixture(), session = f.session();
   await session.execute('create_database_entry', { data_source_id: SOURCE, properties: { '词汇': '合成词', '解释': '原始解释' } });

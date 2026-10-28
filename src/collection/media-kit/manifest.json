@@ -1,0 +1,20 @@
+{
+  "repository": "https://github.com/SongJohnHannah/media-kit",
+  "version": "1.1.0",
+  "license": "MIT",
+  "files": {
+    "index.ts": "56e1b99df9e660bbe2be44d67090a51ab9fac8844ba403c647462454d96ddae6",
+    "audio-extract.ts": "f21d51a5823372514e29e3b2ba38a50529f4414b7085ec1bb4e3b32d273ab05c",
+    "transcribe.ts": "343e9e505cf2f69ab26849af6d59bf9af4b69ec5c92562449d889f73c9e4fd2a",
+    "cdp-client.ts": "6e801a1e682bd7dacedc2ab7ff3434b84d712f0e8c39692f295e7cb6a27d76e6",
+    "cdp-scrape-tool.ts": "3d3e55e80f170859f40fa61952fa78a19ef267a5d133b6557edb39c738e7abfa",
+    "compressor.ts": "e9abbd4d8763b7c653f458bdc6ae8d53b1e3fd378659620007da6b7e360722eb",
+    "domain-utils.ts": "a18b35577a783dfe51d31c61f011fe73bab7a2fe0557380398ddf71c9b46b0bb",
+    "network-policy.ts": "e24f81284035834c754d937430df7a37248d23d3f3b68889c4270df32feb56b1",
+    "resolve-bin.ts": "a94a549e4eb47037b91ff5f6fbfd1ed407b0f493d6092a702a237ddcdbe0245b",
+    "safe-path.ts": "72d6fe663f0ba3804b873e4e95e6c7eb03f2b3e920012988715adf9eb55bfe68",
+    "utils.ts": "98a109c07367ec76e0741df4b1205f4152a8165087c94e75672ee0c52a08642f",
+    "videodl-tool.ts": "ed92b4d1460e86de5a3740209a3f9e57547d7e81d5645de616eee0cfbfaa7454",
+    "ytdlp-tool.ts": "43bdc7194c33132923b7ab66500c8b83773b11a783a3c0f67b7e44e3bc5eb995"
+  }
+}

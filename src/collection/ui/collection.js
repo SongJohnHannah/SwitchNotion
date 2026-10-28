@@ -1,0 +1,116 @@
+'use strict';
+const api = window.collection, $ = id => document.getElementById(id);
+let state, chosen, expanded = false, selectedJob, destinationResults = [], cursors = {}, searchTimer, refreshTimer, searchVersion = 0;
+const names = { paragraph: '正文', heading: '标题', quote: '引用', list: '列表', code: '代码', divider: '分隔', link: '链接', image: '图片', video: '视频', audio: '音频' };
+const statuses = { queued: '等待中', reading: '识别中', downloading: '下载中', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需登录／检查完整性', completed: '已保存', partial: '待补全', failed: '失败', cancelled: '已停止', interrupted: '可继续' };
+const active = ['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving'];
+const element = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
+function message(text, error = false) { $('message').textContent = text || ''; $('message').hidden = !text; $('message').classList.toggle('error', error); }
+async function request(action, input) { const response = await api.request(action, input); if (!response.ok) { message(response.error, true); throw Error(response.error); } return response.result; }
+function button(label, callback, cls = 'text') { const b = element('button', cls, label); b.type = 'button'; b.addEventListener('click', () => Promise.resolve().then(callback).catch(() => {})); return b; }
+function setExpanded(value) { expanded = value; $('expanded').hidden = !value; $('expand').textContent = value ? '收起选项与任务 ⌃' : '展开选项与任务 ⌄'; void api.request('expand', { expanded: value }); if (value) void loadWorkspaces().catch(() => {}); }
+function readOptions() {
+  return { transcribe: $('transcribe').checked, vision: $('vision').checked, compress: $('compress').checked, keepLocal: $('keepLocal').checked,
+    quality: $('quality').value, types: [...$('type-options').querySelectorAll('input:checked')].map(i => i.value), destination: chosen };
+}
+function showOptions(options) { for (const id of ['transcribe', 'vision', 'compress', 'keepLocal']) $(id).checked = options[id]; $('quality').value = options.quality;
+  for (const input of $('type-options').querySelectorAll('input')) input.checked = options.types.includes(input.value); }
+async function refresh() {
+  const first = !state; state = await request('state');
+  if (first) { chosen = state.settings.destination; showOptions(state.settings); $('shortcut-input').value = state.settings.shortcut; $('browser-port').value = state.settings.browserPort; $('browser-path').value = state.settings.browserExecutable; $('browser-profile').value = state.settings.browserProfile || ''; $('proxy').value = state.settings.proxy; }
+  $('shortcut').textContent = state.settings.shortcut.replace('CommandOrControl', navigator.platform.includes('Mac') ? '⌘' : 'Ctrl').replaceAll('+', ' ');
+  $('destination-pill').textContent = chosen ? (chosen.workspaceName ? chosen.workspaceName + ' / ' : '') + chosen.label + ' ⌄' : '选择工作区、数据库或页面 ⌄';
+  $('queue-state').textContent = state.active ? state.active + ' 个任务处理中' : '支持混合内容，按原文顺序保存';
+  $('components').textContent = (state.binaries.downloader ? '下载器已就绪' : '下载器待准备') + ' · ' + (state.binaries.ffmpeg ? '媒体处理已就绪' : '媒体处理待准备') + (state.lastError ? ' · ' + state.lastError : '');
+  $('prepare').disabled = state.preparing;
+  $('local-directory').textContent = state.settings.outputDirectory || '默认：下载目录 / Switch Notion';
+  if (state.shortcutError || state.configError) message(state.shortcutError || state.configError, true);
+  renderFavorites(); renderTasks();
+  if (selectedJob) renderSelection(state.jobs.find(j => j.id === selectedJob));
+}
+async function loadWorkspaces() {
+  if ($('workspace').dataset.loaded) return;
+  const data = await request('workspaces'), select = $('workspace'); select.replaceChildren(element('option', '', '选择工作区'));
+  select.options[0].value = '';
+  for (const item of data.workspaces) { const option = element('option', '', item.name + (item.readOnly ? '（只读）' : '')); option.value = item.id; option.disabled = item.readOnly; select.append(option); }
+  select.value = chosen?.workspaceId || data.workspaces.find(w => !w.readOnly)?.id || ''; select.dataset.loaded = '1';
+  if (select.value) await searchDestinations();
+}
+async function searchDestinations(more = false) {
+  const version = ++searchVersion;
+  const workspaceId = $('workspace').value; if (!workspaceId) return;
+  const result = await request('destinations', { workspaceId, query: $('destination-search').value.trim(), cursors: more ? cursors : {} });
+  if (version !== searchVersion) return;
+  cursors = result.cursors; destinationResults = more ? [...destinationResults, ...result.results] : result.results;
+  const list = $('destinations'); list.replaceChildren();
+  if (!destinationResults.length) list.append(element('p', 'hint', '没有找到已授权位置。请在 Notion 目标页面中添加对应连接。'));
+  for (const item of destinationResults) { const b = button((item.kind === 'database' ? '▦  ' : '▤  ') + item.label, () => choose(item), 'destination-item' + (chosen?.id === item.id && chosen?.workspaceId === item.workspaceId ? ' selected' : '')); b.append(element('small', '', item.kind === 'database' ? '数据库' : '父页面')); list.append(b); }
+  $('more-destinations').hidden = !result.hasMore;
+}
+function choose(item) { chosen = item; $('destination-pill').textContent = item.workspaceName + ' / ' + item.label + ' ⌄'; void refresh().catch(() => {}); }
+function renderFavorites() { const root = $('favorites'); root.replaceChildren(); for (const item of state.settings.favorites) root.append(button('★ ' + item.workspaceName + ' / ' + item.label, () => choose(item), 'favorite-chip')); }
+async function submit(preview) {
+  if (!preview && !chosen) { setExpanded(true); message('请先搜索并选择保存位置。', true); return; }
+  const result = await request('create', { input: $('links').value, options: readOptions(), preview });
+  $('links').value = ''; message(preview ? '正在识别内容，完成后可逐项选择。' : '已加入后台队列，可以收起窗口继续工作。');
+  if (preview) { selectedJob = result.jobs[0]?.id; setExpanded(true); } await refresh();
+}
+function renderSelection(job) {
+  if (!job?.preview) { $('selection-section').hidden = true; return; }
+  $('selection-section').hidden = false; $('selection-title').textContent = job.title + (job.preview.incomplete ? ' · 当前内容尚不完整' : '');
+  const root = $('selection-list'), previous = new Map([...root.querySelectorAll('input')].map(i => [i.value, i.checked])); root.replaceChildren();
+  for (const item of job.preview.nodes) { const label = element('label', 'selection-item'), input = document.createElement('input'); input.type = 'checkbox'; input.value = item.id; input.checked = previous.has(item.id) ? previous.get(item.id) : !job.selectedIds || job.selectedIds.includes(item.id);
+    input.disabled = !['awaiting_selection', 'needs_login'].includes(job.status); label.append(input, element('span', 'kind', names[item.kind]), element('span', 'excerpt', item.text || item.caption || '按原文位置保存此媒体')); root.append(label); }
+  $('save-selected').disabled = !['awaiting_selection', 'needs_login'].includes(job.status); $('save-selected').textContent = job.preview.incomplete ? '保存所选的已获取内容' : '收集所选内容';
+  $('reread').hidden = !!job.page || active.includes(job.status); $('reread').textContent = '重新读取原文';
+}
+function renderTasks() {
+  const filter = $('status-filter').value, query = $('task-search').value.trim().toLowerCase();
+  const jobs = state.jobs.filter(j => (filter === 'all' || filter === 'active' && active.includes(j.status) || filter === 'completed' && j.status === 'completed' || filter === 'attention' && !active.includes(j.status) && j.status !== 'completed') && (j.title + ' ' + j.url + ' ' + j.options.destination?.label).toLowerCase().includes(query));
+  const root = $('tasks'); root.replaceChildren(); if (!jobs.length) root.append(element('div', 'empty', '收集记录会出现在这里'));
+  for (const job of jobs.slice(0, 100)) { const card = element('article', 'task ' + job.status), title = element('div', 'task-title', job.title); title.append(element('span', 'badge', statuses[job.status] || job.status));
+    card.append(title, element('div', 'task-meta', new URL(job.url).hostname + ' · ' + (job.options.destination?.label || '尚未选择位置')), element('div', 'task-message', job.message));
+    const actions = element('div', 'task-actions');
+    if (job.preview) actions.append(button(['awaiting_selection', 'needs_login'].includes(job.status) ? '选择内容' : '查看内容', () => { selectedJob = job.id; renderSelection(job); }));
+    if (job.page) actions.append(button('打开 Notion ↗', () => request('open-page', { id: job.id })));
+    if (job.status === 'completed') actions.append(button('重新收集为新记录', async () => { await request('create', { input: job.url, options: readOptions(), force: true }); await refresh(); }));
+    if (active.includes(job.status)) actions.append(button('停止', async () => { await request('cancel', { id: job.id }); await refresh(); }));
+    if (['failed', 'partial', 'cancelled', 'interrupted', 'needs_login'].includes(job.status)) actions.append(button('继续／重试', async () => { await request('retry', { id: job.id }); await refresh(); }));
+    actions.append(button('打开原文／登录', () => request('open-source', { id: job.id })));
+    if (job.options.keepLocal && job.status === 'completed') actions.append(button('本地副本', () => request('open-local', { id: job.id })));
+    card.append(actions); root.append(card);
+  }
+}
+async function accounts() { const data = await request('accounts'), root = $('accounts'); root.replaceChildren(); for (const site of data) { const node = element('div', 'account ' + site.state); node.append(element('span', '', site.name), element('small', '', site.state === 'saved' ? '有登录资料' : site.state === 'missing' ? '需登录' : '待检测'), button('登录', async () => { const result = await request('login', { site: site.id }); message(result.message); })); root.append(node); } }
+$('capture-form').addEventListener('submit', event => { event.preventDefault(); void submit(false).catch(() => {}); });
+$('links').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void submit(false).catch(() => {}); } });
+$('preview').addEventListener('click', () => void submit(true).catch(() => {}));
+$('expand').addEventListener('click', () => setExpanded(!expanded)); $('destination-pill').addEventListener('click', () => setExpanded(true)); $('hide').addEventListener('click', () => api.request('hide'));
+document.addEventListener('keydown', event => { if (event.key === 'Escape') api.request('hide'); });
+$('connections').addEventListener('click', () => api.request('settings'));
+$('refresh-workspaces').addEventListener('click', () => { delete $('workspace').dataset.loaded; void loadWorkspaces().catch(() => {}); });
+$('workspace').addEventListener('change', () => void searchDestinations().catch(() => {})); $('search').addEventListener('click', () => void searchDestinations().catch(() => {}));
+$('destination-search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => void searchDestinations().catch(() => {}), 450); });
+$('more-destinations').addEventListener('click', () => void searchDestinations(true).catch(() => {}));
+$('default-destination').addEventListener('click', () => void request('configure', { settings: { destination: chosen } }).then(() => { message('已设为默认保存位置。'); return refresh(); }).catch(() => {}));
+$('open-destination').addEventListener('click', () => chosen && void request('open-destination', { target: chosen }).catch(() => {}));
+$('create-library').addEventListener('click', () => {
+  if (!chosen || chosen.kind !== 'page' || chosen.workspaceId !== $('workspace').value) { message('请先在上方搜索并选择当前工作区中的一个父页面。', true); return; }
+  void request('create-library', { workspaceId: chosen.workspaceId, parentId: chosen.id }).then(result => { chosen = result.destination; message(result.message); return refresh(); }).catch(() => {});
+});
+$('favorite').addEventListener('click', () => { if (!chosen) return; const favorites = state.settings.favorites.filter(d => d.id !== chosen.id || d.workspaceId !== chosen.workspaceId); if (favorites.length === state.settings.favorites.length) favorites.push(chosen); void request('configure', { settings: { favorites } }).then(refresh).catch(() => {}); });
+$('save-defaults').addEventListener('click', () => void request('configure', { settings: readOptions() }).then(() => { message('已保存默认收集选项。'); return refresh(); }).catch(() => {}));
+$('choose-directory').addEventListener('click', () => void request('directory').then(result => result.path && request('configure', { settings: { outputDirectory: result.path } })).then(refresh).catch(() => {}));
+$('choose-browser').addEventListener('click', () => void request('browser').then(result => { if (result.path) $('browser-path').value = result.path; }).catch(() => {}));
+$('choose-profile').addEventListener('click', () => void request('profile').then(result => { if (result.path) $('browser-profile').value = result.path; }).catch(() => {}));
+$('reset-profile').addEventListener('click', () => { $('browser-profile').value = ''; });
+$('save-advanced').addEventListener('click', () => void request('configure', { settings: { shortcut: $('shortcut-input').value, browserPort: Number($('browser-port').value), browserExecutable: $('browser-path').value, browserProfile: $('browser-profile').value, proxy: $('proxy').value.trim() } }).then(refresh).catch(() => {}));
+$('prepare').addEventListener('click', () => void request('prepare').then(result => { message(result.message); return refresh(); }).catch(() => {}));
+$('check-accounts').addEventListener('click', () => void accounts().catch(() => {})); $('login-site').addEventListener('click', () => void request('login', { site: $('custom-site').value.trim() }).then(r => message(r.message)).catch(() => {}));
+$('select-all').addEventListener('click', () => { const inputs = [...$('selection-list').querySelectorAll('input:not(:disabled)')], all = inputs.every(i => i.checked); inputs.forEach(i => { i.checked = !all; }); });
+$('save-selected').addEventListener('click', () => void request('select', { id: selectedJob, ids: [...$('selection-list').querySelectorAll('input:checked')].map(i => i.value), options: readOptions(), allowPartial: true }).then(refresh).catch(() => {}));
+$('reread').addEventListener('click', () => void request('reread', { id: selectedJob }).then(refresh).catch(() => {}));
+$('task-search').addEventListener('input', () => state && renderTasks()); $('status-filter').addEventListener('change', () => state && renderTasks());
+api.onChange(() => { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => void refresh().catch(() => {}), 150); });
+api.onShow(({ expanded: showExpanded }) => { setExpanded(showExpanded); $('links').focus(); });
+void refresh().then(() => { $('links').focus(); return accounts(); }).catch(() => {});

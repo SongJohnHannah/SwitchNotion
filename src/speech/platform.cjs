@@ -3,16 +3,18 @@ const path = require('node:path');
 const os = require('node:os');
 const models = require('./models.json');
 
-function createSpeechPlatform({ id = process.platform, arch = process.arch, env = process.env,
+function createSpeechPlatform({ id = process.platform, arch = process.arch, env = process.env, device = 'auto',
   home = os.homedir(), fsImpl = fs, model = 'medium' } = {}) {
   if (!Object.hasOwn(models, model)) throw Error('本机语音模型选择无效。');
+  if (!['auto', 'cpu'].includes(device)) throw Error('语音计算设备选择无效。');
   const windows = id === 'win32' && arch === 'x64';
   const apple = id === 'darwin' && arch === 'arm64';
+  const cuda = windows && device !== 'cpu';
   const paths = id === 'win32' ? path.win32 : path.posix;
   const profile = Object.freeze({ platform: id, architecture: arch, supported: windows || apple,
-    provider: 'faster-whisper', model, device: windows ? 'cuda' : 'cpu',
-    computeType: windows ? 'float16' : 'int8', cpuThreads: 4, offline: true,
-    hardwareLabel: windows ? 'NVIDIA GPU' : apple ? 'Apple Silicon CPU' : '不支持的平台' });
+    provider: 'faster-whisper', model, device: cuda ? 'cuda' : 'cpu',
+    computeType: cuda ? 'float16' : 'int8', cpuThreads: 4, offline: true,
+    hardwareLabel: cuda ? 'NVIDIA GPU' : apple ? 'Apple Silicon CPU' : windows ? '本机 CPU' : '不支持的平台' });
   function requireSupported() {
     if (!profile.supported) {
       const error = Error('离线语音支持 Windows x64 NVIDIA GPU 和 Apple Silicon Mac（M1 或更新芯片）；请使用原生 ARM64 程序。');
@@ -61,10 +63,11 @@ function createSpeechPlatform({ id = process.platform, arch = process.arch, env 
     const value = { ...Object.fromEntries(Object.entries(env).filter(([key]) => allowed.test(key))),
       PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1',
       HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1', HF_HUB_DISABLE_TELEMETRY: '1' };
-    if (windows) value.CUDA_CACHE_PATH = paths.join(root, 'speech/cuda-cache');
+    if (cuda) value.CUDA_CACHE_PATH = paths.join(root, 'speech/cuda-cache');
+    if (windows && !cuda) value.NOTION_SWITCH_SPEECH_DEVICE = 'cpu';
     return value;
   }
   return Object.freeze({ profile, requireSupported, normalizeRuntime, candidates, environment,
-    withModel: next => createSpeechPlatform({ id, arch, env, home, fsImpl, model: next }) });
+    withModel: next => createSpeechPlatform({ id, arch, env, home, fsImpl, model: next, device }) });
 }
 module.exports = { createSpeechPlatform };

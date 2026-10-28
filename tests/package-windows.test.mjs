@@ -8,7 +8,7 @@ import { verifyPackagedReferences } from './helpers/packaged-references.mjs';
 test('the portable package uses an allowlist, carries its runtime and licenses, and excludes private state and Notion binaries', async t => {
   const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-package-')), project = path.join(root, 'project');
   fs.mkdirSync(project); t.after(() => { assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
-  for (const folder of ['src', 'scripts']) fs.cpSync(path.resolve(folder), path.join(project, folder), { recursive: true });
+  for (const folder of ['src', 'scripts', 'docs']) fs.cpSync(path.resolve(folder), path.join(project, folder), { recursive: true });
   for (const folder of ['.notion-switch', 'research']) fs.mkdirSync(path.join(project, folder));
   for (const name of ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'WINDOWS-使用说明.md', 'package.json', 'NotionSwitch 启动.vbs', 'NotionSwitch 配置.vbs', 'NotionSwitch 更新.vbs']) fs.copyFileSync(path.resolve(name), path.join(project, name));
   fs.writeFileSync(path.join(project, '.notion-switch/deepseek-api-key.txt'), 'fixture secret that must never ship');

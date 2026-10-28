@@ -10,6 +10,15 @@ const { SpeechProvider } = speech;
 const root = path.resolve('.notion-switch/test-speech-protocol');
 const runtime = { pythonExecutable: path.resolve('python.exe'), modelDirectory: path.resolve('fixture-medium') };
 function pcm(seconds = 1) { const b = Buffer.alloc(16000 * 4 * seconds); for (let n = 0; n < b.length; n += 4) b.writeFloatLE(.1, n); return b; }
+test('media WAV requests bound each backend segment without dropping or repeating samples', async t => {
+  const f = fixture(t, (message, child) => { if (Buffer.from(message.audio, 'base64').length > 10 * 16000 * 4) { queueMicrotask(() => child.emit('exit', 1)); return true; } });
+  const audio = pcm(31), header = Buffer.alloc(44);
+  header.write('RIFF'); header.writeUInt32LE(audio.length + 36, 4); header.write('WAVEfmt ', 8); header.writeUInt32LE(16, 16); header.writeUInt16LE(3, 20); header.writeUInt16LE(1, 22); header.writeUInt32LE(16000, 24); header.writeUInt32LE(64000, 28); header.writeUInt16LE(4, 32); header.writeUInt16LE(32, 34); header.write('data', 36); header.writeUInt32LE(audio.length, 40);
+  await f.provider.transcribeWav({ wav: Buffer.concat([header, audio]), chunkSeconds: 10 });
+  const chunks = f.requests.filter(request => request.type === 'transcribe').map(request => Buffer.from(request.audio, 'base64'));
+  assert.deepEqual(chunks.map(chunk => chunk.length / 64000), [10, 10, 10, 1]); assert.deepEqual(Buffer.concat(chunks), audio);
+  await assert.rejects(f.provider.transcribeWav({ wav: Buffer.concat([header, audio]), chunkSeconds: 0 }), /分段/);
+});
 function fixture(t, customize = () => {}) {
   const children = [], requests = [];
   const spawnImpl = (_exe, _argv, options) => {

@@ -40,7 +40,7 @@ try {
 | `probe({signal}?)` | 检测并实际载入模型；缺少组件报错，不自动下载，不静默切换云端 |
 | `transcribe({pcm,language?,context?,signal?})` | 输入单声道 16 kHz Float32 LE Buffer，数值范围 [-1,1]，最多 60 秒；返回文字 |
 | `transcribeDetailed({pcm,language?,context?,signal?})` | 返回 `{text,context,language}`；context 仅含高置信度文本，最多 120 字，供调用方在同一音源的下一段复用 |
-| `transcribeWav({wav,language?,signal?,onProgress?})` | PCM16 / Float32、单/双声道、8–48 kHz WAV，最多 10 分钟 / 128 MiB；自动重采样、分段，返回文字 |
+| `transcribeWav({wav,language?,signal?,onProgress?,chunkSeconds?})` | PCM16 / Float32、单/双声道、8–48 kHz WAV，最多 10 分钟 / 128 MiB；自动重采样、分段，返回文字。分段默认 30 秒，可设 1–30 秒；媒体收集使用 10 秒，连续保留全部采样 |
 | `retain()` / `release()` | 连续录音期间保留模型；配对使用，空闲默认 20 秒释放进程及内存/显存 |
 | `close()` | 中止自己的工作进程及排队请求；不关闭其他 Whisper 程序；下次调用可重新启动 |
 

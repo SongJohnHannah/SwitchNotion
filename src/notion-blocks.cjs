@@ -149,12 +149,49 @@ function canonical(value) {
   return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
 }
 function blockRevision(block) {
-  return createHash('sha256').update(JSON.stringify(canonical({ id: block.id, type: block.type, parent: block.parent, last_edited_time: block.last_edited_time, in_trash: block.in_trash ?? block.archived ?? false, has_children: block.has_children, content: block[block.type] }))).digest('hex');
+  const content = block[block.type];
+  const stableContent = content?.type === 'file' && content.file ? { ...content, file: stableHostedFile(content.file) } : content;
+  return createHash('sha256').update(JSON.stringify(canonical({ id: block.id, type: block.type, parent: block.parent, last_edited_time: block.last_edited_time, in_trash: block.in_trash ?? block.archived ?? false, has_children: block.has_children, content: stableContent }))).digest('hex');
+}
+function stableHostedFile(file) {
+  const { expiry_time, ...value } = file;
+  try { const url = new URL(value.url); if (url.protocol === 'https:' && !url.username && !url.password) value.url = url.origin + url.pathname; } catch {}
+  return value;
 }
 function matches(actual, expected) {
   if (expected === null || typeof expected !== 'object') return actual === expected;
   if (Array.isArray(expected)) return Array.isArray(actual) && actual.length === expected.length && expected.every((item, i) => matches(actual[i], item));
-  return !!actual && typeof actual === 'object' && Object.entries(expected).every(([key, value]) => matches(actual[key], value));
+  return !!actual && typeof actual === 'object' && Object.entries(expected).every(([key, value]) => key === 'file' && expected.type === 'file' && value?.url && actual[key]?.url ? matches(stableHostedFile(actual[key]), stableHostedFile(value)) : ['rich_text', 'caption'].includes(key) && Array.isArray(value) ? richTextMatches(actual[key], value) : matches(actual[key], value));
+}
+function richTextMatches(actual, expected) {
+  if (!Array.isArray(actual)) return false;
+  const normalized = spans => {
+    const runs = [];
+    for (const span of spans) {
+      if (span.type && span.type !== 'text' || !span.text) { runs.push(span); continue; }
+      const annotations = { bold: false, italic: false, strikethrough: false, underline: false, code: false, color: 'default', ...span.annotations };
+      const run = { type: 'text', text: { content: span.text.content, link: span.text.link?.url || null }, annotations };
+      const last = runs.at(-1);
+      if (last?.type === 'text' && last.text?.link === run.text.link && JSON.stringify(canonical(last.annotations)) === JSON.stringify(canonical(annotations))) last.text.content += run.text.content;
+      else runs.push(run);
+    }
+    return runs;
+  };
+  return matches(normalized(actual), normalized(expected));
+}
+function uploadedMediaMatches(actual, expected, submitted) {
+  if (!expected?.file_upload || actual?.type !== 'file' || submitted?.type !== 'file') return false;
+  try {
+    const current = new URL(actual.file.url), echoed = new URL(submitted.file.url);
+    if (current.protocol !== 'https:' || echoed.protocol !== 'https:' || current.username || echoed.username || current.password || echoed.password) return false;
+    // File uploads become hosted file objects. Bind the independently read
+    // file to the create response, ignoring rotating signed query strings.
+    return current.origin === echoed.origin && current.pathname === echoed.pathname && richTextMatches(actual.caption || [], expected.caption || []);
+  } catch { return false; }
+}
+function matchesBlockContent(actual, expected, submitted) {
+  return actual?.type === expected?.type && !actual.in_trash && !actual.archived && !expected[expected.type]?.children &&
+    (matches(actual[actual.type], expected[expected.type]) || mediaTypes.has(expected.type) && uploadedMediaMatches(actual[actual.type], expected[expected.type], submitted?.[expected.type]));
 }
 const urlFor = id => `https://www.notion.so/${id.replaceAll('-', '')}`;
 function createSession({ request, authorize, mutate, signal }) {
@@ -211,16 +248,17 @@ function createSession({ request, authorize, mutate, signal }) {
     } while (cursor);
     return ids;
   };
-  const verifyCreated = async (expected, actual, depth = 0) => {
+  const verifyCreated = async (expected, actual, depth = 0, submitted) => {
     const { children, ...content } = expected[expected.type];
-    if (actual.type !== expected.type || !matches(actual[actual.type], content) || actual.in_trash || actual.archived) return false;
+    const same = matches(actual[actual.type], content) || mediaTypes.has(expected.type) && uploadedMediaMatches(actual[actual.type], content, submitted?.[expected.type]);
+    if (actual.type !== expected.type || !same || actual.in_trash || actual.archived) return false;
     if (children) {
       const all = []; let cursor;
       do { const next = await list(uuid(actual.id), cursor); all.push(...next.results); cursor = next.has_more ? next.next_cursor : null; if (all.length > 100) return false; } while (cursor);
       if (all.length !== children.length) return false;
       for (let i = 0; i < children.length; i++) {
         const normalized = validateBlock(children[i], { depth: depth + 1 });
-        if (!await verifyCreated(normalized, await read(uuid(all[i].id)), depth + 1)) return false;
+        if (!await verifyCreated(normalized, await read(uuid(all[i].id)), depth + 1, all[i])) return false;
       }
     }
     return true;
@@ -267,7 +305,7 @@ function createSession({ request, authorize, mutate, signal }) {
         for (let i = 0; i < created.length; i++) {
           const block = await read(uuid(created[i].id));
           const sameParent = [block.parent?.block_id, block.parent?.page_id].includes(id);
-          const sameContent = i < blocks.length && await verifyCreated(blocks[i], block);
+          const sameContent = i < blocks.length && await verifyCreated(blocks[i], block, 0, created[i]);
           verified &&= sameParent && sameContent;
           result.push(remember(block));
         }
@@ -301,4 +339,4 @@ function createSession({ request, authorize, mutate, signal }) {
   };
   return { execute };
 }
-module.exports = { definitions, writeTools, createSession };
+module.exports = { definitions, writeTools, createSession, matchesBlockContent };

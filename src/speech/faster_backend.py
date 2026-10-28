@@ -16,8 +16,9 @@ def profile():
     # intentionally absent in our minimal worker environment. Inspect the
     # interpreter build instead, also rejecting a 32-bit Python executable.
     if sys.platform == 'win32' and sysconfig.get_platform() == 'win-amd64':
-        return {'platform': 'win32', 'architecture': 'x64', 'device': 'cuda',
-                'computeType': 'float16', 'cpuThreads': 4}
+        cpu = os.environ.get('NOTION_SWITCH_SPEECH_DEVICE') == 'cpu'
+        return {'platform': 'win32', 'architecture': 'x64', 'device': 'cpu' if cpu else 'cuda',
+                'computeType': 'int8' if cpu else 'float16', 'cpuThreads': 4}
     if sys.platform == 'darwin' and machine in ('arm64', 'aarch64'):
         return {'platform': 'darwin', 'architecture': 'arm64', 'device': 'cpu',
                 'computeType': 'int8', 'cpuThreads': 4}

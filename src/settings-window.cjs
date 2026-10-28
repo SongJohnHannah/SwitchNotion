@@ -7,6 +7,7 @@ const { UpdateService } = require('./update-service.cjs');
 const { createDesktopPlatform } = require('./platform/index.cjs');
 const { SpeechSettings } = require('./speech/settings.cjs');
 const { microphonePermission } = require('./speech/microphone-permission.cjs');
+const { setupCollection } = require('./collection/window.cjs');
 const marker = '--notion-switch-settings';
 const settingsContents = new WeakSet();
 let constructingSettings = false;
@@ -14,8 +15,13 @@ function isSettings(contents) { return constructingSettings || settingsContents.
 function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () => false, getCompatibility = () => ({}), speech }) {
   const service = new SettingsService({ root });
   speech ||= new SpeechSettings({ root, isBusy });
+  const collection = setupCollection({ root, speech: speech.provider, platform, openSettings: () => open(), createWindow: options => {
+    constructingSettings = true;
+    try { const auxiliary = new BrowserWindow(options); settingsContents.add(auxiliary.webContents); return auxiliary; }
+    finally { constructingSettings = false; }
+  } });
   const isTaskBusy = isBusy;
-  isBusy = () => isTaskBusy() || speech.preparing || speech.provider.status().busy || speech.provider.leases > 0;
+  isBusy = () => isTaskBusy() || collection.service.active > 0 || speech.preparing || speech.provider.status().busy || speech.provider.leases > 0;
   app.on('will-quit', () => speech.close());
   const login = new LoginService({ root, platform, isBusy, onRestart: () => setTimeout(() => app.quit(), 300), getTargetLoginStatus: async () => {
     await app.whenReady();
@@ -66,6 +72,11 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
     if (!window || window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== url) return { ok: false, error: '此操作只能从 NotionSwitch 配置窗口执行。' };
     if (typeof action === 'string' && action.startsWith('update.')) return updates.request(action, input);
     if (typeof action === 'string' && action.startsWith('speech.')) return speech.request(action, input);
+    if (typeof action === 'string' && action.startsWith('collection.')) {
+      if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, error: '收集操作参数无效。' };
+      if (action === 'collection.open') { if (Object.keys(input).length) return { ok: false, error: '收集入口不接受额外参数。' }; await collection.open(true); return { ok: true, result: {} }; }
+      return collection.service.request(action.slice('collection.'.length), input);
+    }
     if (action === 'login.status' || action === 'login.sync') {
       if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length) return { ok: false, error: '无法识别这项操作。' };
       try { if (action === 'login.sync' && updates.updating) return { ok: false, error: '正在更新原型，请等待重启完成。' }; return { ok: true, result: await login[action === 'login.status' ? 'status' : 'sync']() }; }
@@ -82,7 +93,7 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
   });
   const originalSetMenu = Menu.setApplicationMenu.bind(Menu);
   Menu.setApplicationMenu = menu => {
-    if (menu && !menu.getMenuItemById('notion-switch-config-menu')) menu.append(new MenuItem({ id: 'notion-switch-config-menu', label: 'NotionSwitch', submenu: [{ label: '打开配置窗口', click: () => void open() }] }));
+    if (menu && !menu.getMenuItemById('notion-switch-config-menu')) menu.append(new MenuItem({ id: 'notion-switch-config-menu', label: 'NotionSwitch', submenu: [{ label: '快捷收集', click: () => void collection.open() }, { label: '打开配置窗口', click: () => void open() }] }));
     return originalSetMenu(menu);
   };
   app.whenReady().then(async () => {
@@ -92,13 +103,23 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
         ? nativeImage.createFromPath(path.join(__dirname, 'settings', 'notion-tray.png')).resize({ width: 18, height: 18 })
         : await app.getFileIcon(process.execPath);
       tray = new Tray(icon);
-      tray.setToolTip('NotionSwitch · 工作区与 DeepSeek 配置');
-      tray.setContextMenu(Menu.buildFromTemplate([{ label: '打开 NotionSwitch 配置', click: () => void open() }, { label: '一键启动 Notion', click: () => void openNotion() }, { type: 'separator' }, { label: '退出 NotionSwitch', click: () => app.quit() }]));
-      tray.on('click', () => void open());
+      tray.setToolTip('Switch Notion · 快捷收集与配置');
+      tray.setContextMenu(Menu.buildFromTemplate([{ label: '快捷收集', click: () => void collection.open() }, { label: '收集任务与选项', click: () => void collection.open(true) }, { label: '打开 NotionSwitch 配置', click: () => void open() }, { label: '一键启动 Notion', click: () => void openNotion() }, { type: 'separator' }, { label: '退出 NotionSwitch', click: () => app.quit() }]));
+      tray.on('click', () => void collection.open());
     } catch {}
     if (process.env.NOTION_SWITCH_OPEN_SETTINGS === '1') await open();
+    if (process.env.NOTION_SWITCH_OPEN_COLLECTION === '1') await collection.open();
+    const resumeCollection = process.env.NOTION_SWITCH_COLLECTION_RESUME;
+    const resumeIds = typeof resumeCollection === 'string' ? resumeCollection.split(',') : [];
+    if (resumeIds.length <= 10 && resumeIds.every(id => /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(id))) {
+      for (const id of resumeIds) {
+        const job = collection.service.jobs.get(id);
+        if (job && ['interrupted', 'cancelled', 'failed', 'partial', 'needs_login'].includes(job.status)) collection.service.retry(job.id);
+        else if (job?.status === 'awaiting_selection' && !job.document.incomplete) collection.service.select(job.id, { ids: job.document.nodes.map(node => node.id) });
+      }
+    }
   }).catch(() => {});
-  return { open, openNotion, speech, updateStatus: () => updates.request('update.status'), isLoginSyncing: () => login.syncing || updates.updating, status: () => {
+  return { open, openNotion, speech, collection, updateStatus: () => updates.request('update.status'), isLoginSyncing: () => login.syncing || updates.updating, status: () => {
     const opened = !!window && !window.isDestroyed(), prefs = opened ? window.webContents.getLastWebPreferences() : null;
     return { available: true, open: opened, ...(prefs ? { contextIsolation: prefs.contextIsolation, sandbox: prefs.sandbox, nodeIntegration: prefs.nodeIntegration } : {}) };
   } };

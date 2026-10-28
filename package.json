@@ -13,6 +13,7 @@
     "provider": "node scripts/provider.mjs",
     "notion": "node scripts/notion.mjs",
     "settings": "node scripts/open-settings.mjs",
+    "collect": "node scripts/open-collection.mjs",
     "open": "node scripts/open-notion.mjs",
     "update": "node scripts/open-update.mjs",
     "package:windows": "node scripts/package-windows.mjs",

@@ -91,8 +91,9 @@ class SpeechProvider {
     const result = await this.request('transcribe_recording', { audio: audio.toString('base64') }, signal);
     if (typeof result?.text !== 'string') throw Error('本机离线转写没有返回文字。'); return result.text;
   }
-  async transcribeWav({ wav, language = 'auto', signal, onProgress = () => {} }) {
-    const { pcm } = decodeWav(wav), texts = [], limit = 30 * 16000 * 4; this.retain();
+  async transcribeWav({ wav, language = 'auto', signal, onProgress = () => {}, chunkSeconds = 30 }) {
+    if (!Number.isInteger(chunkSeconds) || chunkSeconds < 1 || chunkSeconds > 30) throw Error('语音分段须为 1 到 30 秒。');
+    const { pcm } = decodeWav(wav), texts = [], limit = chunkSeconds * 16000 * 4; this.retain();
     try { for (let at = 0; at < pcm.length; at += limit) { texts.push(await this.transcribe({ pcm: pcm.subarray(at, Math.min(pcm.length, at + limit)), language, signal })); onProgress(Math.min(1, (at + limit) / pcm.length)); } return texts.filter(Boolean).join('\n'); }
     finally { this.release(); }
   }
