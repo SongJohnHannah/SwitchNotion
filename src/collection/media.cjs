@@ -34,6 +34,13 @@ class CollectionMedia {
       if (!current || node.contentId && current.contentId !== node.contentId) throw Error('微信分享对应的视频已改变，未将不同视频混入原任务。');
       node = { ...node, url: current.url, direct: true };
     }
+    if (node.platform === 'xiaohongshu' && node.direct) {
+      progress('正在刷新小红书原视频地址…');
+      const document = await this.browser.inspect(node.sourceUrl, { signal, progress });
+      const current = document.nodes.find(item => item.kind === 'video' && item.platform === 'xiaohongshu' && item.contentId === node.contentId);
+      if (document.incomplete || !current?.direct || !node.contentId || current.contentId !== node.contentId) throw Error('小红书原视频尚未取得或笔记已改变，请登录并重新读取；未将其他内容混入原任务。');
+      node = { ...node, url: current.url, expectedAudio: node.expectedAudio || current.expectedAudio };
+    }
     fs.mkdirSync(directory, { recursive: true }); progress('正在下载' + ({ image: '原图', audio: '音频', video: '视频' }[node.kind]) + '…');
     if (node.kind === 'image' && new URL(node.url).hostname === 'pbs.twimg.com') { const url = new URL(node.url); if (url.searchParams.get('format') === 'webp' && url.searchParams.get('name') === 'orig') { url.searchParams.set('format', 'jpg'); node = { ...node, url: url.href }; } }
     const direct = node.direct || node.kind === 'image' || /\.(?:mp[34]|m4[av]|wav|ogg|flac|aac|opus|aiff?|wma|webm|mov|mkv)(?:\?|$)/i.test(node.url);

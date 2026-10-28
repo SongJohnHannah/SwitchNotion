@@ -1,6 +1,6 @@
 'use strict';
 const api = window.collection, $ = id => document.getElementById(id);
-let state, chosen, expanded = false, selectedJob, destinationResults = [], cursors = {}, searchTimer, refreshTimer, searchVersion = 0, promptDraft, promptTab = 'article';
+let state, chosen, expanded = false, selectedJob, destinationResults = [], cursors = {}, searchTimer, refreshTimer, searchVersion = 0, promptDraft, promptTab = 'article', checkingAccounts = false;
 const names = { paragraph: '正文', heading: '标题', quote: '引用', list: '列表', code: '代码', divider: '分隔', link: '链接', image: '图片', video: '视频', audio: '音频' };
 const statuses = { queued: '等待中', reading: '识别中', downloading: '下载中', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需登录／检查完整性', completed: '已保存', partial: '待补全', failed: '失败', cancelled: '已停止', interrupted: '可继续' };
 const active = ['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving'];
@@ -26,7 +26,7 @@ async function refresh() {
   $('last-result').hidden = !state.latestCompletion;
   $('components').textContent = (state.binaries.downloader ? '下载器已就绪' : '下载器待准备') + ' · ' + (state.binaries.ffmpeg ? '媒体处理已就绪' : '媒体处理待准备') + (state.lastError ? ' · ' + state.lastError : '');
   $('prepare').disabled = state.preparing;
-  $('local-directory').textContent = state.settings.outputDirectory || '默认：下载目录 / Switch Notion';
+  $('local-directory').textContent = '本地资料保存到：' + (state.settings.outputDirectory || state.defaultDownloadDirectory || '系统下载目录 / NotionSwitch') + ' / 链接标题';
   if (state.shortcutError || state.configError) message(state.shortcutError || state.configError, true);
   renderFavorites(); renderTasks();
   if (selectedJob) renderSelection(state.jobs.find(j => j.id === selectedJob));
@@ -83,12 +83,44 @@ function renderTasks() {
     if (job.status === 'completed') actions.append(button('重新收集为新记录', async () => { await request('create', { input: job.url, options: readOptions(), force: true }); await refresh(); }));
     if (active.includes(job.status)) actions.append(button('停止', async () => { await request('cancel', { id: job.id }); await refresh(); }));
     if (['failed', 'partial', 'cancelled', 'interrupted', 'needs_login'].includes(job.status)) actions.append(button('继续／重试', async () => { await request('retry', { id: job.id }); await refresh(); }));
+    if (job.canDelete) {
+      const remove = button('删除任务', async () => {
+        remove.disabled = true;
+        try {
+          const result = await request('delete-task', { id: job.id });
+          if (selectedJob === job.id) { selectedJob = undefined; renderSelection(null); }
+          await refresh(); message(result.message);
+        } catch (error) { card.querySelector('.task-message').textContent = '删除未完成：' + error.message; }
+        finally { remove.disabled = false; }
+      }, 'text danger');
+      remove.title = '删除本机任务及相关文件，保留已保存的 Notion 页面和原始本地文件'; actions.append(remove);
+    }
     actions.append(button(job.local ? '打开文件位置' : '打开原文／登录', () => request('open-source', { id: job.id })));
     if (job.options.keepLocal && job.status === 'completed') actions.append(button('本地副本', () => request('open-local', { id: job.id })));
     card.append(actions); root.append(card);
   }
 }
-async function accounts() { const data = await request('accounts'), root = $('accounts'); root.replaceChildren(); for (const site of data) { const node = element('div', 'account ' + site.state); node.append(element('span', '', site.name), element('small', '', site.state === 'saved' ? '有登录资料' : site.state === 'missing' ? '需登录' : '待检测'), button('登录', async () => { const result = await request('login', { site: site.id }); message(result.message); })); root.append(node); } }
+async function accounts() {
+  if (checkingAccounts) return;
+  checkingAccounts = true;
+  const control = $('check-accounts'), feedback = $('accounts-feedback'), root = $('accounts');
+  control.disabled = true; control.textContent = '检测中…'; root.setAttribute('aria-busy', 'true'); root.replaceChildren();
+  feedback.hidden = false; feedback.classList.remove('error'); feedback.textContent = '正在检测本机收集浏览器中的登录资料…';
+  try {
+    const data = await request('accounts');
+    for (const site of data) {
+      const node = element('div', 'account ' + site.state), status = element('small', '', site.state === 'saved' ? '本机有资料 · 未验证' : site.state === 'missing' ? '未发现登录资料' : '未能检测');
+      status.title = site.message || '是否可访问完整内容，以实际读取结果为准。';
+      node.append(element('span', '', site.name), status, button(site.state === 'missing' ? '去登录' : '打开网站', async () => {
+        try { const result = await request('login', { site: site.id }); feedback.classList.remove('error'); feedback.textContent = result.message; message(result.message); }
+        catch (error) { feedback.classList.add('error'); feedback.textContent = '网站未能打开：' + error.message; }
+      })); root.append(node);
+    }
+    const unknown = data.filter(site => site.state === 'unknown'), saved = data.filter(site => site.state === 'saved').length;
+    feedback.textContent = '检测完成 · ' + new Date().toLocaleTimeString('zh-CN', { hour12: false }) + ' · ' + saved + ' 个网站有本机资料，登录有效性未验证。' + (unknown.length ? ' ' + [...new Set(unknown.map(site => site.message || '部分网站未能检测，请重试。'))].join('；') : '');
+  } catch (error) { root.replaceChildren(); feedback.classList.add('error'); feedback.textContent = '检测未完成：' + error.message; }
+  finally { checkingAccounts = false; control.disabled = false; control.textContent = '检测登录资料'; root.setAttribute('aria-busy', 'false'); }
+}
 $('capture-form').addEventListener('submit', event => { event.preventDefault(); void submit(false).catch(() => {}); });
 $('links').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void submit(false).catch(() => {}); } });
 $('preview').addEventListener('click', () => void submit(true).catch(() => {}));
@@ -136,6 +168,7 @@ $('create-library').addEventListener('click', () => {
 $('favorite').addEventListener('click', () => { if (!chosen) return; const favorites = state.settings.favorites.filter(d => d.id !== chosen.id || d.workspaceId !== chosen.workspaceId); if (favorites.length === state.settings.favorites.length) favorites.push(chosen); void request('configure', { settings: { favorites } }).then(refresh).catch(() => {}); });
 $('save-defaults').addEventListener('click', () => void request('configure', { settings: readOptions() }).then(() => { message('已保存默认收集选项。'); return refresh(); }).catch(() => {}));
 $('choose-directory').addEventListener('click', () => void request('directory').then(result => result.path && request('configure', { settings: { outputDirectory: result.path } })).then(refresh).catch(() => {}));
+$('open-downloads').addEventListener('click', () => void request('open-downloads').catch(() => {}));
 $('choose-browser').addEventListener('click', () => void request('browser').then(result => { if (result.path) $('browser-path').value = result.path; }).catch(() => {}));
 $('choose-profile').addEventListener('click', () => void request('profile').then(result => { if (result.path) $('browser-profile').value = result.path; }).catch(() => {}));
 $('reset-profile').addEventListener('click', () => { $('browser-profile').value = ''; });

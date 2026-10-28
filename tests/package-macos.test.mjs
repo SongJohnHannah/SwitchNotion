@@ -15,6 +15,7 @@ test('Mac package is relocatable, reuses Notion icon and preserves double-click 
   t.after(() => { assert.equal(path.dirname(base), dist); fs.rmSync(base, { recursive: true, force: true }); });
   const result = stageMac({ destination: path.join(base, 'Switch Notion M1') });
   assert.equal(result.includesNotion, false); assert.equal(result.includesUserData, false); assert.equal(result.notarized, false);
+  assert.match(fs.readFileSync(path.join(result.app,'Contents/Resources/project/docs/MAC-CHECKLIST-ACCEPTANCE-2026-10-29.md'),'utf8'), /C10 建库菜单位置/);
   const plist = fs.readFileSync(path.join(result.app, 'Contents/Info.plist'), 'utf8');
   assert.equal(path.basename(result.app), 'SwitchNotion.app');
   assert.match(plist, /<key>CFBundleName<\/key><string>SwitchNotion<\/string>/);

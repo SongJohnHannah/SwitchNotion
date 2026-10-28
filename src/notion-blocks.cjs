@@ -165,12 +165,23 @@ function matches(actual, expected) {
 }
 function richTextMatches(actual, expected) {
   if (!Array.isArray(actual)) return false;
+  const comparableLink = value => {
+    try {
+      const url = new URL(value);
+      // Notion removes this web-note attribution on topic-search links. Keep
+      // the topic, type and every access/signature parameter significant.
+      if (url.origin !== 'https://www.xiaohongshu.com' || url.username || url.password || url.pathname !== '/search_result') return value;
+      const source = url.searchParams.get('source');
+      if (source && !/^web_note_detail_[\w-]+$/.test(source)) return value;
+      url.searchParams.delete('source'); return url.href;
+    } catch { return value; }
+  };
   const normalized = spans => {
     const runs = [];
     for (const span of spans) {
       if (span.type && span.type !== 'text' || !span.text) { runs.push(span); continue; }
       const annotations = { bold: false, italic: false, strikethrough: false, underline: false, code: false, color: 'default', ...span.annotations };
-      const run = { type: 'text', text: { content: span.text.content, link: span.text.link?.url || null }, annotations };
+      const run = { type: 'text', text: { content: span.text.content, link: comparableLink(span.text.link?.url || null) }, annotations };
       const last = runs.at(-1);
       if (last?.type === 'text' && last.text?.link === run.text.link && JSON.stringify(canonical(last.annotations)) === JSON.stringify(canonical(annotations))) last.text.content += run.text.content;
       else runs.push(run);

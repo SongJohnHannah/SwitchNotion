@@ -14,7 +14,7 @@ for (const item of fs.readdirSync(runtime, { withFileTypes: true })) {
 const main = `const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
-const {app,BrowserWindow,globalShortcut} = require('electron');
+const {app,BrowserWindow,globalShortcut,Menu,MenuItem,ipcMain} = require('electron');
 const project = ${JSON.stringify(project)}, directory = ${JSON.stringify(stage)};
 app.disableHardwareAcceleration();app.setName('Switch Notion Collection QA');
 fs.mkdirSync(path.join(directory,'profile'),{recursive:true});app.setPath('userData',path.join(directory,'profile'));
@@ -23,13 +23,17 @@ const collection=setupCollection({root:path.join(directory,'state'),platform:{id
 collection.service.settings.shortcut='CommandOrControl+Alt+Shift+F12';collection.service.settings.browserPort=19487;
 const deadline=setTimeout(()=>{console.error('Electron collection QA timeout');app.exit(1);},45000);
 app.whenReady().then(async()=>{
+ const {setupDatabaseWizard}=require(path.join(project,'src/database-wizard-window.cjs'));
+ setupDatabaseWizard({root:path.join(directory,'state'),provider:{},bridge:{contexts:[]},createWindow:()=>{throw Error('Menu placement must not create a database');},app,ipcMain,Menu,MenuItem,shell:{}});
+ Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'File',submenu:[]},{id:'notion-switch-config-menu',label:'NotionSwitch',submenu:[{label:'快捷收集'},{label:'打开配置窗口'}]}]));
+ const menu=Menu.getApplicationMenu();assert.deepEqual(menu.getMenuItemById('notion-switch-config-menu').submenu.items.map(i=>i.label),['快捷收集','AI 建库','打开配置窗口']);assert.equal(menu.items.some(i=>i.label==='AI 建库'),false);
  const {run,workerEnvironment,nodeExecutable}=require(path.join(project,'src/collection/process.cjs'));
  fs.mkdirSync(path.join(directory,'state'),{recursive:true});fs.writeFileSync(path.join(directory,'state/launcher.local.json'),JSON.stringify({nodeExecutable:${JSON.stringify(process.execPath)}}));
  const worker=await run(nodeExecutable(path.join(directory,'state')),['-e','process.stdout.write(JSON.stringify({node:!!process.versions.node,electron:!!process.versions.electron}))'],{env:workerEnvironment(path.join(directory,'bin')),timeout:10000});
  assert.deepEqual(JSON.parse(worker.stdout),{node:true,electron:false});
  await collection.open(false);const window=BrowserWindow.getAllWindows()[0];
  await new Promise(r=>setTimeout(r,600));
- const state=await window.webContents.executeJavaScript("window.collection.request('state')");assert.equal(state.ok,true);assert.equal(state.result.settings.vision,true);
+ const state=await window.webContents.executeJavaScript("window.collection.request('state')");assert.equal(state.ok,true);assert.equal(state.result.settings.vision,true);assert.equal(state.result.defaultDownloadDirectory,path.join(app.getPath('downloads'),'NotionSwitch'));
  assert.ok(globalShortcut.isRegistered(collection.service.settings.shortcut));
  await window.webContents.executeJavaScript("window.collection.request('configure',{settings:{vision:false}})");
  const changed=await window.webContents.executeJavaScript("window.collection.request('state')");assert.equal(changed.result.settings.vision,false);

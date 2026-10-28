@@ -43,7 +43,7 @@ service.on('finished', ({ id }) => {
 try {
   const created = await service.create({ input: input.input || input.urls.join('\n'), options: input.options || {} });
   while (service.active) await sleep(400);
-  for (const result of created.jobs) {
+  for (const [sourceIndex, result] of created.jobs.entries()) {
     const captured = snapshots.get(result.id), current = service.jobs.get(result.id);
     if (!captured || captured.job.status !== 'completed') { results.push({ id: result.id, status: current?.status, message: current?.message, page: current?.page?.url, verified: false }); continue; }
     const { job, echoes, files } = captured, signal = AbortSignal.timeout(180000); assert.equal(captureErrors.has(job.id), false, 'Acceptance capture failed');
@@ -55,7 +55,25 @@ try {
       const index = blocks.findIndex(block => block.id === ids[i]); assert.ok(index > position, 'Saved block order differs'); position = index;
       assert.equal(matchesBlockContent(blocks[index], expected[i], echoes.get(ids[i])), true, 'Independently read content differs');
     }
+    const imageNodes = job.document.nodes.filter(node => node.kind === 'image' && job.sourceSlots[node.id]);
     const videoNodes = job.document.nodes.filter(node => node.kind === 'video' && job.sourceSlots[node.id]);
+    const expectation = input.expectations?.[sourceIndex];
+    if (expectation?.images !== undefined) assert.equal(imageNodes.length, expectation.images, 'Source image count differs');
+    if (expectation?.videos !== undefined) assert.equal(videoNodes.length, expectation.videos, 'Source video count differs');
+    const images = [];
+    for (const node of imageNodes) {
+      const ids = job.sourceSlots[node.id].ids;
+      assert.equal(ids.length, 1);
+      const block = blocks.find(block => block.id === ids[0]); assert.equal(block.image.type, 'file');
+      const original = files.get(node.id + ':0'); assert.ok(original.bytes <= 64 * 1024 ** 2);
+      const output = path.join(root, 'collection', job.id + '-verify-' + node.id + '.image');
+      try {
+        await download(block.image.file.url, output, { signal, maxBytes: 64 * 1024 ** 2 });
+        assert.equal(createHash('sha256').update(fs.readFileSync(output)).digest('hex'), original.sha256, 'Saved image bytes differ from uploaded original');
+        const metadata = await service.media.probe(output, signal);
+        images.push({ width: metadata.width, height: metadata.height, originalBytesVerified: true });
+      } finally { if (fs.existsSync(output)) fs.unlinkSync(output); }
+    }
     const videos = [];
     for (const node of videoNodes) {
       let duration = 0, audio = false;
@@ -77,8 +95,8 @@ try {
     let transcriptCharacters = 0;
     for (const item of Object.values(job.analyses)) if (item.transcript?.text) { assert.ok(text.includes(item.transcript.text), 'Complete transcript missing'); transcriptCharacters += item.transcript.text.length; }
     const aiIndex = blocks.findIndex(block => block.heading_1?.rich_text?.some(span => (span.plain_text ?? span.text?.content ?? '').startsWith('AI 提取结果')));
-    if (job.extraction?.text) { assert.ok(aiIndex >= 0); for (const node of videoNodes) assert.ok(blocks.findIndex(block => block.id === job.sourceSlots[node.id].ids.at(-1)) < aiIndex); }
-    results.push({ id: job.id, status: 'completed', page: job.page.url, sourceOrderVerified: true, fullContentVerified: true, videos,
+    if (job.extraction?.text) { assert.ok(aiIndex >= 0); for (const node of [...imageNodes, ...videoNodes]) assert.ok(blocks.findIndex(block => block.id === job.sourceSlots[node.id].ids.at(-1)) < aiIndex); }
+    results.push({ id: job.id, status: 'completed', page: job.page.url, sourceOrderVerified: true, fullContentVerified: true, images, videos,
       transcriptCharacters, aiCharacters: job.extraction?.text?.length || 0, historyCleared: !fs.existsSync(path.join(root, 'collection/jobs', job.id)) });
   }
   fs.writeFileSync(path.join(root, 'collection', 'live-verification.local.json'), JSON.stringify(results, null, 2), { mode: 0o600 });

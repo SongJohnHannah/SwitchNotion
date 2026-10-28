@@ -44,6 +44,16 @@
 
 M1 使用 faster-whisper Medium / CPU INT8，尚未开启 Apple GPU 加速。下载 Node 和使用 DeepSeek、加载及同步 Notion 页面需要网络；离线语音识别本身不联网。语音模型及 Python 不包含在桌面启动包中，接入准备见项目 `docs/SPEECH-INTERFACE.md`。
 
+## 快捷收集与本地资料：新增待验收项
+
+本次默认目录调整为 **`系统下载目录 / NotionSwitch / 链接标题 /`**，保留本地资料默认开启；同名来源使用“标题 (2)”等独立文件夹。原文、图片、音视频、逐字稿、画面分析和 AI 提取结果集中保存，可以从收集窗口“打开下载文件夹”进入 Finder，也可整夹手动删除。完成任务历史清理不删除保留的资料。
+
+“检测登录资料”新增检测中、完成时间和失败原因；“本机有资料 · 未验证”只表示当前 Mac 浏览器保留了资料。失败／待补全任务可点“删除任务”，清理对应本地文件和恢复记录，保留已写入 Notion 页面及原始输入文件。“AI 建库”移到顶部 **NotionSwitch** 菜单，与“快捷收集”“打开配置窗口”同层。
+
+视频画面分析当前均匀采样，张数为 `min(60, max(1, ceil(秒数 / 30)))`；本机抽帧不消耗 Token，图片识别及 AI 摘要调用 DeepSeek 时产生模型用量。开启识别时，摘要参考正文、完整逐字稿和画面识别文字；关键帧图片保存在素材的 `frames/` 中。它不是自动定位重点场景，也不代表逐帧观看。
+
+**上述新增行为仍待 Mac 实机验收**，逐项操作与预期结果见 [C01–C10 待验收清单](docs/MAC-CHECKLIST-ACCEPTANCE-2026-10-29.md#本次新增功能待-mac-实机验收)。保留同一记录中已经完成的视频号、录音和建库实测结果，不把它们重新记为未测，也不据此替代本次新增功能的验证。
+
 ## 新增 AI 手动验收清单
 
 本轮沿用现有 `main` 分支同步。在 Mac 项目目录执行 `git pull --ff-only` 后，正常退出并用原有入口重开一次；保留原来的登录、API Key、音频和资料目录。可选执行只读命令 `npm run check:ai-runtime` 检查磁盘源码同步；使用 Application Support 资料时可执行 `node scripts/check-ai-runtime.mjs --root "$HOME/Library/Application Support/Switch Notion"`。该检查不更新或重启程序。

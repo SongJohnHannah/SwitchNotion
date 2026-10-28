@@ -5,7 +5,7 @@ const { promptSettings } = require('./prompts.cjs');
 const kinds = new Set(['paragraph', 'heading', 'quote', 'list', 'code', 'divider', 'image', 'video', 'audio', 'link']);
 const mediaKinds = new Set(['image', 'video', 'audio']);
 const defaults = Object.freeze({ shortcut: 'CommandOrControl+Shift+J', transcribe: true, vision: true,
-  compress: true, quality: '720p', keepLocal: false, keepHistory: false, extraction: Object.freeze(promptSettings()), types: ['text', 'image', 'video', 'audio'],
+  compress: true, quality: '720p', keepLocal: true, keepHistory: false, extraction: Object.freeze(promptSettings()), types: ['text', 'image', 'video', 'audio'],
   browserPort: 19333, browserExecutable: '', browserProfile: '', proxy: '', outputDirectory: '', destination: null, favorites: [] });
 const hash = value => createHash('sha256').update(String(value)).digest('hex');
 function publicUrl(value) {

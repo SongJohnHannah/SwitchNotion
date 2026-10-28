@@ -49,9 +49,10 @@ function setupDatabaseWizard({ root, provider, bridge, createWindow, app, ipcMai
   });
   const original = Menu.setApplicationMenu.bind(Menu);
   Menu.setApplicationMenu = menu => {
-    if (menu && !menu.getMenuItemById('notion-switch-build-menu')) menu.append(new MenuItem({ id: 'notion-switch-build-menu', label: 'AI 建库', submenu: [{ label: '打开建库向导', click: () => void open().catch(error => {
+    const parent = menu?.getMenuItemById('notion-switch-config-menu')?.submenu;
+    if (parent && !menu.getMenuItemById('notion-switch-build-menu')) parent.insert(1, new MenuItem({ id: 'notion-switch-build-menu', label: 'AI 建库', click: () => void open().catch(error => {
       require('electron').dialog.showErrorBox('AI 建库向导', error.message);
-    }) }] }));
+    }) }));
     return original(menu);
   };
   app.whenReady().then(() => { const menu = Menu.getApplicationMenu(); if (menu) Menu.setApplicationMenu(menu); });

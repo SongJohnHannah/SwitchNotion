@@ -2,11 +2,13 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { extractPage } = require('./extract-page.cjs');
+const { extractXiaohongshuPage } = require('./xiaohongshu.cjs');
 const { assertPublicUrl, effectiveProxy } = require('./network.cjs');
-const { normalizeDocument } = require('./model.cjs');
+const { normalizeDocument, hash } = require('./model.cjs');
 const { WechatChannel, isWechatShare } = require('./wechat-channel.cjs');
 const sites = Object.freeze([
   { id: 'douyin', name: '抖音', url: 'https://www.douyin.com/' },
+  { id: 'xiaohongshu', name: '小红书', url: 'https://www.xiaohongshu.com/explore' },
   { id: 'bilibili', name: 'B站', url: 'https://www.bilibili.com/' },
   { id: 'tiktok', name: 'TikTok', url: 'https://www.tiktok.com/' },
   { id: 'youtube', name: 'YouTube', url: 'https://www.youtube.com/' },
@@ -110,7 +112,7 @@ class CollectionBrowser {
     const result = [];
     for (const site of sites) { const cookies = await this.cookies(site.url, signal);
       // Presence is not proof of an authenticated, unexpired account.
-      const auth = { douyin: /sessionid|sid_guard/, bilibili: /SESSDATA/, tiktok: /sessionid|sid_guard/, youtube: /SAPISID|LOGIN_INFO|__Secure-1PSID/, x: /auth_token/, wechat: /hy_token|hy_user|session|login|uin/i }[site.id];
+      const auth = { douyin: /sessionid|sid_guard/, xiaohongshu: /^web_session$/, bilibili: /SESSDATA/, tiktok: /sessionid|sid_guard/, youtube: /SAPISID|LOGIN_INFO|__Secure-1PSID/, x: /auth_token/, wechat: /hy_token|hy_user|session|login|uin/i }[site.id];
       result.push({ ...site, state: cookies.some(c => auth.test(c.name) && (c.session || !c.expires || c.expires > Date.now() / 1000)) ? 'saved' : 'missing', message: '访问权限以实际读取结果为准' });
     } return result;
   }
@@ -132,9 +134,13 @@ class CollectionBrowser {
       await this.waitReady(tab, signal);
       await evaluate(`(async()=>{for(const el of document.querySelectorAll('[data-testid="tweet-text-show-more-link"]')){el.click();await new Promise(r=>setTimeout(r,500));}})()`);
       await evaluate(`(async()=>{let last=0;for(let i=0;i<120;i++){window.scrollBy(0,innerHeight*.85);await new Promise(r=>setTimeout(r,150));const h=document.body.scrollHeight;if(scrollY+innerHeight>=h-20&&h===last)break;last=h;}window.scrollTo(0,0);await new Promise(r=>setTimeout(r,800));})()`);
-      const doc = normalizeDocument(await evaluate('(' + extractPage.toString() + ')()'));
+      const doc = normalizeDocument(await evaluate('(/(^|\\.)xiaohongshu\\.com$/i.test(location.hostname)?(' + extractXiaohongshuPage.toString() + '):(' + extractPage.toString() + '))()'));
       await assertPublicUrl(doc.url);
-      if (!doc.nodes.length) throw Error('没有读取到正文，请检查登录状态并在原网页确认内容可见。');
+      if (/(^|\.)xiaohongshu\.com$/i.test(new URL(doc.url).hostname)) {
+        const id = new URL(doc.url).pathname.match(/^\/(?:explore|discovery\/item)\/([a-f\d]{24})(?:\/|$)/i)?.[1];
+        if (id) for (const node of doc.nodes) if (node.platform === 'xiaohongshu') node.contentId = hash('xiaohongshu:' + id.toLowerCase() + ':' + new URL(node.url).pathname);
+      }
+      if (!doc.nodes.length && !doc.incomplete) throw Error('没有读取到正文，请检查登录状态并在原网页确认内容可见。');
       return doc;
     } finally { await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); }
   }

@@ -19,7 +19,7 @@ function descendants(root) {
 export function stageMac({ sourceProject = project, destination, projectAware = false }) {
   const target = path.resolve(destination), relative = path.relative(path.join(sourceProject, 'dist'), target);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || fs.existsSync(target)) throw Error('Mac 分发目标必须是 dist 内的新目录。');
-  const sources = ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'MAC-使用说明.md', 'docs/CONTENT-COLLECTION.md', 'package.json', 'assets/notion.icns',
+  const sources = ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'MAC-使用说明.md', 'docs/CONTENT-COLLECTION.md', 'docs/MAC-CHECKLIST-ACCEPTANCE-2026-10-29.md', 'package.json', 'assets/notion.icns',
     'Switch Notion 启动.command', 'Switch Notion 配置.command', ...scripts.map(f => 'scripts/' + f),
     ...descendants(path.join(sourceProject, 'src')).map(f => path.relative(sourceProject, f))];
   const keys = localDeepSeekKeys(sourceProject);

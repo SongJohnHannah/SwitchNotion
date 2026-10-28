@@ -23,12 +23,75 @@ function fixture(t, extra = {}) {
   const media = { acquire: async (node, directory) => { calls.push('download:' + node.kind); fs.mkdirSync(directory, { recursive: true }); const file = path.join(directory, 'original.bin'); fs.writeFileSync(file, 'fixture'); return { path: file, kind: node.kind, duration: 1, audio: true }; },
     prepareUpload: async asset => [{ path: asset.path, kind: asset.kind }], transcript: async () => { calls.push('transcript'); return { text: '原始语音逐字稿' }; },
     vision: async () => { calls.push('vision'); return { text: '画面识别结果' }; }, ...extra.media };
-  const service = new CollectionService({ root, binaries: { directory: root, status: () => ({}) }, browser: { inspect: async () => extra.document || document }, notion, media, extraction: extra.extraction });
+  const service = new CollectionService({ root, downloadsDirectory: path.join(root, 'Downloads'), binaries: { directory: root, status: () => ({}) }, browser: { inspect: async () => extra.document || document }, notion, media, extraction: extra.extraction });
   const destination = { workspaceId: randomUUID(), id: randomUUID(), kind: 'page', label: '资料收集', workspaceName: '独立工作区' };
-  service.settings = preferences({ destination, keepHistory: true, extraction: { mode: 'off' } }); t.after(() => service.close());
+  service.settings = preferences({ destination, keepLocal: false, keepHistory: true, extraction: { mode: 'off' } }); t.after(() => service.close());
   return { root, service, calls, saved, document, destination };
 }
 async function idle(service) { for (let n = 0; n < 400; n++) { if (!service.running && !service.queue.length) return; await sleep(5); } throw Error('collection test did not settle'); }
+
+test('deleting a failed task removes its files and journals, preserves other tasks and original sources, and survives restart', async t => {
+  const f = fixture(t); f.service.notion.verifyTarget = async () => { throw Error('Notion 暂时离线'); };
+  const source = path.join(f.root, '用户原始视频.mp4'); fs.writeFileSync(source, 'original');
+  const result = await f.service.create({ input: source }); await idle(f.service); const id = result.jobs[0].id, job = f.service.jobs.get(id);
+  assert.equal(job.status,'failed');
+  const working = path.join(f.service.location(job),'working','media');fs.mkdirSync(working,{recursive:true});fs.writeFileSync(path.join(working,'partial.mp4.part'),'unfinished');fs.writeFileSync(path.join(working,'transcript.json'),'checkpoint');
+  job.resources = { malicious: { asset: { path: source } } };f.service.save(job);
+  const journal = path.join(f.root,'write-journal');fs.mkdirSync(journal);
+  const own = path.join(journal,'content-'+ 'a'.repeat(64)+'.json'), other = path.join(journal,'content-'+ 'b'.repeat(64)+'.json');
+  fs.writeFileSync(own,JSON.stringify({operation_scope:'collection:'+id+':batch:0'}));fs.writeFileSync(other,JSON.stringify({operation_scope:'another-feature'}));
+  assert.equal(f.service.status().jobs.find(j=>j.id===id).canDelete,true);
+  const deleted = await f.service.request('delete-task',{id});assert.equal(deleted.ok,true);
+  assert.equal(f.service.jobs.has(id),false);assert.equal(fs.existsSync(f.service.location(job)),false);assert.equal(fs.existsSync(own),false);assert.equal(fs.existsSync(other),true);assert.equal(fs.readFileSync(source,'utf8'),'original');
+  const restored = new CollectionService({root:f.root,binaries:{status:()=>({})},browser:{},media:{},notion:{}});t.after(()=>restored.close());assert.equal(restored.jobs.has(id),false);
+});
+
+test('an active task cannot be deleted, and deleting a partial archive preserves its Notion page', async t => {
+  const f=fixture(t), result=await f.service.create({input:'https://example.com/article',preview:true});await idle(f.service);
+  const id=result.jobs[0].id,job=f.service.jobs.get(id);job.status='downloading';f.service.save(job);
+  assert.equal((await f.service.request('delete-task',{id})).ok,false);assert.equal(fs.existsSync(f.service.location(job)),true);
+  job.status='partial';job.page={id:randomUUID(),url:'https://www.notion.so/saved'};f.service.save(job);
+  const deleted=await f.service.request('delete-task',{id});assert.equal(deleted.ok,true);assert.equal(deleted.result.pageRetained,true);assert.equal(f.calls.includes('write'),false);
+});
+
+test('the default local copy uses the native Downloads directory independently of completed task history', async t => {
+  const f=fixture(t);f.service.settings=preferences({keepLocal:true,keepHistory:false},f.service.settings);
+  const result=await f.service.create({input:'https://example.com/article'});await idle(f.service);
+  const job=f.service.jobs.get(result.jobs[0].id), base=path.join(f.root,'Downloads','NotionSwitch');
+  assert.equal(f.service.status().defaultDownloadDirectory,base);assert.equal(job.status,'completed');
+  const folders=fs.readdirSync(base);assert.equal(folders.length,1);assert.equal(fs.existsSync(path.join(base,folders[0],'content.json')),true);
+  assert.equal(folders[0],'一篇混合内容');assert.equal(fs.existsSync(path.join(base,folders[0],'原文.md')),true);
+  assert.equal(fs.existsSync(path.join(f.root,'collection/jobs',job.id)),false);assert.equal(preferences().keepLocal,true);
+});
+
+test('same-title downloads stay in separate visible folders and deleting a partial task removes only its own folder', async t => {
+  const f=fixture(t,{media:{vision:async()=>{throw Error('图片识别暂时失败');}}});f.service.settings=preferences({keepLocal:true},f.service.settings);
+  const result=await f.service.create({input:'https://example.com/one\nhttps://example.com/two'});await idle(f.service);
+  const [a,b]=result.jobs.map(j=>f.service.jobs.get(j.id));assert.equal(a.status,'partial');assert.equal(b.status,'partial');
+  assert.equal(path.basename(a.exportDirectory),'一篇混合内容');assert.equal(path.basename(b.exportDirectory),'一篇混合内容 (2)');
+  assert.ok(Object.values(a.resources).every(r=>r.asset.path.startsWith(a.exportDirectory+path.sep)));
+  assert.equal(fs.existsSync(path.join(a.exportDirectory,'逐字稿.md')),true);assert.equal(fs.existsSync(path.join(a.exportDirectory,'原文.md')),true);
+  const deleted=await f.service.request('delete-task',{id:a.id});assert.equal(deleted.ok,true);assert.equal(deleted.result.pageRetained,true);
+  assert.equal(fs.existsSync(a.exportDirectory),false);assert.equal(fs.existsSync(b.exportDirectory),true);assert.equal(f.service.jobs.has(b.id),true);
+});
+
+test('a changed download ownership marker prevents deleting user files or task recovery data', async t => {
+  const f=fixture(t,{media:{vision:async()=>{throw Error('识别暂时失败');}}});f.service.settings=preferences({keepLocal:true},f.service.settings);
+  const result=await f.service.create({input:'https://example.com/article'});await idle(f.service);const job=f.service.jobs.get(result.jobs[0].id);
+  const marker=path.join(job.exportDirectory,'.switch-notion-task.json');fs.writeFileSync(marker,JSON.stringify({version:1,taskId:randomUUID()}));
+  const deleted=await f.service.request('delete-task',{id:job.id});assert.equal(deleted.ok,false);assert.equal(fs.existsSync(job.exportDirectory),true);assert.equal(fs.existsSync(f.service.location(job)),true);
+});
+
+test('a busy download folder keeps the failed task and recovery journal available for another delete attempt', async t => {
+  const f=fixture(t,{media:{vision:async()=>{throw Error('识别暂时失败');}}});f.service.settings=preferences({keepLocal:true},f.service.settings);
+  const result=await f.service.create({input:'https://example.com/article'});await idle(f.service);const job=f.service.jobs.get(result.jobs[0].id);
+  const journal=path.join(f.root,'write-journal');fs.mkdirSync(journal);const record=path.join(journal,'content-'+ 'c'.repeat(64)+'.json');fs.writeFileSync(record,JSON.stringify({operation_scope:'collection:'+job.id+':batch:0'}));
+  const remove=fs.rmSync;
+  try { fs.rmSync=(target,options)=>{if(target===job.exportDirectory)throw Error('下载目录正在使用，请稍后删除。');return remove(target,options);};assert.equal((await f.service.request('delete-task',{id:job.id})).ok,false); }
+  finally { fs.rmSync=remove; }
+  assert.equal(f.service.jobs.has(job.id),true);assert.equal(fs.existsSync(f.service.location(job)),true);assert.equal(fs.existsSync(record),true);
+  assert.equal((await f.service.request('delete-task',{id:job.id})).ok,true);assert.equal(fs.existsSync(job.exportDirectory),false);
+});
 test('saved prompt edits persist offline and keep the other template and destination', async t => {
   const f = fixture(t); f.service.notion.verifyTarget = async () => { throw Error('Notion 离线'); };
   await f.service.configure({ extraction: { article: '只提取执行步骤' } });

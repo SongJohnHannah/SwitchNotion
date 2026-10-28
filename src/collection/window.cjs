@@ -5,7 +5,7 @@ const { ProviderRouter } = require('../provider.cjs');
 const { CollectionService } = require('./service.cjs');
 const { destination } = require('./model.cjs');
 function setupCollection({ root, speech, createWindow, openSettings, platform }) {
-  const service = new CollectionService({ root, speech, provider: new ProviderRouter({ root }) });
+  const service = new CollectionService({ root, downloadsDirectory: app.getPath('downloads'), speech, provider: new ProviderRouter({ root }) });
   const file = path.join(__dirname, 'ui/index.html'), url = pathToFileURL(file).href;
   let window, quitting = false, registered, shortcutError = '';
   function resize(expanded) {
@@ -41,11 +41,16 @@ function setupCollection({ root, speech, createWindow, openSettings, platform })
   ipcMain.handle('notion-switch:collection', async (event, action, input = {}) => {
     if (!window || window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== url) return { ok: false, error: '此操作只能从快捷收集窗口执行。' };
     try {
-      if (['expand', 'hide', 'settings', 'directory', 'browser', 'profile', 'open-page', 'open-destination', 'open-source', 'open-local'].includes(action)) {
+      if (['expand', 'hide', 'settings', 'directory', 'browser', 'profile', 'open-page', 'open-destination', 'open-source', 'open-local', 'open-downloads'].includes(action)) {
         if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !(action === 'expand' ? ['expanded'] : action === 'open-destination' ? ['target'] : ['open-page', 'open-source', 'open-local'].includes(action) ? ['id'] : []).includes(key))) throw Error('收集窗口操作参数无效。');
         if (action === 'expand') resize(input.expanded === true);
         if (action === 'hide') window.hide();
         if (action === 'settings') await openSettings();
+        if (action === 'open-downloads') {
+          const directory = service.settings.outputDirectory || service.status().defaultDownloadDirectory;
+          require('node:fs').mkdirSync(directory, { recursive: true });
+          if (await shell.openPath(directory)) throw Error('无法打开下载文件夹。');
+        }
         if (action === 'directory' || action === 'profile') { const response = await dialog.showOpenDialog(window, { properties: ['openDirectory', ...(action === 'directory' ? ['createDirectory'] : [])] }); return { ok: true, result: { path: response.canceled ? null : response.filePaths[0] } }; }
         if (action === 'browser') { const response = await dialog.showOpenDialog(window, { properties: ['openFile'], ...(platform.id === 'darwin' ? { properties: ['openFile', 'openDirectory'] } : {}) });
           let selected = response.canceled ? null : response.filePaths[0];

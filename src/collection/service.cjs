@@ -10,9 +10,11 @@ const { CollectionMedia } = require('./media.cjs');
 const { CollectionNotion } = require('./notion.cjs');
 const { CollectionExtraction } = require('./extraction.cjs');
 const { parseInputs, describeLocal, checkLocal, localDocument } = require('./local-media.cjs');
-const { clearCompleted } = require('./history.cjs');
+const { clearCompleted, ownedExport } = require('./history.cjs');
 const { templates } = require('./prompts.cjs');
+const { prepareLocalOutput, writeLocalOutput } = require('./local-output.cjs');
 const activeStates = new Set(['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving']);
+const deletableStates = new Set(['failed', 'partial', 'cancelled', 'interrupted', 'needs_login', 'awaiting_selection']);
 const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.compress, options.quality, options.keepLocal, options.extraction]));
 const safeError = error => {
   const text = String(error?.message || '操作未完成，请检查连接后重试。');
@@ -20,8 +22,8 @@ const safeError = error => {
   return /^[\u3400-\u9fff]|^(Notion|DeepSeek|媒体|收集|资源|目标|此|本地|请选择|请先|无法|没有|下载)/.test(text) ? text.slice(0, 500) : '操作未完成，请检查网络、登录与组件状态后重试。';
 };
 class CollectionService extends EventEmitter {
-  constructor({ root, speech, provider, binaries, browser, media, notion, extraction } = {}) {
-    super(); this.root = root; this.directory = path.join(root, 'collection'); this.settingsFile = path.join(this.directory, 'settings.local.json');
+  constructor({ root, downloadsDirectory = path.join(os.homedir(), 'Downloads'), speech, provider, binaries, browser, media, notion, extraction } = {}) {
+    super(); this.root = root; this.downloadsDirectory = downloadsDirectory; this.directory = path.join(root, 'collection'); this.settingsFile = path.join(this.directory, 'settings.local.json');
     this.settings = preferences(); this.jobs = new Map(); this.queue = []; this.running = null; this.closed = false; this.lastError = ''; this.preparing = false;
     if (fs.existsSync(this.settingsFile)) try {
       const saved = JSON.parse(fs.readFileSync(this.settingsFile, 'utf8')), value = saved.settings || saved;
@@ -57,12 +59,19 @@ class CollectionService extends EventEmitter {
     for (const candidate of [this.directory, path.dirname(dir), dir]) if (fs.lstatSync(candidate, { throwIfNoEntry: false })?.isSymbolicLink()) throw Error('收集任务目录不能使用目录链接。');
     return dir;
   }
-  save(job) { job.updatedAt = new Date().toISOString(); atomicJson(path.join(this.location(job), 'job.json'), job); this.emit('change'); }
+  save(job) {
+    job.updatedAt = new Date().toISOString();
+    if (job.options.keepLocal && job.document && job.exportDirectory) {
+      try { writeLocalOutput(job); if (job.localCopyError && this.lastError === '本地资料保存未完成：' + job.localCopyError) this.lastError = ''; delete job.localCopyError; }
+      catch (error) { job.localCopyError = safeError(error); this.lastError = '本地资料保存未完成：' + job.localCopyError; }
+    }
+    atomicJson(path.join(this.location(job), 'job.json'), job); this.emit('change');
+  }
   status() {
-    return { active: this.active, lastError: this.lastError, configError: this.configError || '', settings: structuredClone(this.settings),
+    return { active: this.active, lastError: this.lastError, configError: this.configError || '', settings: structuredClone(this.settings), defaultDownloadDirectory: path.join(this.downloadsDirectory, 'NotionSwitch'),
       binaries: this.binaries.status(), preparing: this.preparing, promptTemplates: templates, latestCompletion: this.latestCompletion || null,
       jobs: [...this.jobs.values()].filter(job => !job.historyCleared && (this.settings.keepHistory || job.status !== 'completed')).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(job => ({ id: job.id, url: job.url, local: !!job.localSource, title: job.document?.title || job.url,
-        status: job.status, message: job.message, createdAt: job.createdAt, page: job.page, options: job.options, warnings: job.warnings || [],
+        status: job.status, canDelete: deletableStates.has(job.status) && this.running?.id !== job.id && !this.queue.includes(job.id), message: job.message, createdAt: job.createdAt, page: job.page, options: job.options, warnings: job.warnings || [],
         selectedIds: job.selectedIds, preview: job.document ? { incomplete: job.document.incomplete, requiresLogin: job.document.requiresLogin,
           nodes: job.document.nodes.map(n => ({ id: n.id, kind: n.kind, text: n.text.slice(0, 600), caption: n.caption.slice(0,600), level: n.level })) } : null })) };
   }
@@ -117,6 +126,7 @@ class CollectionService extends EventEmitter {
     if (!job.options.destination) throw Error('请先选择保存位置。');
     const selected = layoutNodes(selectedNodes(job.document, job.options, job.selectedIds), job.layout);
     if (!selected.length) throw Error('请至少选择一项要保存的内容。');
+    if (job.options.keepLocal) { prepareLocalOutput(job, this.downloadsDirectory); save(); }
     const { limit } = await this.notion.verifyTarget(job.options.destination, signal);
     for (const node of selected) {
       if (!mediaKinds.has(node.kind)) continue; signal.throwIfAborted();
@@ -125,7 +135,8 @@ class CollectionService extends EventEmitter {
       try {
         if (!resource.asset || !fs.existsSync(resource.asset.path)) {
           job.status = 'downloading'; save();
-          const directory = path.join(this.location(job), 'working', node.id);
+          if (job.options.keepLocal && !ownedExport(job)) throw Error('资料文件夹已被手动删除，请停止任务或重新收集。');
+          const directory = job.options.keepLocal ? path.join(job.exportDirectory, '素材', String(selected.indexOf(node) + 1).padStart(2, '0') + '-' + ({ image: '图片', video: '视频', audio: '音频' }[node.kind])) : path.join(this.location(job), 'working', node.id);
           resource.asset = job.localSource ? await this.media.importLocal(job.localSource, directory, { signal, progress }) : await this.media.acquire({ ...node, sourceUrl: job.document.url }, directory, { signal, progress }); save();
         }
         if (job.options.transcribe && ['audio', 'video'].includes(node.kind) && !analysis.transcript) {
@@ -177,12 +188,15 @@ class CollectionService extends EventEmitter {
     } catch { this.lastError = '内容已保存到 Notion，但本地临时记录尚未清理，请检查文件占用或目录权限。'; }
   }
   exportLocal(job, nodes) {
-    const slug = job.document.title.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 80) || 'collection';
-    const directory = path.join(job.options.outputDirectory || path.join(os.homedir(), 'Downloads', 'Switch Notion'), '收集-' + slug + '-' + job.id.slice(0, 8));
-    fs.mkdirSync(directory, { recursive: true });
-    for (const node of nodes) { const file = job.resources[node.id]?.asset?.path; if (file && fs.existsSync(file)) fs.copyFileSync(file, path.join(directory, node.id + path.extname(file))); }
-    atomicJson(path.join(directory, 'content.json'), { source: job.document, selectedIds: nodes.map(n => n.id), analyses: job.analyses, extraction: job.extraction, notion: job.page });
-    job.exportDirectory = directory;
+    const directory = prepareLocalOutput(job, this.downloadsDirectory);
+    // Recover older tasks whose downloads were still in the private working tree.
+    for (const node of nodes) {
+      const asset = job.resources[node.id]?.asset; if (!asset?.path || !fs.existsSync(asset.path)) continue;
+      const relative = path.relative(directory, asset.path);
+      if (!relative.startsWith('..') && !path.isAbsolute(relative)) continue;
+      const output = path.join(directory, '素材', node.id, path.basename(asset.path)); fs.mkdirSync(path.dirname(output), { recursive: true }); fs.copyFileSync(asset.path, output); asset.path = output;
+    }
+    writeLocalOutput(job);
   }
   releaseWorkingFiles(job) {
     const directory = path.join(this.location(job), 'working');
@@ -217,6 +231,16 @@ class CollectionService extends EventEmitter {
     if (job.document?.incomplete && !job.page) { delete job.document; job.warnings = []; }
     this.enqueue(job); return { id };
   }
+  deleteTask(id) {
+    const job = this.jobs.get(id);
+    if (!job) throw Error('任务不存在或已经删除。');
+    if (!deletableStates.has(job.status) || this.running?.id === id || this.queue.includes(id)) throw Error('请先停止任务并等待处理结束，再删除此任务。');
+    const exported = ownedExport(job); // Validate ownership and links before deleting anything.
+    if (exported) fs.rmSync(exported, { recursive: true });
+    clearCompleted(this.root, this.directory, id);
+    this.jobs.delete(id); this.emit('change');
+    return { id, pageRetained: !!job.page, message: '已删除本机任务及相关下载、转写和识别文件。' + (job.page ? ' 已保存的 Notion 页面保留。' : '') };
+  }
   async prepare() {
     if (this.preparing) return { message: '组件正在准备中。' };
     this.preparing = true; this.emit('change');
@@ -239,7 +263,7 @@ class CollectionService extends EventEmitter {
   }
   async request(action, input = {}) {
     const allowed = { state: [], configure: ['settings'], workspaces: [], destinations: ['workspaceId', 'query', 'cursors'], create: ['input', 'options', 'preview', 'force'],
-      select: ['id', 'ids', 'options', 'allowPartial'], cancel: ['id'], retry: ['id'], reread: ['id'], accounts: [], login: ['site'], prepare: [], 'create-library': ['workspaceId', 'parentId'] };
+      select: ['id', 'ids', 'options', 'allowPartial'], cancel: ['id'], retry: ['id'], 'delete-task': ['id'], reread: ['id'], accounts: [], login: ['site'], prepare: [], 'create-library': ['workspaceId', 'parentId'] };
     try {
       if (!Object.hasOwn(allowed, action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !allowed[action].includes(k))) throw Error('无法识别此项收集操作。');
       let result;
@@ -251,6 +275,7 @@ class CollectionService extends EventEmitter {
       else if (action === 'select') result = this.select(input.id, input);
       else if (action === 'cancel') result = this.cancel(input.id);
       else if (action === 'retry') result = this.retry(input.id);
+      else if (action === 'delete-task') result = this.deleteTask(input.id);
       else if (action === 'reread') result = this.reread(input.id);
       else if (action === 'accounts') result = await this.browser.accounts(AbortSignal.timeout(60000));
       else if (action === 'login') { if (typeof input.site !== 'string' || input.site.length > 8192) throw Error('网站地址无效。'); result = await this.browser.login(input.site, AbortSignal.timeout(60000)); }

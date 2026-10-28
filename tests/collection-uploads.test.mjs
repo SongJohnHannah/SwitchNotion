@@ -28,6 +28,20 @@ test('rich text readback accepts merged text spans while rejecting lost links an
   actual.paragraph.rich_text[1].annotations.bold = false; assert.equal(matchesBlockContent(actual, expected), false);
   actual.paragraph.rich_text[1].annotations.bold = true; actual.paragraph.rich_text[1].text.link = null; assert.equal(matchesBlockContent(actual, expected), false);
 });
+
+test('Notion may remove Xiaohongshu topic tracking without changing the topic or access parameters', () => {
+  const { matchesBlockContent } = require('../src/notion-blocks.cjs');
+  const block = url => ({ type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: '#原话题', link: { url } } }] } });
+  const topic = 'https://www.xiaohongshu.com/search_result?keyword=%25E8%25AF%259D%25E9%25A2%2598&type=54';
+  assert.equal(matchesBlockContent(block(topic), block(topic+'&source=web_note_detail_r10')),true);
+  assert.equal(matchesBlockContent(block(topic.replace('type=54','type=1')), block(topic+'&source=web_note_detail_r10')),false);
+  assert.equal(matchesBlockContent(block(topic.replace('keyword=','other=')), block(topic+'&source=web_note_detail_r10')),false);
+  assert.equal(matchesBlockContent(block(topic),block(topic+'&source=meaningful')),false);
+  for (const url of ['https://www.xiaohongshu.com/explore/123?xsec_token=private', 'https://www.xiaohongshu.com/search_result?xsec_token=private', 'https://example.com/search_result?type=54', 'https://sns-video-qc.xhscdn.com/video.mp4?sign=original']) {
+    if (/(?:xsec_token|sign)=/.test(url)) assert.equal(matchesBlockContent(block(url.replace(/(?:xsec_token|sign)=[^&]+/,'')),block(url)),false);
+    if (!url.includes('xiaohongshu.com/search_result')) assert.equal(matchesBlockContent(block(url),block(url+'&source=meaningful')),false);
+  }
+});
 test('uploaded media verification binds a hosted file to the creation response despite rotating signed queries', async () => {
   for (const different of [false, true]) {
     const parent = randomUUID(), id = randomUUID(), uploadId = randomUUID();

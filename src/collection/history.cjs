@@ -21,4 +21,22 @@ function clearCompleted(root, directory, id) {
   }
   if (fs.existsSync(target)) fs.rmSync(target, { recursive: true });
 }
-module.exports = { clearCompleted };
+function ownedExport(job) {
+  if (!job.exportDirectory || !job.exportOwned) return null;
+  const target = path.resolve(job.exportDirectory);
+  const expectedParent = job.exportBaseDirectory && path.resolve(job.exportBaseDirectory);
+  const legacy = !expectedParent && path.basename(target).startsWith('收集-') && path.basename(target).endsWith('-' + job.id.slice(0, 8));
+  if (!path.isAbsolute(job.exportDirectory) || (expectedParent ? expectedParent !== path.dirname(target) : !legacy)) throw Error('任务下载目录无效，未删除。');
+  for (let current = target; ; current = path.dirname(current)) {
+    if (fs.lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) throw Error('任务下载目录包含链接，未删除。');
+    if (current === path.dirname(current)) break;
+  }
+  if (!fs.existsSync(target)) return null;
+  const marker = path.join(target, '.switch-notion-task.json');
+  if (!fs.lstatSync(marker, { throwIfNoEntry: false })?.isFile() || fs.lstatSync(marker).isSymbolicLink()) throw Error('无法确认下载目录属于此任务，未删除。');
+  const owner = JSON.parse(fs.readFileSync(marker, 'utf8'));
+  if (owner.version !== 1 || owner.taskId !== job.id) throw Error('下载目录属于其他任务，未删除。');
+  const check = current => { const stat = fs.lstatSync(current); if (stat.isSymbolicLink()) throw Error('下载文件包含链接，未删除。'); if (stat.isDirectory()) for (const name of fs.readdirSync(current)) check(path.join(current, name)); };
+  check(target); return target;
+}
+module.exports = { clearCompleted, ownedExport };
