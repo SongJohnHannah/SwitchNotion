@@ -14,11 +14,25 @@ const input = () => ({ spaceId: id(1), threadId: id(2), traceId: id(3), createTh
 ] });
 const tool = name => ({ type: 'function', function: { name, parameters: { type: 'object', properties: {}, required: [] } } });
 
-test('pending native research integration stays explicit and performs no workspace or model access', async () => {
-  const forbidden = () => assert.fail('Production report integration awaits explicit body authorization');
-  const native = new NativeMock({ workspace: { open: forbidden }, provider: { status: () => ({ mode: 'deepseek' }), config: forbidden, generate: forbidden } });
+test('native workspace research reaches the model through scoped read-only tools and persists its source mode', async () => {
+  let rounds = 0, reads = 0;
+  const workspace = { open: async ({ readScope }) => {
+    assert.equal(readScope.workspaceId, id(1));
+    return { definitions: [tool('read_page'), tool('create_page')], context: { current_workspace_id: id(1), workspaces: [{ workspace_id: id(1) }] }, execute: async (name, args) => {
+      assert.equal(name, 'read_page'); assert.equal(args.workspace_id, id(1)); reads++;
+      return { page_id: id(7), workspace_id: id(1), title: '合成研究来源', markdown: '研究代码927', complete: true, url: 'https://www.notion.so/' + id(7) };
+    } };
+  } };
+  const provider = { status: () => ({ mode: 'deepseek' }), config: () => ({ multiAgent: false }), async* generate({ tools, onToolCalls }) {
+    assert.ok(tools.every(item => item.function.name !== 'create_page'));
+    if (++rounds === 1) { onToolCalls([{ id: 'synthetic-read', type: 'function', function: { name: 'read_page', arguments: JSON.stringify({ page_id: id(7) }) } }]); return; }
+    yield '合成研究结果927';
+  } };
+  const native = new NativeMock({ workspace, provider, workspaceResearch: true });
   const response = await native.handle('runInferenceTranscript', input(), undefined, { userId: id(9) });
-  assert.equal(response.status, 501); assert.match(await response.text(), /not ready/);
+  assert.equal(response.status, 200); assert.match(await response.text(), /合成研究结果927/); assert.equal(reads, 1);
+  assert.equal(native.record(id(2)).data.notion_switch_research.notion_sources, true);
+  native.close();
 });
 
 test('both audited researcher producers preserve scope, while ordinary workflows do not opt in', () => {

@@ -9,8 +9,8 @@ const prefix = '/notion-switch-local-document-upload/', previewPrefix = '/notion
 const fail = message => { throw Error('Notion 附件' + message); };
 const checksum = bytes => createHash('sha256').update(bytes).digest('hex');
 class LocalDocumentUploads {
-  constructor({ root, record }) { this.directory = path.join(root, 'document-attachments'); this.record = record; this.pending = new Map(); this.tokens = new Map(); this.previews = new Map(); }
-  handles(filename) { return typeof filename === 'string' && /\.(?:txt|md|markdown|csv|tsv|json|pdf|docx|xlsx)$/i.test(filename); }
+  constructor({ root, record, fileType = documentType }) { this.directory = path.join(root, 'document-attachments'); this.record = record; this.fileType = fileType; this.pending = new Map(); this.tokens = new Map(); this.previews = new Map(); }
+  handles(filename) { try { this.fileType(filename, ''); return true; } catch { return false; } }
   handlesTarget(target) { return target?.type === 'user' || target?.type === 'thread' && !!this.record(target.threadId); }
   thread(threadId, userId, spaceId) {
     const result = this.record(uuid(threadId), { userId: uuid(userId), spaceId: uuid(spaceId) });
@@ -19,7 +19,7 @@ class LocalDocumentUploads {
   }
   create(input, userId, origin) {
     for (const [id, item] of this.pending) if (Date.now() - item.created > 1800000) { this.pending.delete(id); this.tokens.delete(item.token); }
-    const type = documentType(input?.filename, input?.mediaType), owner = uuid(userId), spaceId = uuid(input.spaceId);
+    const type = this.fileType(input?.filename, input?.mediaType), owner = uuid(userId), spaceId = uuid(input.spaceId);
     if (!owner || !spaceId || !this.handlesTarget(input.target) || !Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 1 || input.sizeBytes > MAX_BYTES) fail('上传信息无效或超过 16 MB。');
     if (input.target.type === 'thread') this.thread(input.target.threadId, owner, spaceId);
     if (this.pending.size >= 8 || [...this.pending.values()].reduce((sum, item) => sum + item.sizeBytes, input.sizeBytes) > 32 * 1024 * 1024) fail('正在上传的文件过多，请完成当前上传后重试。');
@@ -80,7 +80,7 @@ class LocalDocumentUploads {
     if (!directory.isDirectory() || directory.isSymbolicLink() || !metaStat.isFile() || metaStat.isSymbolicLink() || metaStat.size > 8000) fail('元数据已损坏。');
     let meta; try { meta = JSON.parse(fs.readFileSync(metadata, 'utf8')); } catch { fail('元数据已损坏。'); }
     if (meta.version !== 1 || meta.id !== fileId || !uuid(meta.userId) || !uuid(meta.spaceId) || meta.threadId !== null && !uuid(meta.threadId)) fail('元数据已损坏。');
-    documentType(meta.filename, meta.mediaType);
+    this.fileType(meta.filename, meta.mediaType);
     if (!Number.isSafeInteger(meta.sizeBytes) || meta.sizeBytes < 1 || meta.sizeBytes > MAX_BYTES || !/^[a-f0-9]{64}$/.test(meta.sha256 || '')) fail('元数据已损坏。');
     return meta;
   }

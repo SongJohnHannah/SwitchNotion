@@ -10,7 +10,8 @@ const uploadPrefix = '/notion-switch-inline-document-upload/', referencePrefix =
 const fail = message => { throw Error('Notion 浮动附件' + message); };
 const same = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 class LocalInlineDocuments {
-  constructor({ root, store, reserve }) {
+  constructor({ root, store, reserve, fileType = documentType, parseContent = parseAttachment }) {
+    this.fileType = fileType; this.parseContent = parseContent;
     this.store = store; this.reserve = reserve; this.file = path.join(root, 'inline-document-refs.local.json'); this.pending = new Map(); this.references = new Map();
     if (fs.existsSync(this.file)) {
       const stat = fs.lstatSync(this.file); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) fail('本地引用记录无效。');
@@ -36,7 +37,7 @@ class LocalInlineDocuments {
     return item;
   }
   create(input, userId, origin) {
-    this.origin(origin); const type = documentType(input?.name, input?.contentType), pointer = input?.assistantChatTranscriptSessionPointer;
+    this.origin(origin); const type = this.fileType(input?.name, input?.contentType), pointer = input?.assistantChatTranscriptSessionPointer;
     const owner = uuid(userId), threadId = uuid(pointer?.id), spaceId = uuid(pointer?.spaceId);
     if (!owner || !threadId || !spaceId || pointer.table !== 'thread' || input.createThread !== true ||
         input.threadType !== undefined && input.threadType !== 'workflow' || input.workflowId !== undefined ||
@@ -90,7 +91,7 @@ class LocalInlineDocuments {
     if (input.source !== 'user_upload' || uuid(input.spaceId) !== item.spaceId || pointer?.table !== 'thread' || uuid(pointer.id) !== item.threadId || uuid(pointer.spaceId) !== item.spaceId ||
         input.permissionRecord?.table !== 'thread' || uuid(input.permissionRecord.id) !== item.threadId || uuid(input.permissionRecord.spaceId) !== item.spaceId) fail('处理请求不属于此上传对话。');
     const file = this.store.read({ fileId: item.id, spaceId: item.spaceId, threadId: item.threadId, userId });
-    const result = await parseAttachment(file.bytes, file.filename, file.mediaType, { signal });
+    const result = await this.parseContent(file.bytes, file.filename, file.mediaType, { signal });
     const data = { attachmentRisk: 'skipped', contentType: file.mediaType, fileSizeBytes: file.bytes.length,
       ...(result.format === 'pdf' ? { numPages: result.pages.length } : result.format === 'csv' ? { numRows: result.rows.length, numFields: Math.max(0, ...result.rows.map(row => row.values.length)) } : {}) };
     return { notionSwitchDocument: { version: 1, result: { ...data, stepMetadata: { ...data } } } };
@@ -102,9 +103,9 @@ class LocalInlineDocuments {
     const file = this.store.read({ fileId: item.id, spaceId, threadId, userId });
     // The legacy uploader randomizes its transport filename; the transcript
     // carries the actual display name. It remains data, never a filesystem path.
-    const type = documentType(step.fileName, step.contentType);
+    const type = this.fileType(step.fileName, step.contentType);
     if (type.mediaType !== file.mediaType) fail('文件类型与上传回执不匹配。');
-    const document = await parseAttachment(file.bytes, step.fileName, file.mediaType, { signal });
+    const document = await this.parseContent(file.bytes, step.fileName, file.mediaType, { signal });
     return { document: { ...document, file_id: file.id, sha256: file.sha256, treat_as_data: true }, bytes: file.bytes.length };
   }
   download(request) {

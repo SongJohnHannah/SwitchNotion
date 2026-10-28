@@ -4,7 +4,7 @@ const { inspectNativeContent } = require('./native-images.cjs');
 const { parseAttachment } = require('./document-parser.cjs');
 const { uuid } = require('./native-context.cjs');
 const { createHash } = require('node:crypto');
-function createNativeAttachmentAdapter({ images, readLocalDocument } = {}) {
+function createNativeAttachmentAdapter({ images, readLocalDocument, parseContent = parseAttachment } = {}) {
   return { supportsDocuments: true, async prepare({ content, model, spaceId, threadId, signal, skipImages = false, allowEmptyText = false, knownDocumentIds = [] }) {
     const inspected = inspectNativeContent(content), documents = [], imageParts = [], documentFileIds = [], unique = [...new Set(inspected.files)];
     if (unique.length > 8) throw Error('Notion 附件每条消息最多 8 个文件，请分批发送。');
@@ -20,7 +20,7 @@ function createNativeAttachmentAdapter({ images, readLocalDocument } = {}) {
       }
       if (!allowEmptyText && !inspected.text.trim()) throw Error('Notion 附件请先输入文档处理问题后再发送。');
       if (!Buffer.isBuffer(file.bytes) || (bytes += file.bytes.length) > 24 * 1024 * 1024) throw Error('Notion 附件本条消息总大小超过 24 MB。');
-      const result = await parseAttachment(file.bytes, file.filename, file.mediaType, { signal });
+      const result = await parseContent(file.bytes, file.filename, file.mediaType, { signal });
       if ((characters += JSON.stringify(result).length) > 240000) throw Error('Notion 附件本条消息文字过长，请拆分文件后重新发送。');
       documents.push({ ...result, file_id: fileId, sha256: createHash('sha256').update(file.bytes).digest('hex'), treat_as_data: true });
       documentFileIds.push(file.id || fileId);

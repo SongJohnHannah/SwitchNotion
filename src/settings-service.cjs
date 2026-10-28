@@ -5,6 +5,7 @@ const { NotionRouter, registryName, consolidateConnections, saveConnections } = 
 const { ProviderRouter } = require('./provider.cjs');
 const { models } = require('./native-models.cjs');
 const { WebSources } = require('./web-sources.cjs');
+const { WorkspaceMemory } = require('./workspace-memory.cjs');
 const idFor = profile => createHash('sha256').update(profile.workspaceId || profile.apiKey || profile.apiKeyFile).digest('hex').slice(0, 24);
 const keyText = value => {
   if (typeof value !== 'string' || !value.trim() || value.length > 1024 || /[\r\n]/.test(value.trim())) throw Error('请填写有效的 API Key。');
@@ -16,11 +17,14 @@ const label = value => {
   return value.trim();
 };
 class SettingsService {
-  constructor({ root, fetchImpl = fetch, intervalMs = 350, webSources }) {
+  constructor({ root, fetchImpl = fetch, intervalMs = 350, webSources, memory, extensions, backgroundAgents, transfer }) {
     this.root = root; this.fetchImpl = fetchImpl;
     this.router = new NotionRouter({ root, fetchImpl, intervalMs });
     this.provider = new ProviderRouter({ root, fetchImpl });
     this.webSources = webSources || new WebSources({ root });
+    this.memory = memory || new WorkspaceMemory({ root });
+    this.extensions = extensions;
+    this.backgroundAgents = backgroundAgents; this.transfer = transfer;
     this.queue = Promise.resolve(); this.health = new Map();
   }
   async profiles() {
@@ -116,6 +120,11 @@ class SettingsService {
     return { message: 'DeepSeek 已保存，下一轮 AI 对话生效' };
   }
   request(action, input = {}) {
+    if (typeof action === 'string' && action.startsWith('transcript.')) return this.mediaTranscripts?.request(action, input) || Promise.resolve({ ok: false, error: '本机逐字稿服务尚未就绪。' });
+    if (typeof action === 'string' && action.startsWith('agents.')) return this.backgroundAgents?.request(action, input) || Promise.resolve({ ok: false, error: '后台任务尚未就绪。' });
+    if (typeof action === 'string' && action.startsWith('transfer.')) return this.transfer?.request(action, input) || Promise.resolve({ ok: false, error: '对话同步尚未就绪。' });
+    if (typeof action === 'string' && /^(mcp|browser|approval)\./.test(action)) return this.extensions?.request(action, input) || Promise.resolve({ ok: false, error: 'Notion MCP 服务尚未就绪。' });
+    if (typeof action === 'string' && /^(memory|skill)\./.test(action)) return this.memoryRequest(action, input);
     const methods = { state: 'state', 'workspace.save': 'saveWorkspace', 'workspace.test': 'testWorkspace', 'workspace.remove': 'removeWorkspace', 'deepseek.save': 'saveDeepseek', 'deepseek.test': 'testDeepseek', 'web.save': 'saveWebSources', 'web.test': 'testWebSources' };
     const allowed = { state: [], 'workspace.save': ['id', 'name', 'apiKey'], 'workspace.test': ['id', 'apiKey'], 'workspace.remove': ['id'], 'deepseek.save': ['apiKey', 'model', 'thinking', 'reasoningEffort', 'multiAgent'], 'deepseek.test': ['apiKey'], 'web.save': ['enabled', 'apiKey', 'forgetKey'], 'web.test': ['apiKey'] };
     const job = async () => {
@@ -134,5 +143,18 @@ class SettingsService {
   }
   saveWebSources(input) { return this.webSources.save(input); }
   testWebSources(input) { return this.webSources.test(input); }
+  async memoryRequest(action, input) {
+    try {
+      const fields = { 'memory.scopes': [], 'memory.get': ['key'], 'memory.configure': ['key', 'revision', 'enabled', 'instructions'], 'memory.save': ['key', 'revision', 'id', 'content'], 'memory.remove': ['key', 'revision', 'id'], 'memory.clear': ['key', 'revision'], 'skill.save': ['key', 'revision', 'id', 'name', 'description', 'content', 'automatic', 'enabled'], 'skill.remove': ['key', 'revision', 'id'] };
+      if (!Object.hasOwn(fields, action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !fields[action].includes(k)) || JSON.stringify(input).length > 45000) throw Error('Notion 工作区记忆参数无效。');
+      if (action === 'memory.scopes') {
+        const profiles = await this.profiles();
+        return { ok: true, result: { scopes: this.memory.scopes().map(row => { const profile = profiles.find(p => p.workspaceId === row.spaceId); return { key: row.key, profileId: profile ? idFor(profile) : null, enabled: row.enabled, count: row.count, name: profile?.workspaceName || 'Notion 工作区' }; }) } };
+      }
+      const { key, revision, id } = input;
+      const result = action === 'memory.get' ? this.memory.state(key) : action === 'memory.configure' ? this.memory.configure(key, revision, input) : action === 'memory.save' ? this.memory.save(key, revision, input) : action === 'memory.remove' ? this.memory.remove(key, revision, id) : action === 'memory.clear' ? this.memory.clear(key, revision) : action === 'skill.save' ? this.memory.saveSkill(key, revision, input) : this.memory.removeSkill(key, revision, id);
+      return { ok: true, result };
+    } catch (error) { return { ok: false, error: /^Notion 工作区记忆/.test(error.message) ? error.message : '记忆操作未完成，请刷新后重试。' }; }
+  }
 }
 module.exports = { SettingsService };

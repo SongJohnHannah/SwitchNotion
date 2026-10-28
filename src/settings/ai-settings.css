@@ -1,0 +1,10 @@
+.workspace-memory {margin-top:16px;border-top:1px solid #e7ebf1;padding-top:12px;min-width:0}
+.workspace-card {align-items:flex-start}
+.workspace-memory summary {cursor:pointer;color:#2673db;padding:5px 0}
+.workspace-memory .memory-body {padding-top:10px}
+.memory-editor {display:block;box-sizing:border-box;resize:vertical;width:100%;min-height:60px;padding:10px;border:1px solid #d9e1eb;border-radius:6px;font:inherit;line-height:1.6;margin:10px 0;background:#fff;color:inherit;-webkit-app-region:no-drag}
+.memory-editor:focus {outline:3px solid #e5f0ff;border-color:#398aef}
+.memory-entry {border-top:1px solid #edf0f5;padding:12px 0}
+.memory-entry input:not([type=checkbox]) {display:block;width:100%;margin:8px 0}
+.memory-body button {margin:4px 6px 4px 0}
+.memory-body h3 {font-size:14px;margin:18px 0 8px}

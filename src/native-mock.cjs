@@ -15,8 +15,9 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), { stat
 const blocked = endpoint => json({ name: 'NotionSwitchPrototype', message: `NotionSwitch mock adapter is not ready for ${endpoint}; the request was not forwarded.`, errorId: randomUUID() }, 501);
 
 class NativeMock {
-  constructor({ log = () => {}, delayMs = 140, stateFile, provider, workspace, inlineReferences, webSources } = {}) { this.log = log; this.delayMs = delayMs; this.provider = provider; this.inlineReferences = inlineReferences; this.webSources = webSources; this.requests = []; this.threads = new Map(); this.formulaTurns = new Set(); this.formulaFailures = 0; this.researchFailures = 0; this.completed = 0; this.stopped = 0; this.agent = new AgentMock({ log, delayMs, stateFile, provider, workspace, webSources }); this.history = new LocalHistory({ log }); this.inline = new InlineRecords(stateFile && path.join(path.dirname(stateFile), 'inline-conversations.local.json')); }
+  constructor({ log = () => {}, delayMs = 140, stateFile, provider, workspace, inlineReferences, webSources, memory, extensions, workspaceResearch = false } = {}) { this.log = log; this.delayMs = delayMs; this.provider = provider; this.inlineReferences = inlineReferences; this.webSources = webSources; this.workspaceResearch = workspaceResearch; this.requests = []; this.threads = new Map(); this.formulaTurns = new Set(); this.formulaFailures = 0; this.researchFailures = 0; this.completed = 0; this.stopped = 0; this.agent = new AgentMock({ log, delayMs, stateFile, provider, workspace, webSources, memory, extensions }); this.history = new LocalHistory({ log }); this.inline = new InlineRecords(stateFile && path.join(path.dirname(stateFile), 'inline-conversations.local.json')); }
   record(id, table = 'thread', scope) { return (table === 'thread' && this.agent.record(id, table, scope)) || this.inline.record(id, table, scope); }
+  get workspace() { return this.agent.workspace; }
   hasRecord(id, table = 'thread') { return !!this.record(id, table); }
   owns(input) { return this.agent.owns(input); }
   reserveInlineUpload({ threadId, spaceId, userId }) {
@@ -31,7 +32,7 @@ class NativeMock {
   }
   historyThreads() { return new Map([...this.agent.threads, ...this.inline.researchThreads()]); }
   historyRecord(id) { return this.agent.record(id) || (this.inline.record(id)?.created_source === 'researcher' ? this.inline.record(id) : undefined); }
-  transactions(input, meta) { return researchTransactions(this.inline, input, meta, id => this.threads.get(id)?.stop?.('input-edited')); }
+  transactions(input, meta) { return researchTransactions(this.inline, input, meta, id => this.threads.get(id)?.stop?.('input-edited'), { allowNotion: this.workspaceResearch && !!this.workspace?.open }); }
   async handle(endpoint, input, signal, meta) {
     this.requests.push({ endpoint, keys: Object.keys(input || {}).sort(), at: new Date().toISOString() });
     this.log({ type: 'ai-intercepted', endpoint, keys: Object.keys(input || {}).sort() });
@@ -62,15 +63,15 @@ class NativeMock {
           if (this.inline.record(input.threadId)?.alive === false) return json({ message: 'Notion 研究对话已归档，请恢复或新建对话。' }, 409);
           const running = this.threads.get(input.threadId);
           if (running && !mayUseRecord(running.scopeRecord, scope)) return json({ message: 'Notion 网页研究不属于当前账号或工作区。' }, 403);
-          normalized = preparePublicResearch(input, this.inline, userId);
+          normalized = preparePublicResearch(input, this.inline, userId, { allowNotion: this.workspaceResearch && !!this.workspace?.open });
         } catch (error) { return json({ message: error.message }, 403); }
         if (!normalized) { this.threads.get(input.threadId)?.stop?.('source-changed'); return blocked(endpoint); }
         let thread = this.threads.get(input.threadId);
         thread?.stop?.('superseded');
-        try { normalized = preparePublicResearch(input, this.inline, userId); }
+        try { normalized = preparePublicResearch(input, this.inline, userId, { allowNotion: this.workspaceResearch && !!this.workspace?.open }); }
         catch (error) { return json({ message: error.message }, 400); }
         if (!thread) { thread = { kind: 'web-research', turns: [], stop: null, scopeRecord: { created_by_id: userId, space_id: input.spaceId } }; this.threads.set(input.threadId, thread); }
-        return streamPublicResearch({ normalized, signal, provider: this.provider, webSources: this.webSources, records: this.inline, userId, thread, log: this.log,
+        return streamPublicResearch({ normalized, signal, provider: this.provider, workspace: this.workspace, webSources: this.webSources, records: this.inline, userId, thread, log: this.log,
           onFinish: status => { if (status === 'completed') this.completed++; else if (status === 'failed') this.researchFailures++; else this.stopped++; } });
       }
       if (isFormula(input)) {

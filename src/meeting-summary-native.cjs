@@ -1,6 +1,6 @@
 const { NativeMeetingStore } = require('./meeting-summary-store.cjs');
 const { uuid } = require('./native-context.cjs');
-const allowed = new Set(['getRecordValues', 'queryCollection', 'saveTransactionsFanout', 'getUploadSpaceFileUrl']);
+const allowed = new Set(['getRecordValues', 'queryCollection', 'saveTransactionsFanout', 'getUploadSpaceFileUrl', 'getSpacePermissionGroupIdsContainingMembers']);
 class MeetingNativeBridge {
   constructor({ uploadFetch = globalThis.fetch } = {}) { this.contexts = []; this.uploadFetch = uploadFetch; }
   observe(request, session) {
@@ -16,11 +16,13 @@ class MeetingNativeBridge {
     this.contexts.push(context); if (this.contexts.length > 16) this.contexts.shift();
   }
   store(context, spaceId) {
-    const store = new NativeMeetingStore({ spaceId, userId: context.userId, api: async (endpoint, data, { signal, spaceId: selectedSpace } = {}) => {
+    const store = new NativeMeetingStore({ spaceId, userId: context.userId, api: async (endpoint, data, { signal, spaceId: selectedSpace, main = false } = {}) => {
       if (!allowed.has(endpoint)) throw Error('会议接口操作无效。');
-      const matching = selectedSpace === context.spaceId || !selectedSpace;
+      if (main && (endpoint !== 'getRecordValues' || !Array.isArray(data?.requests) || data.requests.length !== 1 || data.requests[0].table !== 'user_root' || uuid(data.requests[0].id) !== context.userId)) throw Error('Notion 指令账号目录读取范围无效。');
+      if (endpoint === 'getSpacePermissionGroupIdsContainingMembers' && (uuid(data?.spaceId) !== uuid(spaceId) || !Array.isArray(data.userIds) || data.userIds.length !== 1 || uuid(data.userIds[0]) !== context.userId)) throw Error('Notion 指令分组查询只允许当前账号和工作区。');
+      const matching = !main && (selectedSpace === context.spaceId || !selectedSpace);
       const headers = { ...(matching ? context.routing : {}), 'content-type': 'application/json', 'x-notion-active-user-header': context.userId };
-      if (selectedSpace && !headers['x-notion-space-short-id']) headers['x-notion-space-id'] = selectedSpace;
+      if (!main && selectedSpace && !headers['x-notion-space-short-id']) headers['x-notion-space-id'] = selectedSpace;
       const response = await context.session.fetch(new URL('/api/v3/' + endpoint, context.origin).href, {
         method: 'POST', headers, body: JSON.stringify(data), credentials: 'include', signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(30000)]),
         redirect: 'error', bypassCustomProtocolHandlers: true

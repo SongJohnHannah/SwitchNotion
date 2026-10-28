@@ -6,7 +6,7 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : object(
 const equal = (a, b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 const fail = (message, status = 400) => { throw Object.assign(Error('Notion 网页研究' + message), { status }); };
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
-function inspect(records, input, meta) {
+function inspect(records, input, meta, allowNotion = false) {
   if (!Array.isArray(input?.transactions)) return null;
   const all = input.transactions.flatMap(transaction => Array.isArray(transaction?.operations) ? transaction.operations.map(op => ({ op, transaction })) : []);
   const owner = op => {
@@ -70,18 +70,18 @@ function inspect(records, input, meta) {
   }
   if ([...added].some(id => !linked.has(id) || !thread.messages.includes(id))) fail('新消息没有完整关联到线程。');
   const normalized = preparePublicResearch({ threadId: thread.id, spaceId: thread.space_id, traceId: thread.current_inference_id,
-    transcript: thread.messages.map(id => staged.record(id, 'thread_message')?.step) }, staged, uuid(meta.userId), { forInference: false });
+    transcript: thread.messages.map(id => staged.record(id, 'thread_message')?.step) }, staged, uuid(meta.userId), { forInference: false, allowNotion });
   if (!normalized) fail('所选来源需要 Notion 正文接入，目前仍等待授权。', 501);
-  const alive = thread.alive, frame = staged.snapshot(normalized.input, null, thread.data.notion_switch_research.status, uuid(meta.userId), { source: 'researcher', research: { web_only: true } });
+  const alive = thread.alive, frame = staged.snapshot(normalized.input, null, thread.data.notion_switch_research.status, uuid(meta.userId), { source: 'researcher', research: { web_only: !normalized.config.notion, notion_sources: normalized.config.notion } });
   staged.record(thread.id).alive = alive; frame.recordMap.thread[thread.id].value.value.alive = alive;
   if (thread.data.notion_switch_research.status === 'running') {
     const updated = staged.record(thread.id); updated.current_inference_id = thread.current_inference_id; updated.current_inference_lease_expiration = thread.current_inference_lease_expiration;
   }
   return { staged, frame, id: thread.id, changed };
 }
-function researchTransactions(records, input, meta, onChanged = () => {}) {
+function researchTransactions(records, input, meta, onChanged = () => {}, { allowNotion = false } = {}) {
   try {
-    let result = inspect(records, input, meta); if (!result) return null;
+    let result = inspect(records, input, meta, allowNotion); if (!result) return null;
     if (result.changed) {
       const oldTail = records.record(result.id).messages.at(-1);
       onChanged(result.id);
@@ -95,7 +95,7 @@ function researchTransactions(records, input, meta, onChanged = () => {}) {
           if (op.pointer?.table === 'thread' && uuid(op.pointer.id) === result.id && op.command === 'listAfter' && equal(op.path, ['messages']) &&
               uuid(op.args?.after) === uuid(oldTail) && !records.record(op.args?.id, 'thread_message')) op.args.after = newTail;
       }
-      result = inspect(records, input, meta);
+      result = inspect(records, input, meta, allowNotion);
     }
     const previous = { threads: records.threads, messages: records.messages };
     records.threads = result.staged.threads; records.messages = result.staged.messages;

@@ -6,7 +6,7 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : value &
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const hash = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 const plain = value => Array.isArray(value) ? value.map(span => typeof span?.[0] === 'string' ? span[0] : '').join('') : '';
-const types = new Set(['text', 'title', 'select', 'multi_select', 'status', 'email', 'url', 'phone_number']);
+const types = new Set(['text', 'title', 'select', 'multi_select', 'status', 'email', 'url', 'phone_number', 'number', 'checkbox']);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 function autofillInput(input) {
   const spaceId = uuid(input?.spaceId), collectionId = uuid(input?.collectionId), workflowId = uuid(input?.workflowPointer?.id);
@@ -138,6 +138,14 @@ class NativeAutofillStore {
     for (const field of snapshot.fields) {
       const value = output[field.id];
       if (value === null) { properties[field.id] = []; continue; }
+      if (field.type === 'number') {
+        if (typeof value !== 'number' || !Number.isFinite(value)) fail('数字字段必须返回有限 JSON 数字，未写入。');
+        properties[field.id] = [[String(value)]]; continue;
+      }
+      if (field.type === 'checkbox') {
+        if (typeof value !== 'boolean') fail('复选框字段必须返回 JSON true 或 false，未写入。');
+        properties[field.id] = [[value ? 'Yes' : 'No']]; continue;
+      }
       if (field.type === 'multi_select') {
         if (!Array.isArray(value) || value.length > 100 || value.some(item => typeof item !== 'string' || !field.options?.includes(item)) || new Set(value).size !== value.length) fail('模型结果含不存在或重复的分类选项。');
         properties[field.id] = value.length ? [[value.join(',')]] : []; continue;

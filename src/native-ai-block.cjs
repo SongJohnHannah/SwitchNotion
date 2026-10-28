@@ -1,11 +1,15 @@
 const { uuid } = require('./native-context.cjs');
 const { AiBlockDatabaseReader } = require('./native-ai-block-database.cjs');
+const { researchConfig } = require('./native-research.cjs');
+const { researchWorkspace } = require('./research-scope.cjs');
+const { runAgent } = require('./agent-runtime.cjs');
+const { dataMessage } = require('./agent-context.cjs');
 
 const plain = value => typeof value === 'string' ? value : Array.isArray(value) ? value.map(item => typeof item?.[0] === 'string' ? item[0] : '').join('') : '';
 const textOf = block => block.type === 'table_row' ? Object.values(block.properties || {}).map(plain).join(' | ') : plain(block.properties?.title);
 const idOf = pointer => pointer?.table === 'block' ? uuid(pointer.id) : null;
 
-async function generateAiBlock({ input, store, provider, signal }) {
+async function generateAiBlock({ input, store, provider, workspace, signal }) {
   signal?.throwIfAborted();
   const originalStore = store; let readCalls = 0;
   const beforeRead = active => {
@@ -36,7 +40,12 @@ async function generateAiBlock({ input, store, provider, signal }) {
   let config = block.format?.ai_block_configuration_menu;
   if (!config && block.format?.ai_prompt_key) config = { type: block.format.ai_prompt_key === 'summarize' ? 'summarizeThisPage' : block.format.ai_prompt_key === 'findActionItems' ? 'extractKeyPointsFromThisPage' : 'custom', autofillInstructions: block.properties?.title, context: [{ type: 'currentPage', pageId }], searchScopes: [] };
   if (!config || !['summarizeThisPage', 'extractKeyPointsFromThisPage', 'custom'].includes(config.type)) throw Error('此 AI block 配置暂不支持。');
-  if (config.searchScope || config.searchScopes && (!Array.isArray(config.searchScopes) || config.searchScopes.length)) throw Error('AI block 尚未接入工作区搜索或外部连接器；请在 Using 中明确选择当前页面、指定页面或数据库。');
+  let search;
+  if (config.searchScope || config.searchScopes && (!Array.isArray(config.searchScopes) || config.searchScopes.length)) {
+    if (!workspace?.open) throw Error('AI block 工作区搜索需要该工作区的已授权 API 连接；也可在 Using 中明确选择当前页面、指定页面或数据库。');
+    search = researchConfig({ type: 'workflow', isAgentResearchRequest: true, searchScopes: config.searchScopes ?? [config.searchScope], useWebSearch: false });
+    if (!search.notion) throw Error('AI block 所选搜索来源尚未接入，请选择 Notion 工作区、页面或数据库。');
+  }
   if (config.context !== undefined && (!Array.isArray(config.context) || config.context.length > 32)) throw Error('AI block 来源列表无效或过多，请减少来源。');
   const selected = config.context ?? [{ type: 'currentPage', pageId }], selections = new Map();
   for (const source of selected) {
@@ -116,7 +125,29 @@ async function generateAiBlock({ input, store, provider, signal }) {
     { role: 'user', content: `${instruction}\n\n所选来源资料：\n${content}` }
   ];
   let markdownString = '';
-  for await (const delta of provider.generate({ config: provider.config(), messages, signal })) {
+  if (search) {
+    const active = signal ? AbortSignal.any([signal, AbortSignal.timeout(300000)]) : AbortSignal.timeout(300000), reads = new Map();
+    const scoped = researchWorkspace(workspace, { spaceId, config: search }), tracked = { open: async options => {
+      const session = await scoped.open(options);
+      return { ...session, execute: async (name, args) => {
+        const result = await session.execute(name, args), revision = result.revision || result.block_revision;
+        if (revision && ['read_page', 'read_block', 'read_database', 'read_database_entry', 'read_database_entry_property'].includes(name)) {
+          const key = JSON.stringify([name, args]); if (reads.size >= 32 && !reads.has(key)) throw Error('AI block 搜索正文来源超过 32 项，请缩小范围。');
+          reads.set(key, { session, name, args: structuredClone(args), revision });
+        }
+        return result;
+      } };
+    } };
+    const sourcesMessage = dataMessage('本次明确选择的 AI block 来源资料：\n' + content); Object.defineProperty(sourcesMessage, 'notionSwitchSelection', { value: true });
+    const reportProvider = { async* generate(options) {
+      let text = '', calls = [];
+      for await (const delta of provider.generate({ ...options, onToolCalls: value => { calls = value; options.onToolCalls(value); }, onRetry: value => { text = ''; calls = []; options.onRetry?.(value); } })) { text += delta; if (text.length > 100000) throw Error('AI block 生成结果过长。'); yield delta; }
+      if (!calls.length) markdownString = text;
+    } };
+    await runAgent({ provider: reportProvider, config: { ...provider.config(), multiAgent: false }, messages: [{ role: 'system', content: '' }, sourcesMessage, { role: 'user', content: instruction + '\n只输出可直接放入 AI 区块的最终 Markdown，引用实际读取的页面链接。' + search.notice }], workspace: tracked, nativeContext: { workspace_id: spaceId }, operationScope: 'ai-block:' + blockId, signal: active, research: true, automaticPageRead: false, onText: () => {} });
+    const verifier = reads.size ? await scoped.open({ signal: active, nativeContext: { workspace_id: spaceId } }) : null;
+    for (const source of reads.values()) { const latest = await verifier.execute(source.name, source.args); if ((latest.revision || latest.block_revision) !== source.revision) throw Error('AI block 搜索来源已改变，未返回旧结果。'); }
+  } else for await (const delta of provider.generate({ config: provider.config(), messages, signal })) {
     signal?.throwIfAborted(); markdownString += delta;
     if (markdownString.length > 100000) throw Error('AI block 生成结果过长。');
   }

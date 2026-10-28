@@ -1,6 +1,6 @@
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { app, BrowserWindow, ipcMain, Menu, MenuItem, Tray, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, MenuItem, Tray, shell, nativeImage, dialog } = require('electron');
 const { SettingsService } = require('./settings-service.cjs');
 const { LoginService } = require('./login-state.cjs');
 const { UpdateService } = require('./update-service.cjs');
@@ -8,21 +8,33 @@ const { createDesktopPlatform } = require('./platform/index.cjs');
 const { SpeechSettings } = require('./speech/settings.cjs');
 const { microphonePermission } = require('./speech/microphone-permission.cjs');
 const { setupCollection } = require('./collection/window.cjs');
+const { MediaTranscript } = require('./media-transcript.cjs');
 const marker = '--notion-switch-settings';
 const settingsContents = new WeakSet();
 let constructingSettings = false;
 function isSettings(contents) { return constructingSettings || settingsContents.has(contents); }
-function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () => false, getCompatibility = () => ({}), speech, webSources }) {
-  const service = new SettingsService({ root, webSources });
+function createAuxiliaryWindow(options) {
+  constructingSettings = true;
+  try { const window = new BrowserWindow(options); settingsContents.add(window.webContents); return window; }
+  finally { constructingSettings = false; }
+}
+function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () => false, getCompatibility = () => ({}), speech, webSources, memory, extensions, backgroundAgents, transfer }) {
+  const service = new SettingsService({ root, webSources, memory, extensions, backgroundAgents, transfer });
   app.on('will-quit', () => service.webSources.close());
   speech ||= new SpeechSettings({ root, isBusy });
+  const mediaTranscripts = new MediaTranscript({ root, speech: speech.provider, isBusy: () => speech.preparing,
+    chooseOpen: async () => { const r = await dialog.showOpenDialog(window, { title: '选择音频或视频生成逐字稿', properties: ['openFile'], filters: [{ name: '音视频', extensions: ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus', 'mp4', 'mov', 'mkv', 'webm'] }] }); return r.canceled ? null : r.filePaths[0]; },
+    chooseSave: async defaultPath => { const r = await dialog.showSaveDialog(window, { title: '保存逐字稿', defaultPath, filters: [{ name: '逐字稿', extensions: ['txt'] }] }); return r.canceled ? null : r.filePath; }
+  });
+  service.mediaTranscripts = mediaTranscripts;
+  app.on('will-quit', () => mediaTranscripts.job?.controller.abort());
   const collection = setupCollection({ root, speech: speech.provider, platform, openSettings: () => open(), createWindow: options => {
     constructingSettings = true;
     try { const auxiliary = new BrowserWindow(options); settingsContents.add(auxiliary.webContents); return auxiliary; }
     finally { constructingSettings = false; }
   } });
   const isTaskBusy = isBusy;
-  isBusy = () => isTaskBusy() || collection.service.active > 0 || speech.preparing || speech.provider.status().busy || speech.provider.leases > 0;
+  isBusy = () => isTaskBusy() || collection.service.active > 0 || mediaTranscripts.pending > 0 || speech.preparing || speech.provider.status().busy || speech.provider.leases > 0;
   app.on('will-quit', () => speech.close());
   const login = new LoginService({ root, platform, isBusy, onRestart: () => setTimeout(() => app.quit(), 300), getTargetLoginStatus: async () => {
     await app.whenReady();
@@ -72,7 +84,10 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
   ipcMain.handle('notion-switch:settings', async (event, action, input = {}) => {
     if (!window || window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== url) return { ok: false, error: '此操作只能从 NotionSwitch 配置窗口执行。' };
     if (typeof action === 'string' && action.startsWith('update.')) return updates.request(action, input);
-    if (typeof action === 'string' && action.startsWith('speech.')) return speech.request(action, input);
+    if (typeof action === 'string' && action.startsWith('speech.')) {
+      if (mediaTranscripts.pending && ['speech.save', 'speech.prepare', 'speech.probe', 'speech.release', 'speech.record.start'].includes(action)) return { ok: false, error: '文件逐字稿正在处理，请停止或完成后再调整、检测或测试语音。' };
+      return speech.request(action, input);
+    }
     if (typeof action === 'string' && action.startsWith('collection.')) {
       if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, error: '收集操作参数无效。' };
       if (action === 'collection.open') { if (Object.keys(input).length) return { ok: false, error: '收集入口不接受额外参数。' }; await collection.open(true); return { ok: true, result: {} }; }
@@ -120,9 +135,9 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
       }
     }
   }).catch(() => {});
-  return { open, openNotion, speech, collection, updateStatus: () => updates.request('update.status'), isLoginSyncing: () => login.syncing || updates.updating, status: () => {
+  return { open, openNotion, speech, collection, mediaTranscripts, updateStatus: () => updates.request('update.status'), isLoginSyncing: () => login.syncing || updates.updating, status: () => {
     const opened = !!window && !window.isDestroyed(), prefs = opened ? window.webContents.getLastWebPreferences() : null;
     return { available: true, open: opened, ...(prefs ? { contextIsolation: prefs.contextIsolation, sandbox: prefs.sandbox, nodeIntegration: prefs.nodeIntegration } : {}) };
   } };
 }
-module.exports = { setupSettings, isSettings };
+module.exports = { setupSettings, isSettings, createAuxiliaryWindow };

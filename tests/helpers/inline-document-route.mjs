@@ -10,6 +10,7 @@ const { LocalInlineDocuments, uploadPrefix: inlineDocumentUploadPrefix, referenc
 const { LocalImageUploads, prefix: localUploadPrefix } = require('../../src/local-image-uploads.cjs');
 const { createNativeAttachmentAdapter } = require('../../src/native-attachments.cjs');
 const { createNativeImageAdapter } = require('../../src/native-images.cjs');
+const { parseAttachment } = require('../../src/document-parser.cjs');
 const { localRecords } = require('../../src/local-records.cjs');
 export const id = n => 'c200aa00-aaaa-4aaa-8aaa-' + String(n).padStart(12, '0');
 export const USER = id(1), SPACE = id(2), THREAD = id(3), ORIGIN = 'https://app.notion.com';
@@ -29,7 +30,10 @@ export function inlineDocumentRoute(root, { provider, allowUpstream = false } = 
   const context = { Request, Response, Headers, URL, mock: native, provider: options.provider, json, localRecords, aiRecords: native, ...stores(),
     localDocumentUploadPrefix, localDocumentPreviewPrefix, localUploadPrefix, inlineDocumentUploadPrefix, inlineDocumentReferencePrefix,
     createNativeAttachmentAdapter, createNativeImageAdapter, settings: { speech: { enabled: false }, isLoginSyncing: () => false }, nativeSpeech: { enabled: false },
-    meetingBridge: { observe() {} }, recordings: { wake() {} }, log() {}, isNotion: hostname => hostname === 'app.notion.com', endpoints: new Set(['runInferenceTranscript', 'stopWorkflowAutomationRunThread']) };
+    // This fixture covers document routes and profile paths. Instruction reads
+    // and media transcription are separate dependencies, never remote calls.
+    meetingBridge: { observe() {}, forRequest() { return {}; } }, resolveNativeInstructions: async () => null, mediaTranscripts: { parse: parseAttachment },
+    recordings: { wake() {} }, log() {}, isNotion: hostname => hostname === 'app.notion.com', endpoints: new Set(['runInferenceTranscript', 'stopWorkflowAutomationRunThread']) };
   const source = fs.readFileSync(new URL('../../src/desktop-hook.cjs', import.meta.url), 'utf8');
   const route = vm.runInNewContext(source.slice(source.indexOf('async function route('), source.indexOf('\nfunction install(ses)')) + '\nroute', context);
   const raw = request => route(request, async value => { forwarded.push(new URL(value.url).pathname); assert.ok(allowUpstream, 'Local document operation must not go upstream'); return json({ syntheticUpstream: true }); });

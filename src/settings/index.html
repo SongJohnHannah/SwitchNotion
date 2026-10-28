@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>NotionSwitch 配置</title>
   <link rel="stylesheet" href="settings.css">
+  <link rel="stylesheet" href="ai-settings.css">
   <script src="speech-recorder.js" defer></script>
   <script src="settings.js" defer></script>
 </head>
@@ -76,6 +77,11 @@
         </form>
       </section>
       <section id="speech-view" hidden>
+        <div class="provider-card">
+          <h2>音频、视频转逐字稿</h2><p>选择本机音视频文件，离线识别音轨并保存 TXT。支持最多 2 GB、四小时的单个文件；不分析视频画面，不自动润色或翻译。先准备好离线语音和媒体组件。</p>
+          <div class="form-actions"><button id="transcript-start" class="button primary">选择音频或视频</button><button id="transcript-prepare" class="button secondary">准备媒体组件</button><button id="transcript-stop" class="button secondary" hidden>停止转写</button><button id="transcript-save" class="button secondary" hidden>保存逐字稿 TXT</button></div>
+          <p id="transcript-progress" class="field-help" role="status"></p><pre id="transcript-text" class="inline-result" hidden></pre>
+        </div>
         <div class="page-heading"><div><span class="eyebrow">OFFLINE SPEECH</span><h1>离线语音转写</h1><p id="speech-backend">faster-whisper · Medium 多语言模型</p></div><span id="speech-status" class="badge">尚未检测</span></div>
         <div id="speech-card" class="provider-card">
               <h2>中文和英文，均在本机识别</h2><p>像双语语音输入：说中文出中文，说英文出英文，自动识别，不翻译或润色原话。自动检测本机环境，缺少的组件会下载到本地。模型约 1.5～1.6 GB，Windows 还可能需要 GPU 运行库；无需 API Key，不依赖 Codex。停止使用后自动释放资源。</p>
