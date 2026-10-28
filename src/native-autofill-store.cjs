@@ -1,12 +1,13 @@
 const { createHash, randomUUID } = require('node:crypto');
 const { uuid } = require('./native-context.cjs');
 const { normalizeViewSnapshot, resolveViewInfo } = require('./native-autofill-view.cjs');
+const { dateProperty } = require('./native-autofill-date.cjs');
 const fail = message => { throw Error('Notion Autofill ' + message); };
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const hash = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 const plain = value => Array.isArray(value) ? value.map(span => typeof span?.[0] === 'string' ? span[0] : '').join('') : '';
-const types = new Set(['text', 'title', 'select', 'multi_select', 'status', 'email', 'url', 'phone_number', 'number', 'checkbox']);
+const types = new Set(['text', 'title', 'select', 'multi_select', 'status', 'email', 'url', 'phone_number', 'number', 'checkbox', 'date']);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 function autofillInput(input) {
   const spaceId = uuid(input?.spaceId), collectionId = uuid(input?.collectionId), workflowId = uuid(input?.workflowPointer?.id);
@@ -138,6 +139,7 @@ class NativeAutofillStore {
     for (const field of snapshot.fields) {
       const value = output[field.id];
       if (value === null) { properties[field.id] = []; continue; }
+      if (field.type === 'date') { properties[field.id] = dateProperty(value); continue; }
       if (field.type === 'number') {
         if (typeof value !== 'number' || !Number.isFinite(value)) fail('数字字段必须返回有限 JSON 数字，未写入。');
         properties[field.id] = [[String(value)]]; continue;
@@ -178,7 +180,7 @@ class NativeAutofillStore {
   }
   async verify(plan, signal) {
     const values = await this.read('block', [plan.rowId], signal), row = values.get(plan.rowId);
-    const equal = expected => plan.propertyIds.every(id => plain(row.properties?.[id]) === plain(expected[id]));
+    const equal = expected => plan.propertyIds.every(id => hash(row.properties?.[id] || []) === hash(expected[id] || []));
     const cleared = plan.propertyIds.every(id => row.format?.agent_workflow_status?.[id] == null);
     return { ok: equal(plan.properties) && cleared, unchanged: equal(plan.before), recordMap: { __version__: 3,
       block: { [plan.rowId]: { spaceId: this.spaceId, value: { role: this.roles.get('block:' + plan.rowId), value: row } } } } };
