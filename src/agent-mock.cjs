@@ -239,7 +239,8 @@ class AgentMock {
           priorSources: t.webSourcePointers, input: { ...selectionInput, type: t.thread.data.type ?? selectionInput.type }, signal: generation.signal });
         generation.signal.throwIfAborted();
         const calendar = meta.openCalendar?.({ userId: meta.userId || t.thread.created_by_id, spaceId: t.thread.space_id, signal: generation.signal });
-        await runAgent({ provider: this.provider, config, messages, workspace: this.workspace, web, memory: this.memory, extensions: this.extensions, nativeGuidance, nativeServices: calendar ? [calendar] : [], aiScope: { userId: meta.userId || t.thread.created_by_id, spaceId: t.thread.space_id }, nativeContext: turn.nativeContext, operationScope, checkpoint, signal: generation.signal,
+        const calendarWrites = meta.openCalendarWrites?.({ ...aiScope, signal: generation.signal, operationScope });
+        await runAgent({ provider: this.provider, config, messages, workspace: this.workspace, web, memory: this.memory, extensions: this.extensions, nativeGuidance, nativeServices: [calendar, calendarWrites].filter(Boolean), aiScope: { userId: meta.userId || t.thread.created_by_id, spaceId: t.thread.space_id }, nativeContext: turn.nativeContext, operationScope, checkpoint, signal: generation.signal,
           onCheckpoint: value => { if (!ended) { t.agentCheckpoint = value; this.save(); } },
           onText: delta => { if (!ended) { assistant.content[0].text += delta; this.emit(t, [{ op: 'put', entity: assistant }]); this.queueSave(); } },
           onTextReset: characters => { if (!ended && characters) { assistant.content[0].text = assistant.content[0].text.slice(0, -characters); this.emit(t, [{ op: 'put', entity: assistant }]); } },

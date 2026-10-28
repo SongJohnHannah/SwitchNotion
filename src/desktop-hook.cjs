@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { app, session, BrowserWindow, dialog, Notification } = require('electron');
+const { app, session, BrowserWindow, dialog, Notification, ipcMain, Menu, MenuItem, shell } = require('electron');
 const platform = require('./platform/index.cjs').createDesktopPlatform();
 const { initializeRuntime, disableBuiltinUpdates } = require('./runtime-bootstrap.cjs');
 const root = initializeRuntime({ app, dialog, platform });
@@ -20,6 +20,8 @@ const { AiBrowser } = require('./ai-browser.cjs');
 const { attachmentType } = require('./media-transcript.cjs');
 const { resolveNativeInstructions } = require('./native-instructions.cjs');
 const { openNativeCalendar } = require('./native-calendar.cjs');
+const { CalendarConnection } = require('./calendar-connection.cjs');
+const { CalendarWrites } = require('./calendar-writes.cjs');
 const { BackgroundAgents } = require('./background-agents.cjs');
 const { AiTransfer } = require('./ai-transfer.cjs');
 const { PageFiles } = require('./page-files.cjs');
@@ -38,6 +40,7 @@ const { NativeAutofillStore } = require('./native-autofill-store.cjs');
 const { createAutofillJobs, isLocalId: isLocalAutofillId } = require('./native-autofill-jobs.cjs');
 const { createNativeBuildService } = require('./native-build-service.cjs');
 const { NativeBuildStore } = require('./native-database-build-store.cjs');
+const { setupDatabaseWizard, wizardEntryScript } = require('./database-wizard-window.cjs');
 const { NativeSpeech, loopbackCsp } = require('./speech/native.cjs');
 const { isMeetingSummary, offlineSummaryResponse } = require('./speech/summary.cjs');
 const { MeetingNativeBridge } = require('./meeting-summary-native.cjs');
@@ -67,6 +70,9 @@ const approveAi = async ({ title, message, detail, signal }) => {
   signal?.throwIfAborted(); return result.response === 1;
 };
 const aiBrowser = new AiBrowser({ createWindow: createAuxiliaryWindow, ready: () => app.whenReady(), approve: approveAi });
+const calendarConnection = new CalendarConnection({ createWindow: createAuxiliaryWindow, ready: () => app.whenReady() });
+const calendarWrites = new CalendarWrites({ root, connection: calendarConnection, approve: approveAi });
+app.on('will-quit', () => calendarConnection.close());
 const extensions = new AiExtensions({ root, memory, browser: aiBrowser, approve: approveAi });
 const generatedFiles = new GeneratedFiles({ root, printPdf: async (title, text, signal) => {
   signal?.throwIfAborted(); await app.whenReady();
@@ -100,6 +106,7 @@ const transfer = new AiTransfer({ memory, agent: mock.agent, native: mock, appro
 });
 const databaseBuild = createNativeBuildService({ root, provider, log,
   storeFactory: (info, meta) => new NativeBuildStore({ native: meetingBridge.forRequest(meta.request, meta.session, info.spaceId) }) });
+const databaseWizard = setupDatabaseWizard({ root, provider, bridge: meetingBridge, createWindow: createAuxiliaryWindow, app, ipcMain, Menu, MenuItem, shell });
 const aiRecords = { record: (id, table, scope) => databaseBuild.record(id, table, scope) || autofill.record(id, table, scope) || mock.record(id, table, scope),
   hasRecord: (id, table) => mock.hasRecord(id, table) || !!databaseBuild.findRecord?.(id, table) || !!databaseBuild.previewOwner?.(id, table) ||
     ['workflow_automation_run', 'task_output'].includes(table) && !!autofill.find?.(id),
@@ -111,7 +118,7 @@ const localInlineDocuments = new LocalInlineDocuments({ root, store: localDocume
   mock.reserveInlineUpload(scope);
 } });
 let recordings;
-const settings = setupSettings({ root, platform, webSources, memory, extensions, backgroundAgents, transfer, isBusy: () => backgroundAgents.active > 0 || mock.status().activeTurns > 0 || databaseBuild.active > 0 || autofill.active > 0 || meetingSummaries.active > 0 || recordings?.active > 0, getCompatibility: () => compatibility });
+const settings = setupSettings({ root, platform, webSources, memory, extensions, backgroundAgents, transfer, isBusy: () => calendarWrites.active > 0 || databaseWizard.service.active > 0 || backgroundAgents.active > 0 || mock.status().activeTurns > 0 || databaseBuild.active > 0 || autofill.active > 0 || meetingSummaries.active > 0 || recordings?.active > 0, getCompatibility: () => compatibility });
 const mediaTranscripts = settings.mediaTranscripts;
 recordings = new MeetingRecordings({ root, provider: settings.speech.provider, enabled: () => settings.speech.autoAttachAudio,
   storeFactory: (info, signal) => meetingBridge.forRecording(info, signal), log });
@@ -124,6 +131,13 @@ const endpoints = new Set(['runInferenceTranscript', 'createAgentThread', 'creat
 function isNotion(hostname) { return hostname === 'notion.so' || hostname.endsWith('.notion.so') || hostname === 'notion.com' || hostname.endsWith('.notion.com'); }
 async function route(request, passthrough, ses) {
   const url = new URL(request.url), endpoint = url.pathname.match(/\/api\/v\d+\/([^/]+)/)?.[1] || url.pathname.split('/').pop();
+  if (isNotion(url.hostname) && url.pathname === '/_notion-switch/database-wizard/open' && typeof databaseWizard !== 'undefined') {
+    if (request.method !== 'POST' || request.headers.get('x-notion-switch-ui') !== 'database-wizard-v1') return json({ ok: false }, 403);
+    try {
+      const text = await request.text(); if (text.length > 4096) throw Error('请求过长。');
+      const input = JSON.parse(text); await databaseWizard.open({ session: ses, pageId: uuid(input?.pageId) }); return json({ ok: true });
+    } catch (error) { return json({ ok: false, message: /^Notion /.test(error.message || '') ? error.message : '建库向导打开失败，请从应用菜单重试。' }, 400); }
+  }
   if (isNotion(url.hostname) && typeof localInlineDocuments !== 'undefined') {
     if (url.pathname.startsWith(inlineDocumentUploadPrefix)) return localInlineDocuments.post(request);
     if (url.pathname.startsWith(inlineDocumentReferencePrefix)) return localInlineDocuments.download(request);
@@ -328,6 +342,7 @@ async function route(request, passthrough, ses) {
         readLocalDocument: scope => localDocuments.read({ ...scope, userId: request.headers.get('x-notion-active-user-header') }) }) : images;
       return await mock.handle(endpoint, input, request.signal, { userId: request.headers.get('x-notion-active-user-header'), spaceId: request.headers.get('x-notion-space-id') ?? undefined, images: attachments,
         ...(typeof openNativeCalendar === 'function' ? { openCalendar: ({ userId, spaceId, signal }) => openNativeCalendar({ store: meetingBridge.forRequest(request, ses, spaceId), userId, spaceId, signal }) } : {}),
+        ...(typeof calendarWrites !== 'undefined' ? { openCalendarWrites: scope => calendarWrites.open(scope) } : {}),
         resolveInstructions: ({ input, content, signal, userId }) => resolveNativeInstructions({ store: meetingBridge.forRequest(request, ses, input.spaceId), userId, spaceId: input.spaceId, content, signal }),
         ...(typeof localInlineDocuments !== 'undefined' ? { inlineAttachment: scope => localInlineDocuments.prepare({ ...scope,
           userId: request.headers.get('x-notion-active-user-header'), origin: url.origin }) } : {}) });
@@ -385,6 +400,9 @@ app.on('web-contents-created', (_event, contents) => {
   } catch {}
   contents.on('did-fail-load', (_event, code, description, url, mainFrame) => { if (mainFrame) log({ type: 'load-failed', code, description, origin: (() => { try { return new URL(url).origin; } catch { return 'unknown'; } })() }); });
   contents.on('did-finish-load', () => { let origin; try { origin = new URL(contents.getURL()).origin; } catch { origin = 'unknown'; } log({ type: 'page-loaded', origin }); });
+  contents.on('did-finish-load', () => {
+    try { const url = new URL(contents.getURL()); if (url.protocol === 'https:' && isNotion(url.hostname)) void contents.executeJavaScript(wizardEntryScript).catch(() => {}); } catch {}
+  });
 });
 app.on('browser-window-created', (_event, win) => {
   if (isSettings(win.webContents)) return;
@@ -400,7 +418,7 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/status' && req.method === 'GET') {
     const state = mock.status(), speechBusy = settings.speech.provider.leases > 0 || settings.speech.provider.status().busy || nativeSpeech.connections.size > 0;
     res.end(JSON.stringify({ pid: process.pid, appReady: app.isReady(), windows: BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), minimized: win.isMinimized(), destroyed: win.isDestroyed() })), ...state,
-      activeTurns: state.activeTurns + databaseBuild.active + autofill.active + (speechBusy ? 1 : 0) + meetingSummaries.active + recordings.active + backgroundAgents.active + (settings.mediaTranscripts?.pending || 0) + (settings.mediaTranscripts?.ocr?.pending || 0) + (settings.mediaTranscripts?.ocr?.preparing ? 1 : 0) + (settings.collection?.service.active || 0), databaseBuild: { active: databaseBuild.active, available: databaseBuild.available }, autofill: { active: autofill.active, available: autofill.available }, collection: settings.collection?.status(), meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
+      activeTurns: state.activeTurns + databaseBuild.active + databaseWizard.service.active + calendarWrites.active + autofill.active + (speechBusy ? 1 : 0) + meetingSummaries.active + recordings.active + backgroundAgents.active + (settings.mediaTranscripts?.pending || 0) + (settings.mediaTranscripts?.ocr?.pending || 0) + (settings.mediaTranscripts?.ocr?.preparing ? 1 : 0) + (settings.collection?.service.active || 0), databaseWizard: { active: databaseWizard.service.active, available: databaseWizard.service.available }, calendarWrites: { active: calendarWrites.active, available: calendarWrites.available }, databaseBuild: { active: databaseBuild.active, available: databaseBuild.available }, autofill: { active: autofill.active, available: autofill.available }, collection: settings.collection?.status(), meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
       compatibility, notion: workspace.status(), settings: settings.status(), speech: { ...settings.speech.status(), native: nativeSpeech.status() } }));
   }
   else if (req.url === '/collection/open' && req.method === 'POST') {
