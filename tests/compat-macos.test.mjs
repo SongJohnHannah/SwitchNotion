@@ -75,6 +75,7 @@ const currentAssets = {
   connection: '17048-b38a7b8f431620b1.js', recording: '89269-451ea294ba9323c0.js',
   attachments: '51103-1249b090dd731220.js', autofill: '57590-3242f968a3670cd0.js'
 };
+const currentRecordings = [currentAssets.recording, '89269-d6dd7560b2d4cf66.js'];
 const cached = name => new URL('../research/.public-assets/' + name, import.meta.url);
 const fixtureMissing = name => !fs.existsSync(cached(name)) && 'Optional public macOS client fixture unavailable';
 function functionSource(source, moduleId, name) {
@@ -102,14 +103,21 @@ test('the Mac dispatch does not enable these new assets on the unchanged Windows
   const require = createRequire(new URL('../src/client-compat.cjs', import.meta.url));
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(new URL('../src/client-compat.cjs', import.meta.url), 'utf8'), { require, module, process: { platform: 'win32' } });
-  for (const name of Object.values(currentAssets)) {
+  for (const name of new Set([...Object.values(currentAssets), ...currentRecordings])) {
+    if (fixtureMissing(name)) continue;
     const source = fs.readFileSync(cached(name), 'utf8');
     assert.throws(() => module.exports.adaptClient(source, name, options), /Unreviewed/);
   }
 });
 
-test('the current Mac stop wrapper releases capture then sends the final audio through the renamed native transport twice', { skip: fixtureMissing(currentAssets.recording) }, async () => {
-  const source = macClient.adaptMacClient(fs.readFileSync(cached(currentAssets.recording), 'utf8'), currentAssets.recording, options);
+for (const recording of currentRecordings) test(`Mac ${recording} releases capture then sends the final audio through the renamed native transport twice`, { skip: fixtureMissing(recording) }, async () => {
+  const original = fs.readFileSync(cached(recording), 'utf8');
+  const result = await adaptResponse(new Response(original), recording, options);
+  assert.deepEqual(result.kinds, ['recording']);
+  const source = await result.response.text();
+  new vm.Script(source);
+  assert.equal(macClient.adaptMacClient(original, recording), original);
+  assert.throws(() => macClient.adaptMacClient(original + '\n', recording, options), /Unreviewed/);
   const info = inspect(modulesIn(source).find(module => module.id === '331787').source);
   const method = info.nodes.find(node => node.type === 'MethodDefinition' && node.static && node.key.name === 'stopDictation');
   const module = modulesIn(source).find(module => module.id === '331787').source;

@@ -10,6 +10,9 @@ const { pollNativeAutofill, invokeLiteAutofill, captureViewSnapshot } = require(
 const assets = Object.freeze({
   '17048-b38a7b8f431620b1.js': { kind: 'connection', moduleId: '697264', hash: 'bae8613c7c95b7983ea804f88fe527b50c780c9424734464555266917b134201' },
   '89269-451ea294ba9323c0.js': { kind: 'recording', moduleId: '331787', hash: '5501272ae32976cf9515d2672f46e21582bf4ed6162c679630989cbd2c200446' },
+  // Later rollout only reordered lazy chunk dependencies in neighbouring
+  // modules; recorder 331787 and audio recorder 392719 are byte-identical.
+  '89269-d6dd7560b2d4cf66.js': { kind: 'recording', moduleId: '331787', hash: '5bfadbd1b22d5d247291c517ac901c9c2faa8828216837b25535fda65a25868c' },
   '51103-1249b090dd731220.js': { kind: 'attachments', moduleId: '175529', hash: '390857956053ace5c09b2f9c65ace352363d3244126a8f5a61a2b9c1dd997abb' },
   '57590-3242f968a3670cd0.js': { kind: 'autofill', moduleId: '414741', hash: '1735c0788b8c9c9359b0034a3ca1bfd6d26194eacafd8c89cda0e3fb45152113' }
 });
