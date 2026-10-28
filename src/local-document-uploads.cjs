@@ -10,7 +10,9 @@ const fail = message => { throw Error('Notion 附件' + message); };
 const checksum = bytes => createHash('sha256').update(bytes).digest('hex');
 class LocalDocumentUploads {
   constructor({ root, record, fileType = documentType }) { this.directory = path.join(root, 'document-attachments'); this.record = record; this.fileType = fileType; this.pending = new Map(); this.tokens = new Map(); this.previews = new Map(); }
-  handles(filename) { try { this.fileType(filename, ''); return true; } catch { return false; } }
+  // Sidebar images keep their existing preview/Flash upload route. The inline
+  // uploader may still explicitly create an OCR image in this document store.
+  handles(filename) { try { return this.fileType(filename, '').format !== 'image-ocr'; } catch { return false; } }
   handlesTarget(target) { return target?.type === 'user' || target?.type === 'thread' && !!this.record(target.threadId); }
   thread(threadId, userId, spaceId) {
     const result = this.record(uuid(threadId), { userId: uuid(userId), spaceId: uuid(spaceId) });

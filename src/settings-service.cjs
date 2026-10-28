@@ -120,6 +120,7 @@ class SettingsService {
     return { message: 'DeepSeek 已保存，下一轮 AI 对话生效' };
   }
   request(action, input = {}) {
+    if (typeof action === 'string' && action.startsWith('ocr.')) return this.mediaTranscripts?.ocr.request(action, input) || Promise.resolve({ ok: false, error: '本机 OCR 服务尚未就绪。' });
     if (typeof action === 'string' && action.startsWith('transcript.')) return this.mediaTranscripts?.request(action, input) || Promise.resolve({ ok: false, error: '本机逐字稿服务尚未就绪。' });
     if (typeof action === 'string' && action.startsWith('agents.')) return this.backgroundAgents?.request(action, input) || Promise.resolve({ ok: false, error: '后台任务尚未就绪。' });
     if (typeof action === 'string' && action.startsWith('transfer.')) return this.transfer?.request(action, input) || Promise.resolve({ ok: false, error: '对话同步尚未就绪。' });

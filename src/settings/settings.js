@@ -1,7 +1,7 @@
 'use strict';
 const api = window.notionSwitch;
 const $ = id => document.getElementById(id);
-let state, editing, removing, toastTimer, busy = false, speechRecorder, speechPoll, speechDirty = false, memoryScopes = [], transcriptPending = false;
+let state, editing, removing, toastTimer, busy = false, speechRecorder, speechPoll, speechDirty = false, memoryScopes = [], transcriptPending = false, ocrPending = false;
 const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4500); }
 function result(id, text, error = false) { const node = $(id); node.textContent = text; node.classList.toggle('error', error); node.hidden = !text; }
@@ -284,6 +284,7 @@ $('check-updates').addEventListener('click', () => operation($('updates-card'), 
 $('apply-update').addEventListener('click', () => operation($('updates-card'), async () => { const r = await api.updateNotion(); result('updates-result', r.ok ? r.result.message : r.error, !r.ok); }));
 $('rollback-update').addEventListener('click', () => operation($('updates-card'), async () => { const r = await api.rollbackNotion(); result('updates-result', r.ok ? r.result.message : r.error, !r.ok); }));
 async function checkSpeech() {
+  if (ocrPending && api.ocrState) void checkOcr();
   if (transcriptPending && api.transcriptState) void checkTranscript();
   const response = await api.speechStatus(); if (!response.ok) { result('speech-result', response.error, true); return; }
   const s = response.result;
@@ -341,6 +342,15 @@ $('transcript-start').addEventListener('click', () => operation($('speech-view')
 $('transcript-prepare').addEventListener('click', () => operation($('speech-view'), async () => { await checkTranscript(await api.transcriptPrepare()); }));
 $('transcript-stop').addEventListener('click', async () => { await checkTranscript(await api.transcriptStop()); });
 $('transcript-save').addEventListener('click', () => operation($('speech-view'), async () => { const r = await api.transcriptSave(); if (!r.ok) toast(r.error); }));
-document.querySelector('[data-view="speech"]').addEventListener('click', () => { if (api.transcriptState) void checkTranscript(); });
+async function checkOcr(response) {
+  if (!response && !api.ocrState) return;
+  const r = response || await api.ocrState(); if (!r.ok) { toast(r.error); return; }
+  ocrPending = r.result.preparing;
+  $('ocr-state').textContent = r.result.engine + (r.result.error ? ' · ' + r.result.error : r.result.progress ? ' · ' + r.result.progress : '');
+  $('ocr-prepare').disabled = ocrPending; $('ocr-prepare').dataset.unavailable = String(ocrPending); $('ocr-stop').hidden = !ocrPending;
+}
+$('ocr-prepare').addEventListener('click', () => operation($('speech-view'), async () => { await checkOcr(await api.ocrPrepare()); }));
+$('ocr-stop').addEventListener('click', async () => { await checkOcr(await api.ocrStop()); });
+document.querySelector('[data-view="speech"]').addEventListener('click', () => { if (api.transcriptState) void checkTranscript(); void checkOcr(); });
 if (!api) result('load-error', '请通过“NotionSwitch 配置”快捷方式打开此窗口。', true);
 else load().then(async () => { const r = await api.updateStatus(); if (r.ok && r.result.openOnStartup) document.querySelector('[data-view="updates"]').click(); }).catch(() => result('load-error', '配置暂时无法加载，请关闭窗口后重新打开。', true));

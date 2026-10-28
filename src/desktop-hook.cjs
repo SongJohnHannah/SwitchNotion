@@ -19,6 +19,7 @@ const { AiExtensions } = require('./ai-extensions.cjs');
 const { AiBrowser } = require('./ai-browser.cjs');
 const { attachmentType } = require('./media-transcript.cjs');
 const { resolveNativeInstructions } = require('./native-instructions.cjs');
+const { openNativeCalendar } = require('./native-calendar.cjs');
 const { BackgroundAgents } = require('./background-agents.cjs');
 const { AiTransfer } = require('./ai-transfer.cjs');
 const { PageFiles } = require('./page-files.cjs');
@@ -307,6 +308,7 @@ async function route(request, passthrough, ses) {
       if (settings.isLoginSyncing() && /^(?:create|sendEventTo|runInference)/.test(endpoint)) return json({ name: 'NotionSwitchPrototype', message: '本机登录同步正在准备重启，请等待重新打开后继续。' }, 409);
       if (localRead && !mock.owns(input)) return passthrough(request);
       const images = createNativeImageAdapter({
+        ocrImage: typeof mediaTranscripts !== 'undefined' && mediaTranscripts.ocr ? (...args) => mediaTranscripts.ocr.recognize(...args) : undefined,
         readLocalFile: ({ spaceId, threadId, fileId }) => localImages.read({ spaceId, threadId, fileId, userId: request.headers.get('x-notion-active-user-header') }),
         resolveFile: async ({ spaceId, threadId, fileId, includeFileMetadata, signal }) => {
           if (!ses) throw Error('DeepSeek 原生图片会话不可用，请重试。');
@@ -321,6 +323,7 @@ async function route(request, passthrough, ses) {
       const attachments = typeof localDocuments !== 'undefined' ? createNativeAttachmentAdapter({ images, parseContent: (...args) => mediaTranscripts.parse(...args),
         readLocalDocument: scope => localDocuments.read({ ...scope, userId: request.headers.get('x-notion-active-user-header') }) }) : images;
       return await mock.handle(endpoint, input, request.signal, { userId: request.headers.get('x-notion-active-user-header'), spaceId: request.headers.get('x-notion-space-id') ?? undefined, images: attachments,
+        ...(typeof openNativeCalendar === 'function' ? { openCalendar: ({ userId, spaceId, signal }) => openNativeCalendar({ store: meetingBridge.forRequest(request, ses, spaceId), userId, spaceId, signal }) } : {}),
         resolveInstructions: ({ input, content, signal, userId }) => resolveNativeInstructions({ store: meetingBridge.forRequest(request, ses, input.spaceId), userId, spaceId: input.spaceId, content, signal }),
         ...(typeof localInlineDocuments !== 'undefined' ? { inlineAttachment: scope => localInlineDocuments.prepare({ ...scope,
           userId: request.headers.get('x-notion-active-user-header'), origin: url.origin }) } : {}) });
@@ -393,7 +396,7 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/status' && req.method === 'GET') {
     const state = mock.status(), speechBusy = settings.speech.provider.leases > 0 || settings.speech.provider.status().busy || nativeSpeech.connections.size > 0;
     res.end(JSON.stringify({ pid: process.pid, appReady: app.isReady(), windows: BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), minimized: win.isMinimized(), destroyed: win.isDestroyed() })), ...state,
-      activeTurns: state.activeTurns + databaseBuild.active + autofill.active + (speechBusy ? 1 : 0) + meetingSummaries.active + recordings.active + backgroundAgents.active + (settings.mediaTranscripts?.pending || 0) + (settings.collection?.service.active || 0), databaseBuild: { active: databaseBuild.active, available: databaseBuild.available }, autofill: { active: autofill.active, available: autofill.available }, collection: settings.collection?.status(), meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
+      activeTurns: state.activeTurns + databaseBuild.active + autofill.active + (speechBusy ? 1 : 0) + meetingSummaries.active + recordings.active + backgroundAgents.active + (settings.mediaTranscripts?.pending || 0) + (settings.mediaTranscripts?.ocr?.pending || 0) + (settings.mediaTranscripts?.ocr?.preparing ? 1 : 0) + (settings.collection?.service.active || 0), databaseBuild: { active: databaseBuild.active, available: databaseBuild.available }, autofill: { active: autofill.active, available: autofill.available }, collection: settings.collection?.status(), meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
       compatibility, notion: workspace.status(), settings: settings.status(), speech: { ...settings.speech.status(), native: nativeSpeech.status() } }));
   }
   else if (req.url === '/collection/open' && req.method === 'POST') {

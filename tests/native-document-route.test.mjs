@@ -11,6 +11,7 @@ const { LocalDocumentUploads, prefix: localDocumentUploadPrefix, previewPrefix: 
 const { LocalImageUploads, prefix: localUploadPrefix } = require('../src/local-image-uploads.cjs');
 const { createNativeImageAdapter } = require('../src/native-images.cjs'), { createNativeAttachmentAdapter } = require('../src/native-attachments.cjs');
 const { localRecords } = require('../src/local-records.cjs');
+const { parseAttachment } = require('../src/document-parser.cjs');
 const id = n => 'bf00aa00-aaaa-4aaa-8aaa-' + String(n).padStart(12, '0'), USER = id(1), SPACE = id(2), THREAD = id(3), ORIGIN = 'https://app.notion.com';
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a9sAAAAASUVORK5CYII=', 'base64');
 const wordType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', excelType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -28,7 +29,7 @@ function fixture(t, { model = 'deepseek-v4-pro', generate } = {}) {
     localImages: new LocalImageUploads({ root, owns: input => native.owns(input), record: value => native.record(value) }) });
   const context = { Request, Response, Headers, URL, mock: native, provider, json, localRecords, aiRecords: native,
     ...makeStores(), localDocumentUploadPrefix, localDocumentPreviewPrefix, localUploadPrefix, createNativeImageAdapter, createNativeAttachmentAdapter,
-    settings: { speech: { enabled: false }, isLoginSyncing: () => false }, nativeSpeech: { enabled: false }, meetingBridge: { observe() {} }, recordings: { wake() {} }, log() {},
+    settings: { speech: { enabled: false }, isLoginSyncing: () => false }, nativeSpeech: { enabled: false }, meetingBridge: { observe() {}, forRequest() { return {}; } }, resolveNativeInstructions: async () => null, mediaTranscripts: { parse: parseAttachment }, recordings: { wake() {} }, log() {},
     isNotion: hostname => hostname === 'app.notion.com', endpoints: new Set(['createAgentThread', 'sendEventToAgentThread']) };
   const source = fs.readFileSync(new URL('../src/desktop-hook.cjs', import.meta.url), 'utf8');
   const route = vm.runInNewContext(source.slice(source.indexOf('async function route('), source.indexOf('\nfunction install(ses)')) + '\nroute', context);

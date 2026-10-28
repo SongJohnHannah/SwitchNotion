@@ -116,7 +116,7 @@ async function readImage(response, maxBytes, signal) {
  * Neither callback result, signed URL, nor response headers are returned in
  * provider content. The adapter has no filesystem or generic HTTP capability.
  */
-function createNativeImageAdapter({ resolveFile, fetchImage, readLocalFile, limits: requestedLimits = {} } = {}) {
+function createNativeImageAdapter({ resolveFile, fetchImage, readLocalFile, ocrImage, limits: requestedLimits = {} } = {}) {
   const limits = { ...VISION_LIMITS };
   for (const key of Object.keys(requestedLimits)) {
     if (!Object.hasOwn(limits, key) || !Number.isInteger(requestedLimits[key]) || requestedLimits[key] < 1 || requestedLimits[key] > limits[key]) fail('图片输入限制配置无效。');
@@ -143,11 +143,12 @@ function createNativeImageAdapter({ resolveFile, fetchImage, readLocalFile, limi
     const inspected = inspectNativeContent(content);
     signal?.throwIfAborted();
     if (!inspected.hasImages) return { content: inspected.text, text: inspected.text, images: [], hasImages: false };
-    if (model !== 'deepseek-flash') fail('图片理解需要选择 DeepSeek Flash；当前模型不支持图片，请切换后重新发送。');
+    const useOcr = typeof ocrImage === 'function' && (model !== 'deepseek-flash' || /\bocr\b|扫描|提取.*文字|识别.*文字/i.test(inspected.text));
+    if (model !== 'deepseek-flash' && !useOcr) fail('图片理解需要选择 DeepSeek Flash；当前模型不支持图片，请切换后重新发送。');
     if (!uuid(spaceId) || !uuid(threadId)) fail('图片消息缺少有效的原生工作区或对话信息，请在 Notion 中重新发送。');
     if (inspected.files.length > limits.maxImages) fail(`本次最多识别 ${limits.maxImages} 张图片，请分批发送。`);
     if (typeof resolveFile !== 'function' || typeof fetchImage !== 'function') fail('原生图片下载通道尚未连接，请更新 NotionSwitch 后重试。');
-    const parts = inspected.text ? [{ type: 'text', text: inspected.text }] : [], images = [];
+    const parts = inspected.text ? [{ type: 'text', text: inspected.text }] : [], images = [], documents = [];
     let totalBytes = 0;
     for (const fileId of inspected.files) {
       if (totalBytes >= limits.maxTotalBytes) fail('本次图片总大小过大，请分批发送。');
@@ -165,17 +166,23 @@ function createNativeImageAdapter({ resolveFile, fetchImage, readLocalFile, limi
         const info = inspectImage(bytes, limits.maxDimension);
         totalBytes += bytes.length;
         if (totalBytes > limits.maxTotalBytes) fail('本次图片总大小过大，请分批发送。');
-        parts.push({ type: 'image_url', image_url: { url: `data:${info.mimeType};base64,${bytes.toString('base64')}`, detail: 'original' } });
-        images.push({ file_id: fileId, ...info, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+        if (useOcr) {
+          const filename = '图片-' + (documents.length + 1) + '.' + ({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' })[info.mimeType];
+          documents.push({ ...await ocrImage(bytes, filename, info.mimeType, { signal }), file_id: fileId, sha256: createHash('sha256').update(bytes).digest('hex'), treat_as_data: true });
+        } else {
+          parts.push({ type: 'image_url', image_url: { url: `data:${info.mimeType};base64,${bytes.toString('base64')}`, detail: 'original' } });
+          images.push({ file_id: fileId, ...info, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+        }
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
-        if (error instanceof NativeImageError) throw error;
+        if (error instanceof NativeImageError || /^Notion 附件 OCR/.test(error.message || '')) throw error;
         fail(combined.aborted ? '图片下载超时，请检查网络后重新发送。' : '无法读取这张原生图片附件，请重新上传后再试。');
       }
     }
+    if (useOcr) return { content: inspected.text, text: inspected.text, images: [], hasImages: false, documents, documentCharacters: JSON.stringify(documents).length, sourceBytes: totalBytes, fileCount: documents.length };
     return { content: parts, text: inspected.text, images, hasImages: true };
   };
-  return { prepare };
+  return { prepare, supportsOcr: typeof ocrImage === 'function' };
 }
 // This observer is intentionally incapable of producing field values, URLs,
 // file IDs, filename strings, credentials, URL hashes, or response bodies.
@@ -205,4 +212,4 @@ function describeUploadResponse(endpoint, input, responseJSON) {
   const inputShape = shape(input), responseShape = shape(responseJSON);
   return { endpoint, input: inputShape, response: responseShape, methods: [...methods].sort(), hasFileId };
 }
-module.exports = { createNativeImageAdapter, inspectNativeContent, describeUploadResponse, VISION_LIMITS, NATIVE_ATTACHMENT_EVIDENCE };
+module.exports = { createNativeImageAdapter, inspectNativeContent, inspectImage, describeUploadResponse, VISION_LIMITS, NATIVE_ATTACHMENT_EVIDENCE };

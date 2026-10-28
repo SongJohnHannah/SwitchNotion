@@ -33,7 +33,7 @@ function csv(value, separator) {
   if (field || row.length || afterQuote) line();
   return { format: separator === '\t' ? 'tsv' : 'csv', rows, complete: true, formula_execution: false };
 }
-async function pdf(bytes) {
+async function pdf(bytes, { allowEmptyPdf = false } = {}) {
   if (!bytes.subarray(0, 1024).toString('latin1').includes('%PDF-')) throw Error('Notion 附件不是可识别的 PDF 文件。');
   const pdfjs = await import(pathToFileURL(path.join(__dirname, 'vendor/unpdf/dist/pdfjs.mjs')).href);
   const resource = (folder, name) => {
@@ -70,7 +70,7 @@ async function pdf(bytes) {
         pages.push({ page: number, text: value }); if (!value) empty.push(number);
       } finally { page.cleanup(); }
     }
-    if (empty.length === pages.length) throw Error('Notion 附件 PDF 没有可读取的文字层；扫描件需要 OCR，尚未作为文字发送。');
+    if (!allowEmptyPdf && empty.length === pages.length) throw Error('Notion 附件 PDF 没有可读取的文字层；扫描件需要 OCR，尚未作为文字发送。');
     return { format: 'pdf', pages, complete: empty.length === 0, text_layer_only: true, embedded_media_read: false, layout_rendered: false,
       warnings: empty.length ? ['第 ' + empty.join('、') + ' 页没有可读取文字层，尚未 OCR 或识别图像。'] : [] };
   } catch (error) {
@@ -78,10 +78,10 @@ async function pdf(bytes) {
     throw Error(error.name === 'PasswordException' ? 'Notion 附件 PDF 已加密，请先解密后重新上传。' : 'Notion 附件 PDF 文字层无法完整解析，未发送不完整的解析结果。');
   } finally { try { await task.destroy(); } catch {} }
 }
-async function extractDocument(bytes, filename, mediaType) {
+async function extractDocument(bytes, filename, mediaType, options = {}) {
   if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > MAX_BYTES) throw Error('Notion 附件为空或超过 16 MB。');
   const type = documentType(filename, mediaType); let result;
-  if (type.format === 'pdf') result = await pdf(bytes);
+  if (type.format === 'pdf') result = await pdf(bytes, options);
   else if (type.format === 'docx') result = docx(bytes);
   else if (type.format === 'xlsx') result = xlsx(bytes);
   else {

@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node scripts/start-desktop.mjs",
     "prepare": "node scripts/prepare-desktop.mjs",
+    "prepare:ocr": "node scripts/prepare-mediaocr.mjs",
     "status": "node scripts/control.mjs status",
     "stop": "node scripts/control.mjs quit",
     "provider": "node scripts/provider.mjs",

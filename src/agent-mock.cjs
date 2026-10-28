@@ -181,7 +181,7 @@ class AgentMock {
           const raw = t.attachments[entity.id], fileCount = raw.filter(part => part.type === 'file').length;
           if (entity.id !== user.id && (!imageAdapter || filesUsed >= 8 || !imageAdapter.supportsDocuments && (config.model !== 'deepseek-flash' || imageCount + fileCount > 8))) continue;
           const normalized = await imageAdapter.prepare({ content: raw, model: config.model, spaceId: t.attachmentScopes[entity.id]?.workspace_id || t.thread.space_id, threadId: t.thread.id, signal: generation.signal,
-            skipImages: entity.id !== user.id && config.model !== 'deepseek-flash', allowEmptyText: entity.id !== user.id && !!promptText.trim(), knownDocumentIds: t.documentFileIds || [] });
+            skipImages: entity.id !== user.id && config.model !== 'deepseek-flash' && !imageAdapter.supportsOcr, allowEmptyText: entity.id !== user.id && !!promptText.trim(), knownDocumentIds: t.documentFileIds || [] });
           const bytes = normalized.images.reduce((total, image) => total + image.bytes, 0);
           if (imageBytes + bytes > 24 * 1024 * 1024 && entity.id !== user.id) continue;
           const count = normalized.fileCount ?? normalized.images.length, characters = normalized.documentCharacters || 0, allBytes = normalized.sourceBytes ?? bytes;
@@ -238,7 +238,8 @@ class AgentMock {
           content: [...entities.filter(entity => entity.kind === 'user_message' && entity.id !== user.id).map(entity => ({ type: 'text', text: userText(entity) })), ...content],
           priorSources: t.webSourcePointers, input: { ...selectionInput, type: t.thread.data.type ?? selectionInput.type }, signal: generation.signal });
         generation.signal.throwIfAborted();
-        await runAgent({ provider: this.provider, config, messages, workspace: this.workspace, web, memory: this.memory, extensions: this.extensions, nativeGuidance, aiScope: { userId: meta.userId || t.thread.created_by_id, spaceId: t.thread.space_id }, nativeContext: turn.nativeContext, operationScope, checkpoint, signal: generation.signal,
+        const calendar = meta.openCalendar?.({ userId: meta.userId || t.thread.created_by_id, spaceId: t.thread.space_id, signal: generation.signal });
+        await runAgent({ provider: this.provider, config, messages, workspace: this.workspace, web, memory: this.memory, extensions: this.extensions, nativeGuidance, nativeServices: calendar ? [calendar] : [], aiScope: { userId: meta.userId || t.thread.created_by_id, spaceId: t.thread.space_id }, nativeContext: turn.nativeContext, operationScope, checkpoint, signal: generation.signal,
           onCheckpoint: value => { if (!ended) { t.agentCheckpoint = value; this.save(); } },
           onText: delta => { if (!ended) { assistant.content[0].text += delta; this.emit(t, [{ op: 'put', entity: assistant }]); this.queueSave(); } },
           onTextReset: characters => { if (!ended && characters) { assistant.content[0].text = assistant.content[0].text.slice(0, -characters); this.emit(t, [{ op: 'put', entity: assistant }]); } },

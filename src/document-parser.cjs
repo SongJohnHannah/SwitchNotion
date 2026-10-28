@@ -7,7 +7,7 @@ if (!isMainThread && workerData?.kind === 'notion-switch-document') {
   (async () => {
     try {
       const { extractDocument } = require('./document-content.cjs'), data = workerData.bytes;
-      const result = await extractDocument(Buffer.from(data.buffer, data.byteOffset, data.byteLength), workerData.filename, workerData.mediaType);
+      const result = await extractDocument(Buffer.from(data.buffer, data.byteOffset, data.byteLength), workerData.filename, workerData.mediaType, { allowEmptyPdf: workerData.allowEmptyPdf === true });
       parentPort.postMessage({ ok: true, value: result });
     } catch (error) { parentPort.postMessage({ ok: false, message: /^Notion /.test(error.message || '') ? error.message : 'Notion 附件解析未完成。' }); }
     finally { parentPort.close(); }
@@ -19,7 +19,7 @@ if (!isMainThread && workerData?.kind === 'notion-switch-document') {
       const item = queue.shift(); queuedBytes -= item.bytes.length; if (item.done) continue;
       item.started = true; running++; const bytes = new Uint8Array(item.bytes); let worker;
       try {
-        worker = new Worker(__filename, { workerData: { kind: 'notion-switch-document', bytes, filename: item.filename, mediaType: item.mediaType }, transferList: [bytes.buffer],
+        worker = new Worker(__filename, { workerData: { kind: 'notion-switch-document', bytes, filename: item.filename, mediaType: item.mediaType, allowEmptyPdf: item.allowEmptyPdf }, transferList: [bytes.buffer],
           execArgv: [], env: {}, stdout: true, stderr: true, resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 } });
       } catch { running--; item.finish(Error('Notion 附件无法启动解析线程。')); continue; }
       item.worker = worker; worker.stdout.resume(); worker.stderr.resume();
@@ -28,13 +28,13 @@ if (!isMainThread && workerData?.kind === 'notion-switch-document') {
       worker.once('exit', () => { if (!item.done) item.finish(Error('Notion 附件解析意外中断。')); running--; dispatch(); });
     }
   }
-  function parseAttachment(bytes, filename, mediaType, { signal, timeoutMs = 10000 } = {}) {
+  function parseAttachment(bytes, filename, mediaType, { signal, timeoutMs = 10000, allowEmptyPdf = false } = {}) {
     signal?.throwIfAborted();
     if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > 16 * 1024 * 1024 || typeof filename !== 'string' || filename.length > 255 || typeof mediaType !== 'string' || mediaType.length > 200)
       return Promise.reject(Error('Notion 附件解析输入无效或过大。'));
     if (queue.length >= 16 || queuedBytes + bytes.length > 64 * 1024 * 1024) return Promise.reject(Error('Notion 附件解析繁忙，请稍后重试。'));
     return new Promise((resolve, reject) => {
-      const item = { bytes, filename, mediaType, done: false }, abort = () => item.finish(signal.reason);
+      const item = { bytes, filename, mediaType, allowEmptyPdf: allowEmptyPdf === true, done: false }, abort = () => item.finish(signal.reason);
       item.finish = (error, value) => {
         if (item.done) return; item.done = true; clearTimeout(item.timer); signal?.removeEventListener('abort', abort);
         if (!item.started) { const index = queue.indexOf(item); if (index >= 0) { queue.splice(index, 1); queuedBytes -= item.bytes.length; } }

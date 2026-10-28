@@ -28,13 +28,14 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
   });
   service.mediaTranscripts = mediaTranscripts;
   app.on('will-quit', () => mediaTranscripts.job?.controller.abort());
+  app.on('will-quit', () => mediaTranscripts.ocr.preparation?.controller.abort());
   const collection = setupCollection({ root, speech: speech.provider, platform, openSettings: () => open(), createWindow: options => {
     constructingSettings = true;
     try { const auxiliary = new BrowserWindow(options); settingsContents.add(auxiliary.webContents); return auxiliary; }
     finally { constructingSettings = false; }
   } });
   const isTaskBusy = isBusy;
-  isBusy = () => isTaskBusy() || collection.service.active > 0 || mediaTranscripts.pending > 0 || speech.preparing || speech.provider.status().busy || speech.provider.leases > 0;
+  isBusy = () => isTaskBusy() || collection.service.active > 0 || mediaTranscripts.pending > 0 || mediaTranscripts.ocr.pending > 0 || mediaTranscripts.ocr.preparing || speech.preparing || speech.provider.status().busy || speech.provider.leases > 0;
   app.on('will-quit', () => speech.close());
   const login = new LoginService({ root, platform, isBusy, onRestart: () => setTimeout(() => app.quit(), 300), getTargetLoginStatus: async () => {
     await app.whenReady();

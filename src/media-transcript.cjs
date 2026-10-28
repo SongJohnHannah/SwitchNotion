@@ -3,18 +3,19 @@ const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { documentType } = require('./document-content.cjs');
 const { parseAttachment } = require('./document-parser.cjs');
+const { NativeOcr, ocrType } = require('./native-ocr.cjs');
 const { CollectionBinaries } = require('./collection/binaries.cjs');
 const { CollectionMedia } = require('./collection/media.cjs');
 const media = { '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.wav': 'audio/wav', '.flac': 'audio/flac', '.ogg': 'audio/ogg', '.opus': 'audio/ogg', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska', '.webm': 'video/webm' };
 function attachmentType(filename, type) {
   const mime = typeof filename === 'string' && media[path.extname(filename).toLowerCase()];
-  if (!mime) return documentType(filename, type);
+  if (!mime) return ocrType(filename, type) || documentType(filename, type);
   if (!filename || filename.length > 255 || !filename.isWellFormed() || /[\\/\x00-\x1f\x7f]/.test(filename) || type && ![mime, 'application/octet-stream', 'audio/x-wav', 'audio/mp3', 'audio/x-m4a', 'audio/x-flac', 'audio/webm'].includes(type.toLowerCase())) throw Error('Notion 附件媒体文件名或类型无效。');
   return { format: 'media-transcript', mediaType: mime };
 }
 class MediaTranscript {
-  constructor({ root, speech, binaries = new CollectionBinaries({ root }), backend, chooseOpen, chooseSave, isBusy = () => false }) {
-    Object.assign(this, { root, speech, binaries, chooseOpen, chooseSave, isBusy }); this.backend = backend || new CollectionMedia({ root, speech, binaries }); this.queue = Promise.resolve(); this.active = 0; this.pending = 0; this.queuedBytes = 0; this.job = null;
+  constructor({ root, speech, binaries = new CollectionBinaries({ root }), backend, chooseOpen, chooseSave, isBusy = () => false, ocr = new NativeOcr({ root }) }) {
+    Object.assign(this, { root, speech, binaries, chooseOpen, chooseSave, isBusy, ocr }); this.backend = backend || new CollectionMedia({ root, speech, binaries }); this.queue = Promise.resolve(); this.active = 0; this.pending = 0; this.queuedBytes = 0; this.job = null;
   }
   status() { if (!this.job) return { status: 'idle' }; const { controller, ...job } = this.job; return structuredClone(job); }
   async request(action, input = {}) {
@@ -65,7 +66,7 @@ class MediaTranscript {
   }
   parse(bytes, filename, mediaType, options = {}) {
     const type = attachmentType(filename, mediaType);
-    if (type.format !== 'media-transcript') return parseAttachment(bytes, filename, mediaType, options);
+    if (type.format !== 'media-transcript') return this.ocr.parse(bytes, filename, type.mediaType, options);
     if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > 16 * 1024 * 1024 || this.pending >= 8 || this.queuedBytes + bytes.length > 64 * 1024 * 1024) return Promise.reject(Error('Notion 附件媒体文件过大或等待转写的任务过多，请分段或稍后重试。'));
     this.pending++; this.queuedBytes += bytes.length;
     const execute = async () => {

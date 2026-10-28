@@ -2,7 +2,9 @@
 
 **追加能力（2026-10-28）：** 侧栏/浮动本地附件可接入 `media-transcript.cjs`，对 MP3/M4A/AAC/WAV/FLAC/OGG/OPUS、MP4/MOV/MKV/WebM 音轨离线生成原话逐字稿；聊天上传保留 16 MB 单文件和 24 MB 合计限制。配置页“离线语音”另有大文件选择、媒体组件准备、进度、停止与 TXT 保存，单文件不超过 2 GB/四小时，原文件只读，工作副本在私有资料目录处理。复用既有语音/媒体组件，不修改 Mac 音频平台实现，不分析视频画面。新生成的合成 WAV/MP4 已通过真实本机 CPU 转写，均包含代码 927，未调用外部模型。
 
-`page-files.cjs` 另提供当前工作区已授权附件块的 `read_notion_file`：通过既有 API 取地址，下载不带 Notion Cookie/密钥，限制公网解析/跳转/大小，重新核对块版本后解析。`generated-files.cjs` 提供结构化数据生成 TXT/MD/CSV/JSON/XLSX/PPTX/PDF，下载绑定工作区和散列，不运行宏/公式。XLSX/PPTX 已用独立读取器核对；PDF 打印、原生下载及 Mac 控件尚需实机确认。OCR/mediaOCR 接入仍待确定。以下为前一批文档附件的详细边界与证据。
+`page-files.cjs` 另提供当前工作区已授权附件块的 `read_notion_file`：通过既有 API 取地址，下载不带 Notion Cookie/密钥，限制公网解析/跳转/大小，重新核对块版本后解析。`generated-files.cjs` 提供结构化数据生成 TXT/MD/CSV/JSON/XLSX/PPTX/PDF，下载绑定工作区和散列，不运行宏/公式。XLSX/PPTX 已用独立读取器核对；PDF 打印、原生下载及 Mac 控件尚需实机确认。
+
+本机 [OCR 接口](NATIVE-OCR-INTERFACE.md) 已按用户指定接入 mediaocr `0017d511`，包含其新提交的 Mac 原生后端。配置页可准备固定版本及独立运行环境；PDF 无文字层的页可补 OCR，图片明确要求读字时使用 OCR，Flash 普通画面理解保留。页面图片也可通过附件工具识别。Windows mediaocr 对中文合成图片和扫描 PDF 的原文识别已通过；Mac 接线及14份原生资源清单已核对，仍需本项目内实机验收。未准备时的系统 OCR 回退继续保留。以下为前一批文档附件的详细边界与证据。
 
 2026-10-28。范围仅限 Notion 客户端 AI 聊天。本任务保留已正常工作的 Mac 运行、登录、签名、图片和音频流程；采集模块由另一任务验收。
 
