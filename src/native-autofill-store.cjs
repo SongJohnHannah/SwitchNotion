@@ -3,12 +3,13 @@ const { uuid } = require('./native-context.cjs');
 const { normalizeViewSnapshot, resolveViewInfo } = require('./native-autofill-view.cjs');
 const { dateProperty } = require('./native-autofill-date.cjs');
 const { workflowSources, verifySources } = require('./native-autofill-sources.cjs');
+const { loadApiProperties, planApi, submitApi, verifyApi } = require('./native-autofill-api.cjs');
 const fail = message => { throw Error('Notion Autofill ' + message); };
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 const hash = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 const plain = value => Array.isArray(value) ? value.map(span => typeof span?.[0] === 'string' ? span[0] : '').join('') : '';
-const types = new Set(['text', 'title', 'select', 'multi_select', 'status', 'email', 'url', 'phone_number', 'number', 'checkbox', 'date']);
+const types = new Set(['text', 'title', 'select', 'multi_select', 'status', 'email', 'url', 'phone_number', 'number', 'checkbox', 'date', 'relation']);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 function emptyProperty(value, field) {
   if (field?.type === 'checkbox' && Array.isArray(value)) return plain(value) !== 'Yes';
@@ -43,11 +44,16 @@ function semanticBlock(value, properties = value.properties) {
   return { id: value.id, type: value.type, parent_id: value.parent_id, parent_table: value.parent_table,
     space_id: value.space_id, alive: value.alive, properties, content: value.content || [] };
 }
-function sourceHash(snapshot, row, properties) {
+function sourceBaseHash(snapshot, row, properties) {
   const data = [snapshot.info.spaceId, snapshot.info.collectionId, snapshot.info.workflowId, snapshot.collection.schema,
-    snapshot.workflow.data, row.records.map(value => semanticBlock(value, value.id === row.pageId && properties ? properties : value.properties))];
+    snapshot.workflow.data, row.records.map(value => semanticBlock(value, value.id === row.pageId && row.api ? {} : value.id === row.pageId && properties ? properties : value.properties))];
   if (snapshot.info.type === 'viewFill') data.push(snapshot.info.viewSnapshot);
+  if (row.api) data.push(snapshot.apiSchemaRevision);
   return hash(data);
+}
+function sourceHash(snapshot, row, properties) {
+  const context = sourceBaseHash(snapshot, row, properties);
+  return row.api ? hash([context, row.api.stateHash]) : context;
 }
 function nativeEntry(value) {
   for (let depth = 0; depth < 4 && object(value); depth++) {
@@ -91,9 +97,16 @@ class NativeAutofillStore {
     const fields = info.propertyIds.map(id => {
       const field = collection.schema[id];
       if (!field || typeof field.name !== 'string' || !types.has(field.type) || field.derived_property_record_metadata) fail('目标字段类型尚未支持或不允许填充。');
+      let relation;
+      if (field.type === 'relation') {
+        const pointer = field.collection_pointer, target = uuid(pointer?.id || field.collection_id);
+        if (workflow.data.isLite === true || field.connectedRelation || field.synced_permissions === 'read_only' || !target || pointer && (pointer.table !== 'collection' || uuid(pointer.spaceId) !== this.spaceId) ||
+            field.collection_id && uuid(field.collection_id) !== target || field.limit != null && (!Number.isSafeInteger(field.limit) || field.limit < 0)) fail('关系字段范围、限制或模式尚未支持。');
+        relation = { target_collection_id: target, limit: Math.min(field.limit || 25, 25) };
+      }
       const options = ['select', 'multi_select', 'status'].includes(field.type) ? field.options : undefined;
       if (options && (!Array.isArray(options) || options.some(option => typeof option.value !== 'string' || option.value.includes(',')))) fail('分类字段选项格式无效。');
-      return { id, name: field.name, type: field.type, ...(options ? { options: options.map(option => option.value) } : {}),
+      return { id, name: field.name, type: field.type, ...(options ? { options: options.map(option => option.value) } : {}), ...relation,
         ...(field.ai_inference || field.select_ai_inference ? { configuration: structuredClone(field.ai_inference || field.select_ai_inference) } : {}) };
     });
     const instructionSpans = workflow.data.instructions || [];
@@ -134,6 +147,7 @@ class NativeAutofillStore {
       rows.push(row);
     }
     const snapshot = { info: structuredClone(info), collection, workflow, fields, instructions, rows, ...(sourcePolicy ? { sourcePolicy } : {}) };
+    await loadApiProperties(this, snapshot, signal);
     if (JSON.stringify(snapshot).length > 4000000) fail('本批记录资料过长，请减少所选记录。');
     for (const row of rows) row.sourceHash = sourceHash(snapshot, row);
     return snapshot;
@@ -150,6 +164,10 @@ class NativeAutofillStore {
       const value = output[field.id];
       if (snapshot.sourcePolicy && object(value) && value.$skip === true && Object.keys(value).length === 1) continue;
       if (value === null) { properties[field.id] = []; continue; }
+      if (field.type === 'relation') {
+        if (!Array.isArray(value) || value.length > field.limit || value.some(id => !uuid(id)) || new Set(value.map(uuid)).size !== value.length) fail('关系字段必须是已核对目标记录的 UUID 数组，且不能超过字段限制。');
+        properties[field.id] = value.flatMap((id, index) => [...(index ? [[',']] : []), ['‣', [['p', uuid(id), this.spaceId]]]]); continue;
+      }
       if (field.type === 'date') { properties[field.id] = dateProperty(value); continue; }
       if (field.type === 'number') {
         if (typeof value !== 'number' || !Number.isFinite(value)) fail('数字字段必须返回有限 JSON 数字，未写入。');
@@ -174,7 +192,8 @@ class NativeAutofillStore {
       rowId: row.pageId, propertyIds, info: { ...snapshot.info, propertyIds, rowIds: [row.pageId] },
       ...(statusPropertyIds ? { statusPropertyIds: [...statusPropertyIds], statusBefore: pendingState(row, statusPropertyIds) } : {}),
       sourceHash: row.sourceHash, before: Object.fromEntries(propertyIds.map(id => [id, row.properties[id] || []])), properties,
-      afterHash: sourceHash(snapshot, row, { ...row.properties, ...properties }) };
+      afterHash: sourceHash(snapshot, row, { ...row.properties, ...properties }),
+      ...(row.api ? { api: planApi(snapshot, row, output, propertyIds, sourceBaseHash(snapshot, row)) } : {}) };
   }
   async submit(snapshot, plan, signal, onSubmit = () => {}) {
     signal?.throwIfAborted();
@@ -190,6 +209,7 @@ class NativeAutofillStore {
     const fresh = await this.load({ ...plan.info, propertyIds: statusIds }, signal);
     if (fresh.rows[0].sourceHash !== plan.sourceHash) fail('记录、字段结构或指令在生成期间发生变化，未提交旧结果。');
     if (plan.statusBefore && hash(pendingState(fresh.rows[0], statusIds)) !== hash(plan.statusBefore)) fail('目标字段任务已变化，未覆盖新的填充任务。');
+    if (plan.api) { await submitApi(this, plan, fresh, signal, onSubmit); return; }
     const pointer = { table: 'block', id: plan.rowId, spaceId: this.spaceId };
     const operations = [
       { pointer, command: 'update', path: ['properties'], args: plan.properties },
@@ -202,7 +222,19 @@ class NativeAutofillStore {
     await this.native.api('saveTransactionsFanout', payload, { signal, spaceId: this.spaceId });
   }
   async verify(plan, signal) {
-    const values = await this.read('block', [plan.rowId], signal), row = values.get(plan.rowId);
+    const values = await this.read('block', [plan.rowId], signal); let row = values.get(plan.rowId);
+    if (plan.api) {
+      if (row.parent_table !== 'collection' || uuid(row.parent_id) !== plan.api.collectionId) fail('关系字段核验时记录归属已变化。');
+      const actual = await verifyApi(this, plan, signal), ids = plan.statusPropertyIds || plan.propertyIds;
+      if (actual.ok) {
+        // Only presentation metadata remains after the API has independently
+        // confirmed all business values. Never re-send a relation mutation.
+        const snapshot = { info: { collectionId: plan.api.collectionId, propertyIds: ids }, rows: [{ pageId: plan.rowId,
+          records: [{ id: plan.rowId, format: { agent_workflow_status: plan.statusBefore || {} } }] }] };
+        if (!await this.clearPending(snapshot, plan.rowId, signal, blocks => { row = blocks[plan.rowId].value.value; })) fail('已核验字段，但本批等待状态尚未清理。');
+      }
+      return { ...actual, recordMap: { __version__: 3, block: { [plan.rowId]: { spaceId: this.spaceId, value: { role: this.roles.get('block:' + plan.rowId), value: row } } } } };
+    }
     const equal = expected => plan.propertyIds.every(id => hash(row.properties?.[id] || []) === hash(expected[id] || []));
     const cleared = (plan.statusPropertyIds || plan.propertyIds).every(id => row.format?.agent_workflow_status?.[id] == null);
     return { ok: equal(plan.properties) && cleared, unchanged: equal(plan.before), recordMap: { __version__: 3,

@@ -29,6 +29,29 @@ function canonical(value) { return Array.isArray(value) ? value.map(canonical) :
 const revision = value => createHash('sha256').update(stable(value)).digest('hex');
 const urlFor = id => `https://www.notion.so/${id.replaceAll('-', '')}`;
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
+function simpleValuesEqual(type, actual, expected) {
+  if (type === 'date') {
+    const normalized = value => {
+      if (!value) return null;
+      const zone = value.time_zone || null;
+      const stamp = text => {
+        if (!text || !text.includes('T')) return text || null;
+        if (/(?:Z|[+-]\d{2}:\d{2})$/.test(text)) {
+          if (!Number.isFinite(Date.parse(text))) return text;
+          if (!zone) return new Date(text).toISOString();
+          const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3, hourCycle: 'h23' }).formatToParts(new Date(text)).map(part => [part.type, part.value]));
+          return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}`;
+        }
+        const match = text.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/);
+        return match ? match[1] + ':' + (match[2] || '00') + '.' + (match[3] || '').padEnd(3, '0') : text;
+      };
+      return { start: stamp(value.start), end: stamp(value.end), time_zone: zone };
+    };
+    return stable(normalized(actual)) === stable(normalized(expected));
+  }
+  if (['relation', 'people', 'multi_select'].includes(type) && Array.isArray(actual) && Array.isArray(expected)) return stable([...actual].sort()) === stable([...expected].sort());
+  return stable(actual) === stable(expected);
+}
 function text(value, label, max = 20000, allowEmpty = false) { if (typeof value !== 'string' || value.length > max || (!allowEmpty && !value.trim())) throw Error(`Notion ${label} 必须是${allowEmpty ? '' : '非空'}文字（最多 ${max} 字符）。`); return value; }
 function nameOf(value) { text(value, '字段名称', 200); if (['__proto__', 'constructor', 'prototype'].includes(value)) throw Error('Notion 字段名称无效。'); return value; }
 function uuid(value) { if (typeof value !== 'string' || !/^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(value)) throw Error('Notion 返回了无效资源 ID。'); return value.toLowerCase(); }
@@ -133,15 +156,7 @@ function createSession({ request, authorize, mutate, signal }) {
   };
   const propertiesMatch = (actual, expected) => Object.entries(expected).every(([name, value]) => {
     const found = actual[name] || Object.values(actual).find(field => field.id === name);
-    if (found && typeOf(value) === 'date') {
-      const normalized = property => {
-        const date = simpleValue(property);
-        const instant = text => text && /T/.test(text) && /(?:Z|[+-]\d{2}:\d{2})$/.test(text) && Number.isFinite(Date.parse(text)) ? new Date(text).toISOString() : text;
-        return date && { ...date, start: instant(date.start), end: instant(date.end) };
-      };
-      return stable(normalized(found)) === stable(normalized(value));
-    }
-    return !!found && stable(simpleValue(found)) === stable(simpleValue(value));
+    return !!found && simpleValuesEqual(typeOf(value), simpleValue(found), simpleValue(value));
   });
   const execute = async (name, args = {}) => {
     signal?.throwIfAborted(); validateArgs(name, args);
@@ -288,4 +303,4 @@ function createSession({ request, authorize, mutate, signal }) {
   return { execute };
 }
 
-module.exports = { definitions, writeTools, createSession };
+module.exports = { definitions, writeTools, createSession, simpleValuesEqual };
