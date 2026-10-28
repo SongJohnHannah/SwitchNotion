@@ -95,19 +95,25 @@ async function showMemory(container, key, saved) {
   connections.addEventListener('toggle', () => { if (connections.open && connections.childNodes.length === 1) void showMcp(connections, key); });
   const agents = element('details'); agents.append(element('summary', '', '后台 Agent 与通知')); container.append(agents);
   agents.addEventListener('toggle', () => { if (agents.open && agents.childNodes.length === 1) void showBackground(agents, key); });
-  const chats = element('details'); chats.append(element('summary', '', '对话导出与导入')); container.append(chats);
+  const chats = element('details'); chats.append(element('summary', '', '对话共享、导出与导入')); container.append(chats);
   chats.addEventListener('toggle', () => { if (chats.open && chats.childNodes.length === 1) void showChatTransfer(chats, key); });
 }
 async function showChatTransfer(container, key) {
   while (container.childNodes.length > 1) container.lastChild.remove();
   const r = await api.transferList({ key }); if (!r.ok) { container.append(element('p', 'inline-result error', r.error)); return; }
-  container.append(element('p', 'field-help', '用于你自己的 Windows、Mac 之间同步文字对话；只允许同一账号、同一工作区。原始附件需要重新上传。'));
+  container.append(element('p', 'field-help', 'JSON 导入导出用于你自己的 Windows、Mac 之间同步文字对话；只允许同一账号、同一工作区。原始附件需要重新上传。'));
   const select = element('select'); select.setAttribute('aria-label', '选择要导出的对话');
   r.result.threads.forEach(item => { const option = element('option', '', item.title + (item.running ? '（生成中）' : '')); option.value = item.id; option.disabled = item.running; select.append(option); }); container.append(select);
   for (const [label, method] of [['导出所选对话', 'exportChat'], ['导入文字对话', 'importChat']]) {
     const button = element('button', 'button secondary', label); button.type = 'button'; button.disabled = method === 'exportChat' && !r.result.threads.some(item => !item.running);
     button.addEventListener('click', () => operation(container, async () => { const response = await api[method]({ key, ...(method === 'exportChat' ? { id: select.value } : {}) }); toast(response.ok ? response.result.message : response.error); if (response.ok) await showChatTransfer(container, key); })); container.append(button);
   }
+  const share = element('div', 'memory-entry');
+  share.append(element('p', 'field-help', '共享只读 HTML，可直接在 Windows、Mac 浏览器打开。不会包含原始附件或配置密钥。未设密码时，持有文件的人可以查看；发出后无法远程撤回。'));
+  const passwordLabel = element('label', '', '查看密码（可选，8–128 个字符）'), password = element('input', 'memory-editor'); password.type = 'password'; password.maxLength = 128; password.autocomplete = 'new-password'; password.setAttribute('aria-label', '共享对话查看密码'); passwordLabel.append(password); share.append(passwordLabel);
+  const includeSources = element('input'); includeSources.type = 'checkbox'; const sourcesLabel = element('label', 'check-label'); sourcesLabel.append(includeSources, document.createTextNode('包含当时的引用资料（可能含页面正文）')); share.append(sourcesLabel);
+  const shareButton = element('button', 'button secondary', '共享所选对话为只读 HTML'); shareButton.type = 'button'; shareButton.dataset.unavailable = String(!r.result.threads.some(item => !item.running)); shareButton.disabled = shareButton.dataset.unavailable === 'true';
+  shareButton.addEventListener('click', () => operation(container, async () => { const response = await api.shareChat({ key, id: select.value, password: password.value, includeSources: includeSources.checked }); password.value = ''; toast(response.ok ? response.result.message : response.error); })); share.append(shareButton); container.append(share);
 }
 async function showBackground(container, key) {
   while (container.childNodes.length > 1) container.lastChild.remove();
@@ -145,20 +151,33 @@ async function showMcp(container, key) {
   const form = item => {
     const body = element('div', 'memory-entry'), field = (label, value = '', type = 'text') => { const node = element('input'); node.type = type; node.value = value; node.placeholder = label; node.setAttribute('aria-label', label); body.append(node); return node; };
     const name = field('服务名称', item?.name), transport = element('select'); transport.setAttribute('aria-label', 'MCP 传输类型');
-    for (const [value, label] of [['http', 'Streamable HTTP'], ['stdio', '本机 stdio']]) { const option = element('option', '', label); option.value = value; transport.append(option); } transport.value = item?.transport || 'http'; body.append(transport);
+    for (const [value, label] of [['http', 'Streamable HTTP'], ['sse', '旧版 HTTP + SSE'], ['stdio', '本机 stdio']]) { const option = element('option', '', label); option.value = value; transport.append(option); } transport.value = item?.transport || 'http'; body.append(transport);
     const url = field('服务 URL，例如 https://example.com/mcp', item?.url), token = field(item?.keyConfigured ? '已保存服务密钥，留空保留' : '服务 Bearer Token（可选）', '', 'password');
-    const forget = field(''); forget.type = 'checkbox'; const forgetLabel = element('label', 'check-label'); forgetLabel.append(forget, document.createTextNode('清除已保存服务密钥')); body.append(forgetLabel);
+    const forget = field(''); forget.type = 'checkbox'; const forgetLabel = element('label', 'check-label'); forgetLabel.append(forget, document.createTextNode('清除服务凭据（含 OAuth 登录）')); body.append(forgetLabel);
     const command = field('本机命令或可执行文件路径', item?.command), args = field('参数 JSON 数组，例如 ["/路径/server.js"]', JSON.stringify(item?.args || []));
     const enabled = field(''); enabled.type = 'checkbox'; enabled.checked = item?.enabled !== false; const enabledLabel = element('label', 'check-label'); enabledLabel.append(enabled, document.createTextNode('启用此服务')); body.append(enabledLabel);
-    const visibility = () => { url.hidden = token.hidden = forgetLabel.hidden = transport.value !== 'http'; command.hidden = args.hidden = transport.value !== 'stdio'; }; transport.addEventListener('change', visibility); visibility();
+    const visibility = () => { url.hidden = token.hidden = forgetLabel.hidden = transport.value === 'stdio'; command.hidden = args.hidden = transport.value !== 'stdio'; }; transport.addEventListener('change', visibility); visibility();
     const action = (label, callback) => { const node = element('button', 'button secondary', label); node.type = 'button'; node.addEventListener('click', () => operation(body, callback)); body.append(node); };
     action(item ? '保存服务' : '添加服务', async () => {
       let argumentsList; try { argumentsList = JSON.parse(args.value); } catch { toast('命令参数需要填写 JSON 字符串数组。'); return; }
-      const response = await api.mcpSave({ key, ...(item ? { id: item.id } : {}), name: name.value, transport: transport.value, enabled: enabled.checked, ...(transport.value === 'http' ? { url: url.value, token: token.value, forgetToken: forget.checked } : { command: command.value, args: argumentsList }) });
+      const response = await api.mcpSave({ key, ...(item ? { id: item.id } : {}), name: name.value, transport: transport.value, enabled: enabled.checked, ...(transport.value !== 'stdio' ? { url: url.value, token: token.value, forgetToken: forget.checked } : { command: command.value, args: argumentsList }) });
       if (response.ok) { await showMcp(container, key); toast('MCP 已保存。'); } else toast(response.error);
     });
     if (item) {
       action('检测连接', async () => { const response = await api.mcpTest({ key, id: item.id }); toast(response.ok ? response.result.message : response.error); });
+      if (item.transport !== 'stdio') {
+        body.append(element('p', 'field-help', item.oauthConnected ? item.oauthExpired ? 'OAuth 登录已过期，请重新登录。' : '已通过 OAuth 登录此服务。' : '需要网页登录的服务可使用 OAuth；在系统浏览器确认服务和所需权限。'));
+        const clientId = field('OAuth Client ID（支持自动注册时留空）'), scope = field('OAuth 权限范围（通常留空）');
+        const cancel = element('button', 'button secondary', '取消登录'); cancel.type = 'button'; cancel.disabled = true; cancel.dataset.unavailable = 'true';
+        cancel.addEventListener('click', async () => { cancel.disabled = true; await api.mcpCancel({ key, id: item.id }); });
+        action(item.oauthConnected ? '重新 OAuth 登录' : 'OAuth 登录', async () => {
+          cancel.disabled = false; toast('正在打开系统浏览器，请完成授权；可在这里取消。');
+          try { const response = await api.mcpLogin({ key, id: item.id, clientId: clientId.value, scope: scope.value }); if (response.ok) { await showMcp(container, key); toast('OAuth 登录已保存。'); } else toast(response.error); }
+          finally { cancel.disabled = true; }
+        });
+        body.append(cancel);
+        if (item.oauthConnected) action('退出 OAuth 登录', async () => { const response = await api.mcpLogout({ key, id: item.id }); if (response.ok) { await showMcp(container, key); toast('已移除本机登录凭据。'); } else toast(response.error); });
+      }
       action('移除服务', async () => { const response = await api.mcpRemove({ key, id: item.id }); if (response.ok) await showMcp(container, key); else toast(response.error); });
     }
     return body;

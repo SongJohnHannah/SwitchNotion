@@ -1,4 +1,30 @@
-# 原生日历 AI 事件读取与空闲时间
+# 客户端日历 AI：读取、空闲时间与写入
+
+## 已连接日历查询与本次范围
+
+用户已明确允许主动查询时，把同一 Notion 账号所选已连接日历的必要事件标题、时间、地点和描述交给已配置的 DeepSeek。`list_calendar_sources` 现在列出可读日历并标注 `writable`；`search_connected_calendar_events` 逐个读取实际选择的日历，包含只读日历。创建/修改仅允许 `writable=true`，仍执行原生确认。Home 可见日历原工具保持其明确范围，不把 Home 结果称作所有已连接日历。
+
+新增读取复用已审核 Calendar `/v2/getEvents` 的 queries 数组，按当前账号/日历核对回包，展开窗口内的重复事件，完整读取分页后再返回。最多 31 天、20 页和 10,000 条扫描记录；展示最多 200 条/60,000 字符，省略时明确 `complete=false`。分页循环、归属变化、未知时间与缺失后续页明确失败；不读其他人员账号或附件。6 组合成检查包括只读日历分页、重复记录、越权写入拒绝、错误归属/游标、空日历/范围及实际 Agent MCP 审批状态；原有十组建库/日历写入检查继续通过，真实业务服务读写为 0。
+
+对照[官方日历 AI 说明](https://www.notion.com/help/notion-calendar-ai-connector)，公开能力重点是事件检索和问答。先前把整个 Calendar 应用的重复日程编辑、删除、同事排期和自动会议链接都列为本项缺口，范围过宽；本次不继续扩展这些功能。用户已明确要求的非重复事件创建与修改继续保留。原生专用卡片的显示不逐个复刻，实际操作使用已接入的原生确认和聊天状态。新增代码均为跨平台 Node 接口，Mac 见 N24。
+
+## 本轮写入交付（2026-10-28）
+
+普通侧栏与原生日历 AI 对话增加 `connect_calendar`、`list_calendar_sources`、`get_calendar_event`、`create_calendar_event`、`update_calendar_event`、`verify_calendar_write`。可创建非重复事件、修改标题/日期/时区/地点/描述/参与人，支持全天日期和参与人邀请。读取 Home 可见事件及空闲时间仍沿用下面的原生只读接口；写入列表来自 Calendar 中当前账号有写权限的日历，两者范围明确区分。
+
+已审核当前 [Calendar 主程序](https://calendar.notion.so/assets/App-CVACXgZ_.js) 和 [Calendar API 生产者](https://calendar.notion.so/assets/useStores-DykF7fQ4.js)，版本 `cron-web@1.142.0+1793128938`。固定使用 `https://calendar-api.notion.so/v2/`：`getUser`、`getCalendars`、`getEvent`、`createEvent` 的单个 mutation，以及 `updateEvents` 的 mutations 数组；不猜测 Notion `/api/v3` 写日历接口。
+
+`calendar-connection.cjs` 在首次需要时打开官方 Notion Calendar 登录窗口，用户选择**使用同一 Notion 账号登录**，并在 Calendar 中连接自己的日历。无需新增 Calendar API Key。只监听本项目专用 Calendar 会话发往固定 Calendar API 的授权头，通过 `getNotionSessionUsers` 与 `getUser.notionUserId` 双重核对当前 Notion 用户后使用；不读取其他浏览器/应用登录资料。令牌只留内存，不交给模型或写入日志；官方窗口自身登录资料保存在本应用隔离 profile 中。登录/连接必须由用户亲自完成。
+
+`calendar-writes.cjs` 只接受实际列出的可写日历。修改前读取事件版本；提交前显示原生确认，完整列出日历、标题、起止时间、时区、地点、描述及参与人，并说明邀请/通知影响。拒绝后本轮不继续弹出写入。确认后重新检查日历权限和事件版本；原事件与明确修改字段合并，依照原生生产者仅移除两个派生时间戳，保留未修改字段和 etag。写后通过 `getEvent` 读回预期字段，只有一致才返回 `verified=true`。
+
+写前将 submitted 状态原子保存至当前资料根目录的 `calendar-writes.local.json`。同轮重复参数、重启和回包丢失不会重复创建；未知结果阻止该账号继续写入，`verify_calendar_write` 只读核对。服务端可能改写新事件 ID，因此先保存回包的实际 ID 再核验。账号/工作区归属检查贯穿日志和模型工具，Calendar 登录令牌、邮箱账号配置不作为工具输出。
+
+Windows 合成检查通过：实际请求结构、确认取消零写入、创建/改期读回、保留无关字段、服务端改写 ID、丢包恢复、未知结果/重启防重、并发版本变化、全天/DST、同一 Notion 用户登录绑定，以及 Agent 写入回执和只读 Agent 隔离。真实 Calendar 邀请/写入为 **0**，真实登录和服务端回包仍待用户实测；没有发送业务资料。仅使用跨平台 Node/Electron API，Mac 不增加系统脚本，原有平台代码保持不变。
+
+当前边界：未支持重复日程整组/单次修改、删除事件、同事空闲和自动会议链接。现有原生 Calendar 卡片的全部专用展示没有逐个复刻；本次写入通过客户端 AI 工具及原生确认完成。Mac 操作步骤见使用说明 N14/N15；Mac 实测由用户完成，不阻塞提交。
+
+## 先前读取实现与验证记录
 
 2026-10-28。第 15 项按原生客户端接线：保留 Notion 原来的日历连接设置，在 `createCalendarAgentThread` 和普通 AI 对话中提供 `list_calendar_events` 和 `find_calendar_availability`。不创建独立日历产品，也不把日历 API Key 放进模型。
 

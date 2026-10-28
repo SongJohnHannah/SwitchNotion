@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const { randomUUID } = require('node:crypto');
 const { uuid } = require('./native-context.cjs');
+const { renderChatShare } = require('./chat-share.cjs');
 const fail = text => { throw Error('Notion 对话与记忆同步' + text); };
 const plain = value => typeof value === 'string' ? value : Array.isArray(value) ? value.map(part => typeof part?.[0] === 'string' ? part[0] : '').join('') : '';
 class AiTransfer {
@@ -9,15 +10,18 @@ class AiTransfer {
     const scope = this.memory.state(key);
     const rows = [...this.agent.threads.values()].map(item => ({ thread: item.thread, running: item.session?.status === 'running' }));
     for (const thread of this.native?.inline.threads.values() || []) rows.push({ thread, running: this.native.threads.get(thread.id)?.turns.at(-1)?.status === 'running' });
-    return rows.filter(item => uuid(item.thread.created_by_id) === scope.userId && uuid(item.thread.space_id) === scope.spaceId && item.thread.alive !== false).map(item => ({ id: item.thread.id, title: String(item.thread.data.title || 'AI 对话'), running: item.running }));
+    return rows.filter(item => uuid(item.thread.created_by_id) === scope.userId && uuid(item.thread.space_id) === scope.spaceId && item.thread.alive !== false).map(item => ({ id: item.thread.id, title: plain(item.thread.data.title).slice(0, 200) || 'AI 对话', running: item.running }));
   }
-  snapshot(key, id) {
+  snapshot(key, id, { includeSources = true } = {}) {
     if (!this.threads(key).some(item => item.id === id)) fail('对话不属于当前工作区。');
-    const scope = this.memory.state(key), item = this.agent.threads.get(id), inline = this.native?.inline.record(id);
+    const scope = this.memory.state(key), owns = thread => thread && uuid(thread.created_by_id) === scope.userId && uuid(thread.space_id) === scope.spaceId && thread.alive !== false;
+    const candidate = this.agent.threads.get(id), nativeCandidate = this.native?.inline.record(id);
+    const item = owns(candidate?.thread) ? candidate : undefined, inline = owns(nativeCandidate) ? nativeCandidate : undefined;
+    if (!item && !inline) fail('对话不属于当前工作区。');
     if (this.threads(key).find(item => item.id === id).running) fail('请等待当前对话停止生成后再导出。');
     const messages = [];
     if (item) for (const entity of [...item.entities.values()].sort((a, b) => a.sequence - b.sequence)) {
-      if (entity.kind === 'user_message') { const visible = plain(entity.text), text = entity.user_prompt_text ?? visible, sourceData = entity.notion_switch_imported_source || (text !== visible ? visible : ''); messages.push({ role: 'user', text, ...(sourceData ? { sourceData } : {}) }); }
+      if (entity.kind === 'user_message') { const visible = plain(entity.text), text = entity.user_prompt_text ?? visible, sourceData = entity.notion_switch_imported_source || (text !== visible ? visible : ''); messages.push({ role: 'user', text, ...(includeSources && sourceData ? { sourceData } : {}) }); }
       else if (entity.kind === 'assistant_message') messages.push({ role: 'assistant', text: (entity.content || []).filter(part => part.type === 'text').map(part => part.text).join('') });
     }
     else {
@@ -27,15 +31,15 @@ class AiTransfer {
         if (step?.type === 'user-specified-context') sourceData += JSON.stringify(step.value);
         else if (['attachment', 'computer-file'].includes(step?.type)) sourceData += '\n附件：' + String(step.fileName || '未命名附件') + '（原件需重新上传）';
         else if (step?.type === 'user-injected') sourceData += '\n历史自动上下文资料：' + plain(step.actualMessage ?? step.value);
-        else if (step?.type === 'user') { messages.push({ role: 'user', text: plain(step.actualMessage ?? step.value), ...(sourceData ? { sourceData } : {}) }); sourceData = ''; }
+        else if (step?.type === 'user') { messages.push({ role: 'user', text: plain(step.actualMessage ?? step.value), ...(includeSources && sourceData ? { sourceData } : {}) }); sourceData = ''; }
         else if (step?.type === 'agent-inference') {
-          if (sourceData) { const user = messages.findLast(message => message.role === 'user'); if (user) user.sourceData = (user.sourceData || '') + sourceData; sourceData = ''; }
+          if (includeSources && sourceData) { const user = messages.findLast(message => message.role === 'user'); if (user) user.sourceData = (user.sourceData || '') + sourceData; sourceData = ''; }
           messages.push({ role: 'assistant', text: typeof step.value === 'string' ? step.value : (step.value || []).filter(part => part.type === 'text').map(part => part.content).join('') });
         }
       }
     }
     if (!messages.length || messages.length > 500 || JSON.stringify(messages).length > 500000) fail('对话为空或超过导出上限。');
-    return { version: 1, kind: 'notion-switch-chat', workspaceId: scope.spaceId, userId: scope.userId, title: item?.thread.data.title || inline?.data.title || 'AI 对话', messages, notice: '包含文字和当时的引用资料；不导出配置中的 API Key、Cookie、原始附件、工具授权或待执行操作。聊天中自行输入的内容会随文字导出。' };
+    return { version: 1, kind: 'notion-switch-chat', workspaceId: scope.spaceId, userId: scope.userId, title: plain(item?.thread.data.title || inline?.data.title).slice(0, 200) || 'AI 对话', messages, notice: '包含文字和所选引用资料；不导出配置中的 API Key、Cookie、原始附件、工具授权或待执行操作。聊天中自行输入的内容会随文字导出。' };
   }
   importChat(key, data) {
     const scope = this.memory.state(key);
@@ -64,9 +68,20 @@ class AiTransfer {
   }
   async request(action, input) {
     try {
-      if (!['transfer.list', 'transfer.chat.export', 'transfer.chat.import', 'transfer.memory.export', 'transfer.memory.import'].includes(action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['key', 'id'].includes(key))) fail('操作参数无效。');
+      if (!['transfer.list', 'transfer.chat.export', 'transfer.chat.share', 'transfer.chat.import', 'transfer.memory.export', 'transfer.memory.import'].includes(action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !(action === 'transfer.chat.share' ? ['key', 'id', 'password', 'includeSources'] : ['key', 'id']).includes(key))) fail('操作参数无效。');
       const scope = this.memory.state(input.key);
       if (action === 'transfer.list') return { ok: true, result: { threads: this.threads(input.key) } };
+      if (action === 'transfer.chat.share') {
+        if (input.includeSources !== undefined && typeof input.includeSources !== 'boolean') fail('引用资料开关无效。');
+        const data = this.snapshot(input.key, input.id, { includeSources: input.includeSources === true }), document = await renderChatShare(data, { password: input.password, includeSources: input.includeSources });
+        const file = await this.chooseSave('Notion-AI-只读对话.html', { format: 'html' });
+        if (!file) return { ok: true, result: { message: '已取消共享导出。' } };
+        if (!this.threads(input.key).some(thread => thread.id === input.id)) fail('对话已移除，未写入共享文件。');
+        if (!/\.html$/i.test(file)) fail('请选择普通的 .html 文件。');
+        try { const target = fs.lstatSync(file); if (!target.isFile() || target.isSymbolicLink()) fail('请选择普通的 .html 文件。'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        fs.writeFileSync(file, document, { mode: 0o600, flush: true });
+        return { ok: true, result: { message: input.password ? '已保存加密的只读 HTML；查看者需要文件和密码。密码未保存在配置中。' : '已保存只读 HTML；拥有文件的人都能查看。文件发出后无法远程撤回。' } };
+      }
       if (action.endsWith('.export')) {
         const data = action === 'transfer.chat.export' ? this.snapshot(input.key, input.id) : { version: 1, kind: 'notion-switch-memory', userId: scope.userId, workspaceId: scope.spaceId, memory: { enabled: scope.enabled, instructions: scope.instructions, memories: scope.memories, skills: scope.skills } };
         const file = await this.chooseSave(action === 'transfer.chat.export' ? 'Notion-AI-对话.json' : 'Notion-AI-工作区记忆.json');
@@ -75,13 +90,13 @@ class AiTransfer {
         return { ok: true, result: { message: '已导出。可在另一台电脑的同一账号、同一工作区导入。' } };
       }
       const file = await this.chooseOpen(); if (!file) return { ok: true, result: { message: '已取消导入。' } };
-      const stat = fs.lstatSync(file); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) fail('文件无效或超过 1 MB。');
+      const stat = fs.lstatSync(file); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) fail('文件无效或超过 2 MB。');
       let data; try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { fail('文件不是有效 JSON。'); }
       if (data.version !== 1 || uuid(data.userId) !== scope.userId || uuid(data.workspaceId) !== scope.spaceId || data.kind !== (action === 'transfer.chat.import' ? 'notion-switch-chat' : 'notion-switch-memory')) fail('文件不属于当前账号、工作区或选定类型。');
       if (action === 'transfer.memory.import' && !await this.approve({ title: '导入工作区记忆', message: '替换这个工作区现有的记忆、指令和技能？', detail: '导入文件只用于当前工作区。建议先导出现有记忆留作备份。' })) return { ok: true, result: { message: '已取消导入。' } };
       if (action === 'transfer.chat.import') return { ok: true, result: this.importChat(input.key, data) };
       this.importMemory(input.key, data); return { ok: true, result: { message: '已导入当前工作区记忆，下一轮 AI 对话生效。' } };
-    } catch (error) { return { ok: false, error: /^Notion (?:对话与记忆同步|工作区记忆)/.test(error.message) ? error.message : '导入或导出未完成，请检查文件。' }; }
+    } catch (error) { return { ok: false, error: /^Notion (?:对话与记忆同步|对话共享|工作区记忆)/.test(error.message) ? error.message : '导入、导出或共享未完成，请检查文件。' }; }
   }
 }
 module.exports = { AiTransfer };

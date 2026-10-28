@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { uuid } = require('./native-context.cjs');
-const { createPublicFetcher, publicUrl } = require('./web-fetch.cjs');
+const { createPublicFetcher, publicUrl, normalizeDomains, domainAllowed } = require('./web-fetch.cjs');
 const { snippet } = require('./web-content.cjs');
 const { parseDocument } = require('./web-parser.cjs');
 const fail = message => { throw Error('Notion 联网来源' + message); };
@@ -82,14 +82,14 @@ class WebSources {
     let fingerprint; try { fingerprint = hash(this.settings()); } catch {}
     for (const session of this.sessions) if (session.fingerprint !== fingerprint) session.abort();
   }
-  async open({ userId, spaceId, content, priorSources, input, signal, purpose } = {}) {
+  async open({ userId, spaceId, content, priorSources, input, signal, purpose, allowedDomains } = {}) {
     const research = purpose === 'research' && (input?.type === 'researcher' || input?.type === 'workflow' && input.isAgentResearchRequest === true);
     const config = this.settings(); if (!config.enabled || input?.useWebSearch === false || !research && input?.type && input.type !== 'personal_agent') return null;
     if (!uuid(userId) || !uuid(spaceId)) fail('缺少当前账号或工作区，未启用网络工具。');
     const controller = new AbortController(), active = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-    const allowed = explicitUrls(content), pages = new Map(), loading = new Map(); let searches = 0, fetches = 0, totalCharacters = 0, closed = false;
+    const domains = normalizeDomains(allowedDomains), allowed = new Set([...explicitUrls(content)].filter(value => domainAllowed(value, domains))), pages = new Map(), loading = new Map(); let searches = 0, fetches = 0, totalCharacters = 0, closed = false;
     if (priorSources && uuid(priorSources.userId) === uuid(userId) && uuid(priorSources.spaceId) === uuid(spaceId) && Array.isArray(priorSources.urls) && priorSources.urls.length <= 32)
-      for (const value of priorSources.urls) { try { allowed.add(publicUrl(value).href); } catch {} }
+      for (const value of priorSources.urls) { try { if (domainAllowed(value, domains)) allowed.add(publicUrl(value).href); } catch {} }
     const now = () => new Date(this.now()).toISOString(), fingerprint = hash(config);
     const assertActive = () => { active.throwIfAborted(); if (closed || hash(this.settings()) !== fingerprint) fail('设置已改变，请重新提问。'); };
     const session = { fingerprint, signal: active,
@@ -116,7 +116,7 @@ class WebSources {
             const results = [], seen = new Set(); let skipped = 0;
             for (const row of data.web?.results || []) {
               if (results.length >= 10) break;
-              let url; try { url = publicUrl(row.url).href; } catch { skipped++; continue; }
+              let url; try { url = publicUrl(row.url).href; if (!domainAllowed(url, domains)) { skipped++; continue; } } catch { skipped++; continue; }
               if (seen.has(url)) continue; seen.add(url); allowed.add(url);
               results.push({ url, title: snippet(row.title, 500), snippet: snippet(row.description), published_hint: typeof row.age === 'string' ? row.age.slice(0, 100) : undefined, body_available: false, snippet_only: true });
             }
@@ -125,6 +125,7 @@ class WebSources {
               has_more: more && offset < 9, next_offset: more && offset < 9 ? offset + 1 : null, incomplete: skipped > 0 || more && offset === 9, body_available: false };
           }
           const url = publicUrl(args.url).href;
+          if (!domainAllowed(url, domains)) fail('网址超出工作流允许的域名。');
           if (!allowed.has(url)) fail('此网址没有由用户明确提供，也不属于本轮搜索或同范围历史来源；请先搜索或让用户提供链接。');
           let page = pages.get(url);
           if (!page) {
@@ -132,7 +133,8 @@ class WebSources {
               if ((args.offset || 0) !== 0) fail('请先从网页开头读取，再按返回的 next_offset 继续。');
               if (++fetches > 12) fail('本轮网页读取已达到 12 个来源上限。');
               loading.set(url, (async () => {
-                const response = await this.fetchPublic(url, { signal: active }); assertActive();
+                const response = await this.fetchPublic(url, { signal: active, ...(domains ? { allowedDomains: domains } : {}) }); assertActive();
+                if (!domainAllowed(response.url, domains) || response.redirects?.some(value => !domainAllowed(value, domains))) fail('网页跳转超出工作流允许的域名。');
                 let value = pages.get(response.url);
                 if (!value) {
                   const body = await parseDocument(response.body, String(response.headers['content-type'] || ''), { signal: active }); assertActive();

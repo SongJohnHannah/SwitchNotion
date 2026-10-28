@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { app, session, BrowserWindow, dialog, Notification } = require('electron');
+const { app, session, BrowserWindow, dialog, Notification, ipcMain, Menu, MenuItem, shell } = require('electron');
 const platform = require('./platform/index.cjs').createDesktopPlatform();
 const { initializeRuntime, disableBuiltinUpdates } = require('./runtime-bootstrap.cjs');
 const root = initializeRuntime({ app, dialog, platform });
@@ -16,10 +16,13 @@ const { ProviderRouter } = require('./provider.cjs');
 const { WebSources } = require('./web-sources.cjs');
 const { WorkspaceMemory } = require('./workspace-memory.cjs');
 const { AiExtensions } = require('./ai-extensions.cjs');
+const { McpOAuth } = require('./mcp-oauth.cjs');
 const { AiBrowser } = require('./ai-browser.cjs');
 const { attachmentType } = require('./media-transcript.cjs');
 const { resolveNativeInstructions } = require('./native-instructions.cjs');
 const { openNativeCalendar } = require('./native-calendar.cjs');
+const { CalendarConnection } = require('./calendar-connection.cjs');
+const { CalendarWrites } = require('./calendar-writes.cjs');
 const { BackgroundAgents } = require('./background-agents.cjs');
 const { AiTransfer } = require('./ai-transfer.cjs');
 const { PageFiles } = require('./page-files.cjs');
@@ -38,6 +41,7 @@ const { NativeAutofillStore } = require('./native-autofill-store.cjs');
 const { createAutofillJobs, isLocalId: isLocalAutofillId } = require('./native-autofill-jobs.cjs');
 const { createNativeBuildService } = require('./native-build-service.cjs');
 const { NativeBuildStore } = require('./native-database-build-store.cjs');
+const { setupDatabaseWizard, wizardEntryScript } = require('./database-wizard-window.cjs');
 const { NativeSpeech, loopbackCsp } = require('./speech/native.cjs');
 const { isMeetingSummary, offlineSummaryResponse } = require('./speech/summary.cjs');
 const { MeetingNativeBridge } = require('./meeting-summary-native.cjs');
@@ -67,7 +71,12 @@ const approveAi = async ({ title, message, detail, signal }) => {
   signal?.throwIfAborted(); return result.response === 1;
 };
 const aiBrowser = new AiBrowser({ createWindow: createAuxiliaryWindow, ready: () => app.whenReady(), approve: approveAi });
-const extensions = new AiExtensions({ root, memory, browser: aiBrowser, approve: approveAi });
+const calendarConnection = new CalendarConnection({ createWindow: createAuxiliaryWindow, ready: () => app.whenReady() });
+const calendarWrites = new CalendarWrites({ root, connection: calendarConnection, approve: approveAi });
+app.on('will-quit', () => calendarConnection.close());
+const mcpOAuth = new McpOAuth({ openBrowser: async url => { await app.whenReady(); await shell.openExternal(url); } });
+app.on('will-quit', () => mcpOAuth.close());
+const extensions = new AiExtensions({ root, memory, browser: aiBrowser, oauth: mcpOAuth, approve: approveAi });
 const generatedFiles = new GeneratedFiles({ root, printPdf: async (title, text, signal) => {
   signal?.throwIfAborted(); await app.whenReady();
   const window = createAuxiliaryWindow({ show: false, webPreferences: { partition: 'notion-switch-pdf-' + crypto.randomUUID(), nodeIntegration: false, contextIsolation: true, sandbox: true, javascript: false } });
@@ -81,25 +90,26 @@ extensions.generatedFiles = generatedFiles;
 app.on('will-quit', () => aiBrowser.close());
 const meetingBridge = new MeetingNativeBridge();
 const autofill = createAutofillJobs({ root, provider, log,
-  storeFactory: (info, meta) => new NativeAutofillStore({ native: meetingBridge.forRequest(meta.request, meta.session, info.spaceId) }) });
+  storeFactory: (info, meta) => new NativeAutofillStore({ native: meetingBridge.forRequest(meta.request, meta.session, info.spaceId), workspace, webSources }) });
 const meetingSummaries = new MeetingSummaryService({ root, provider, log,
   storeFactory: (info, meta) => meta.store || meetingBridge.forRequest(meta.request, meta.session, info.spaceId) });
 const workspace = new NotionRouter({ root, log });
 extensions.pageFiles = new PageFiles({ workspace, parseContent: (...args) => mediaTranscripts.parse(...args) });
 const mock = new NativeMock({ log, stateFile: path.join(root, 'conversations.local.json'), provider, workspace, webSources, memory, extensions, workspaceResearch: true,
-  inlineReferences: createInlineReferenceReader({ workspace, resolveFile: ({ blockId, spaceId, signal, session, maxBytes }) =>
-    extensions.pageFiles.open({ spaceId, signal, session, maxBytes }).execute('read_notion_file', { block_id: blockId }) }) });
+  inlineReferences: createInlineReferenceReader({ workspace, resolveFile: ({ blockId, pageId, propertyId, fileIndex, spaceId, signal, session, maxBytes }) =>
+    extensions.pageFiles.open({ spaceId, signal, session, maxBytes }).execute('read_notion_file', pageId ? { page_id: pageId, property_id: propertyId, file_index: fileIndex } : { block_id: blockId }) }) });
 const backgroundAgents = new BackgroundAgents({ root, memory, provider, workspace, extensions, notify: ({ title, status }) => {
   if (Notification.isSupported()) new Notification({ title: 'Notion AI · ' + title, body: status === 'completed' ? '后台任务已完成，请在工作区配置中查看结果。' : '后台任务需要处理，请在工作区配置中查看。' }).show();
 } });
 app.whenReady().then(() => backgroundAgents.start());
 app.on('will-quit', () => backgroundAgents.close());
 const transfer = new AiTransfer({ memory, agent: mock.agent, native: mock, approve: approveAi,
-  chooseSave: async defaultPath => { const result = await dialog.showSaveDialog({ title: '导出当前工作区 AI 数据', defaultPath, filters: [{ name: 'Notion AI 数据', extensions: ['json'] }] }); return result.canceled ? null : result.filePath; },
+  chooseSave: async (defaultPath, { format = 'json' } = {}) => { const result = await dialog.showSaveDialog({ title: format === 'html' ? '保存只读共享对话' : '导出当前工作区 AI 数据', defaultPath, filters: [{ name: format === 'html' ? '只读对话 HTML' : 'Notion AI 数据', extensions: [format] }] }); return result.canceled ? null : result.filePath; },
   chooseOpen: async () => { const result = await dialog.showOpenDialog({ title: '导入同一工作区 AI 数据', properties: ['openFile'], filters: [{ name: 'Notion AI 数据', extensions: ['json'] }] }); return result.canceled ? null : result.filePaths[0]; }
 });
 const databaseBuild = createNativeBuildService({ root, provider, log,
   storeFactory: (info, meta) => new NativeBuildStore({ native: meetingBridge.forRequest(meta.request, meta.session, info.spaceId) }) });
+const databaseWizard = setupDatabaseWizard({ root, provider, bridge: meetingBridge, createWindow: createAuxiliaryWindow, app, ipcMain, Menu, MenuItem, shell });
 const aiRecords = { record: (id, table, scope) => databaseBuild.record(id, table, scope) || autofill.record(id, table, scope) || mock.record(id, table, scope),
   hasRecord: (id, table) => mock.hasRecord(id, table) || !!databaseBuild.findRecord?.(id, table) || !!databaseBuild.previewOwner?.(id, table) ||
     ['workflow_automation_run', 'task_output'].includes(table) && !!autofill.find?.(id),
@@ -111,7 +121,7 @@ const localInlineDocuments = new LocalInlineDocuments({ root, store: localDocume
   mock.reserveInlineUpload(scope);
 } });
 let recordings;
-const settings = setupSettings({ root, platform, webSources, memory, extensions, backgroundAgents, transfer, isBusy: () => backgroundAgents.active > 0 || mock.status().activeTurns > 0 || databaseBuild.active > 0 || autofill.active > 0 || meetingSummaries.active > 0 || recordings?.active > 0, getCompatibility: () => compatibility });
+const settings = setupSettings({ root, platform, webSources, memory, extensions, backgroundAgents, transfer, isBusy: () => calendarWrites.active > 0 || databaseWizard.service.active > 0 || backgroundAgents.active > 0 || mock.status().activeTurns > 0 || databaseBuild.active > 0 || autofill.active > 0 || meetingSummaries.active > 0 || recordings?.active > 0, getCompatibility: () => compatibility });
 const mediaTranscripts = settings.mediaTranscripts;
 recordings = new MeetingRecordings({ root, provider: settings.speech.provider, enabled: () => settings.speech.autoAttachAudio,
   storeFactory: (info, signal) => meetingBridge.forRecording(info, signal), log });
@@ -124,6 +134,13 @@ const endpoints = new Set(['runInferenceTranscript', 'createAgentThread', 'creat
 function isNotion(hostname) { return hostname === 'notion.so' || hostname.endsWith('.notion.so') || hostname === 'notion.com' || hostname.endsWith('.notion.com'); }
 async function route(request, passthrough, ses) {
   const url = new URL(request.url), endpoint = url.pathname.match(/\/api\/v\d+\/([^/]+)/)?.[1] || url.pathname.split('/').pop();
+  if (isNotion(url.hostname) && url.pathname === '/_notion-switch/database-wizard/open' && typeof databaseWizard !== 'undefined') {
+    if (request.method !== 'POST' || request.headers.get('x-notion-switch-ui') !== 'database-wizard-v1') return json({ ok: false }, 403);
+    try {
+      const text = await request.text(); if (text.length > 4096) throw Error('请求过长。');
+      const input = JSON.parse(text); await databaseWizard.open({ session: ses, pageId: uuid(input?.pageId) }); return json({ ok: true });
+    } catch (error) { return json({ ok: false, message: /^Notion /.test(error.message || '') ? error.message : '建库向导打开失败，请从应用菜单重试。' }, 400); }
+  }
   if (isNotion(url.hostname) && typeof localInlineDocuments !== 'undefined') {
     if (url.pathname.startsWith(inlineDocumentUploadPrefix)) return localInlineDocuments.post(request);
     if (url.pathname.startsWith(inlineDocumentReferencePrefix)) return localInlineDocuments.download(request);
@@ -294,9 +311,11 @@ async function route(request, passthrough, ses) {
     try {
       const input = await request.clone().json(), spaceId = uuid(input?.blockPointer?.spaceId);
       const store = meetingBridge.forRequest(request, ses, spaceId);
-      const files = openNativePageFiles({ store, parseContent: (...args) => mediaTranscripts.parse(...args), signal: request.signal });
+      const budget = { files: 0, bytes: 0 };
+      const files = openNativePageFiles({ store, parseContent: (...args) => mediaTranscripts.parse(...args), signal: request.signal, budget });
+      const properties = typeof extensions !== 'undefined' ? extensions.pageFiles?.open({ spaceId: store.spaceId, signal: request.signal, budget }) : null;
       return await generateAiBlock({ input, store, provider, workspace: typeof workspace !== 'undefined' ? workspace : undefined,
-        readFile: ({ blockId }) => files.execute('read_notion_file', { block_id: blockId }), signal: request.signal });
+        readFile: ({ blockId }) => files.execute('read_notion_file', { block_id: blockId }), ...(properties ? { readFileProperties: ({ pageId, propertyIds }) => properties.readProperties(pageId, propertyIds) } : {}), signal: request.signal });
     } catch (error) {
       const message = /^(?:AI block|当前页面|此 AI block|暂只支持|请填写|无法读取)/.test(error.message || '') ? error.message : 'AI block 生成未完成，请检查当前页面和模型配置。';
       log({ type: 'local-ai-block-failed', reason: 'generation_failed' });
@@ -328,6 +347,7 @@ async function route(request, passthrough, ses) {
         readLocalDocument: scope => localDocuments.read({ ...scope, userId: request.headers.get('x-notion-active-user-header') }) }) : images;
       return await mock.handle(endpoint, input, request.signal, { userId: request.headers.get('x-notion-active-user-header'), spaceId: request.headers.get('x-notion-space-id') ?? undefined, images: attachments,
         ...(typeof openNativeCalendar === 'function' ? { openCalendar: ({ userId, spaceId, signal }) => openNativeCalendar({ store: meetingBridge.forRequest(request, ses, spaceId), userId, spaceId, signal }) } : {}),
+        ...(typeof calendarWrites !== 'undefined' ? { openCalendarWrites: scope => calendarWrites.open(scope) } : {}),
         resolveInstructions: ({ input, content, signal, userId }) => resolveNativeInstructions({ store: meetingBridge.forRequest(request, ses, input.spaceId), userId, spaceId: input.spaceId, content, signal }),
         ...(typeof localInlineDocuments !== 'undefined' ? { inlineAttachment: scope => localInlineDocuments.prepare({ ...scope,
           userId: request.headers.get('x-notion-active-user-header'), origin: url.origin }) } : {}) });
@@ -385,6 +405,9 @@ app.on('web-contents-created', (_event, contents) => {
   } catch {}
   contents.on('did-fail-load', (_event, code, description, url, mainFrame) => { if (mainFrame) log({ type: 'load-failed', code, description, origin: (() => { try { return new URL(url).origin; } catch { return 'unknown'; } })() }); });
   contents.on('did-finish-load', () => { let origin; try { origin = new URL(contents.getURL()).origin; } catch { origin = 'unknown'; } log({ type: 'page-loaded', origin }); });
+  contents.on('did-finish-load', () => {
+    try { const url = new URL(contents.getURL()); if (url.protocol === 'https:' && isNotion(url.hostname)) void contents.executeJavaScript(wizardEntryScript).catch(() => {}); } catch {}
+  });
 });
 app.on('browser-window-created', (_event, win) => {
   if (isSettings(win.webContents)) return;
@@ -400,7 +423,7 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/status' && req.method === 'GET') {
     const state = mock.status(), speechBusy = settings.speech.provider.leases > 0 || settings.speech.provider.status().busy || nativeSpeech.connections.size > 0;
     res.end(JSON.stringify({ pid: process.pid, appReady: app.isReady(), windows: BrowserWindow.getAllWindows().map(win => ({ visible: win.isVisible(), minimized: win.isMinimized(), destroyed: win.isDestroyed() })), ...state,
-      activeTurns: state.activeTurns + databaseBuild.active + autofill.active + (speechBusy ? 1 : 0) + meetingSummaries.active + recordings.active + backgroundAgents.active + (settings.mediaTranscripts?.pending || 0) + (settings.mediaTranscripts?.ocr?.pending || 0) + (settings.mediaTranscripts?.ocr?.preparing ? 1 : 0) + (settings.collection?.service.active || 0), databaseBuild: { active: databaseBuild.active, available: databaseBuild.available }, autofill: { active: autofill.active, available: autofill.available }, collection: settings.collection?.status(), meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
+      activeTurns: state.activeTurns + databaseBuild.active + databaseWizard.service.active + calendarWrites.active + autofill.active + (speechBusy ? 1 : 0) + meetingSummaries.active + recordings.active + backgroundAgents.active + (settings.mediaTranscripts?.pending || 0) + (settings.mediaTranscripts?.ocr?.pending || 0) + (settings.mediaTranscripts?.ocr?.preparing ? 1 : 0) + (settings.collection?.service.active || 0), databaseWizard: { active: databaseWizard.service.active, available: databaseWizard.service.available }, calendarWrites: { active: calendarWrites.active, available: calendarWrites.available }, databaseBuild: { active: databaseBuild.active, available: databaseBuild.available }, autofill: { active: autofill.active, available: autofill.available }, collection: settings.collection?.status(), meetingSummaries: meetingSummaries.status(), meetingContexts: meetingBridge.contexts.length,
       compatibility, notion: workspace.status(), settings: settings.status(), speech: { ...settings.speech.status(), native: nativeSpeech.status() } }));
   }
   else if (req.url === '/collection/open' && req.method === 'POST') {

@@ -30,6 +30,7 @@ class AiBrowser {
   }
   open(scope) {
     const key = scopeKey(scope), { signal } = scope;
+    const approve = scope.approve || ((request) => this.approve(request));
     let lastSnapshot;
     const definitions = [
       definition('browser_open', '在当前工作区的独立浏览器打开公开网址，可由用户在可见窗口中登录。', { url: { type: 'string' } }, ['url']),
@@ -69,7 +70,7 @@ class AiBrowser {
           const url = window.webContents.getURL(); publicUrl(url);
           const guard = `const state=globalThis.__notionSwitchControls; if(!state||state.url!==location.href||state.token!==${JSON.stringify(lastSnapshot || null)}) throw Error('请重新读取页面'); const node=state.nodes[${args.element_id - 1}]; if(!node?.isConnected||node.disabled||state.signature(node)!==state.signatures[${args.element_id - 1}]) throw Error('元素已改变，请重新读取'); if(node.matches('input[type="password"],input[type="file"],input[type="hidden"]')) throw Error('此输入需要用户亲自操作');`;
           const control = await evaluate(window.webContents, `(() => { ${guard} return { label: (node.getAttribute('aria-label')||node.getAttribute('placeholder')||node.innerText||node.tagName).slice(0,500), href: node.href || '' }; })()`);
-          if (!await this.approve({ title: '批准浏览器操作', message: name === 'browser_fill' ? '填写网页输入框' : '点击网页元素', detail: url + '\n操作目标：' + control.label + (control.href ? '\n链接：' + control.href : '') + (name === 'browser_fill' ? '\n填写内容：' + args.text : ''), signal })) throw Error('Notion 浏览器用户取消了操作。');
+          if (!await approve({ title: '批准浏览器操作', message: name === 'browser_fill' ? '填写网页输入框' : '点击网页元素', detail: url + '\n操作目标：' + control.label + (control.href ? '\n链接：' + control.href : '') + (name === 'browser_fill' ? '\n填写内容：' + args.text : ''), signal }, name)) throw Error('Notion 浏览器用户取消了操作。');
           signal?.throwIfAborted(); scope.check?.(); if (window.webContents.getURL() !== url) throw Error('Notion 浏览器页面已改变，请重新读取。');
           await evaluate(window.webContents, `(() => { ${guard} ${name === 'browser_fill' ? `if(!node.matches('input,textarea')||node.matches('input[type="submit"],input[type="button"],input[type="checkbox"],input[type="radio"]')) throw Error('不是普通文字输入'); const setter=Object.getOwnPropertyDescriptor(node.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set;setter.call(node,${JSON.stringify(args.text)});node.dispatchEvent(new Event('input',{bubbles:true}));node.dispatchEvent(new Event('change',{bubbles:true}));` : 'node.click();'} delete globalThis.__notionSwitchControls; return true; })()`);
           return { action_dispatched: true, url, instruction: '操作已发出；必须再次 browser_read 核对页面结果，不能直接宣称表单提交成功。' };

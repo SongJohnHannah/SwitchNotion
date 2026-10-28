@@ -67,6 +67,22 @@ class NotionRouter {
     this.lastWorkspaces = workspaces.map(w => ({ workspace_id: w.id, name: w.name, read_only: w.cfg.readOnly }));
     return { workspaces, unavailable };
   }
+  async listPeople({ spaceId, startCursor, signal } = {}) {
+    spaceId = uuid(spaceId);
+    if (!spaceId || startCursor !== undefined && (typeof startCursor !== 'string' || !startCursor || startCursor.length > 2000 || /[\x00-\x1f]/.test(startCursor))) throw Error('Notion 人员查询工作区或游标无效。');
+    const { workspaces } = await this.prepare(signal, spaceId), workspace = workspaces.find(value => value.id === spaceId);
+    if (!workspace) throw Error('Notion 当前工作区尚未配置有效连接，不能查询人员。');
+    const query = new URLSearchParams({ page_size: '100', ...(startCursor ? { start_cursor: startCursor } : {}) });
+    const data = await workspace.client.request(workspace.cfg, 'GET', 'users?' + query, null, signal);
+    if (data.object !== 'list' || !Array.isArray(data.results) || data.results.length > 100 || typeof data.has_more !== 'boolean' ||
+        data.has_more && (typeof data.next_cursor !== 'string' || !data.next_cursor || data.next_cursor.length > 2000)) throw Error('Notion 工作区人员列表格式无效。');
+    const results = [];
+    for (const user of data.results) {
+      if (!uuid(user.id) || !['person', 'bot'].includes(user.type)) throw Error('Notion 人员标识或类型无效。');
+      if (user.type === 'person') results.push({ id: uuid(user.id), name: typeof user.name === 'string' ? user.name.replace(/[\x00-\x1f]/g, ' ').slice(0, 200) : '' });
+    }
+    return { workspace_id: spaceId, results, has_more: data.has_more, next_cursor: data.has_more ? data.next_cursor : null };
+  }
   status() {
     try {
       const profiles = this.profiles(), states = profiles.map(p => this.client(p).status());
