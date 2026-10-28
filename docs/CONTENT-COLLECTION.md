@@ -31,6 +31,13 @@
 - 登录由 Chrome／Edge／Brave 自己保存。media-kit 的旧明文 Cookie 磁盘缓存已停用；下载器必需的临时 Cookie 文件位于本任务内，退出或取消后清理。Cookie 不进入 Notion、DeepSeek、界面返回或分发包。
 - 分发代码包含固定 media-kit 运行快照，无需安装 OpenClaw 或启动 MCP 服务。缺失的 yt-dlp、FFmpeg 可通过“检测并准备”下载，校验固定 SHA-256；不打包本机模型、登录或下载记录。
 
+## 微信视频号分享
+
+- 支持粘贴 `https://weixin.qq.com/sph/…` 这类公开分享链接。解析正文、作者、封面和可访问的视频地址，交给现有下载、逐字稿、画面识别与模板提取链路，按原始内容在前、AI 输出在后的顺序保存。
+- 核心采用 JavaScript，参考 wx_channel 的分享解析流程，不执行它的 EXE，也不安装抓取驱动、系统代理或根证书。解析通过收集浏览器中的腾讯网页会话完成；裸 HTTP 请求可能被拒绝。需要登录时，在“平台账号 → 微信视频号”打开腾讯网页会话后重试，不粘贴 Cookie。
+- 下载保留原始签名参数；过期后重新解析地址并核对内容标识。核对源视频时长、音轨并尝试解码，不能解码或未取得视频地址时明确失败，不把二维码页或预览文案当成成功下载。当前分享路线不包含微信内置主页、评论、直播或所有私有内容的抓取，也不承诺拿到上传前原片画质。
+- 解析核心不依赖 Windows；完整桌面、浏览器和本地转写仍受各平台现有适配范围约束。Mac/Linux 的实际视频号链路需分别验收。
+
 ## 开发验证
 
 ```text
@@ -39,6 +46,7 @@ node scripts/check-collection-ui.mjs
 node scripts/check-collection-electron.mjs
 node scripts/check-collection-media.mjs --speech --vision
 node scripts/check-collection-media.mjs --speech --extraction
+node scripts/check-collection-live.mjs .notion-switch/collection/input.local.json
 npm test
 npm run package:windows
 npm run package:mac

@@ -4,12 +4,14 @@ const { pathToFileURL } = require('node:url');
 const { extractPage } = require('./extract-page.cjs');
 const { assertPublicUrl, effectiveProxy } = require('./network.cjs');
 const { normalizeDocument } = require('./model.cjs');
+const { WechatChannel, isWechatShare } = require('./wechat-channel.cjs');
 const sites = Object.freeze([
   { id: 'douyin', name: '抖音', url: 'https://www.douyin.com/' },
   { id: 'bilibili', name: 'B站', url: 'https://www.bilibili.com/' },
   { id: 'tiktok', name: 'TikTok', url: 'https://www.tiktok.com/' },
   { id: 'youtube', name: 'YouTube', url: 'https://www.youtube.com/' },
-  { id: 'x', name: 'X', url: 'https://x.com/' }
+  { id: 'x', name: 'X', url: 'https://x.com/' },
+  { id: 'wechat', name: '微信视频号', url: 'https://yuanbao.tencent.com/' }
 ]);
 let kitModule;
 const mediaKit = () => kitModule ||= import(pathToFileURL(path.join(__dirname, 'media-kit/index.mjs')).href);
@@ -29,7 +31,20 @@ function cdpCommand(wsUrl, method, params = {}, { signal, timeout = 30000 } = {}
   });
 }
 class CollectionBrowser {
-  constructor({ root, getSettings, binaries }) { Object.assign(this, { root, getSettings, binaries }); this.loginTabs = new Map(); }
+  constructor({ root, getSettings, binaries }) { Object.assign(this, { root, getSettings, binaries }); this.loginTabs = new Map(); this.wechat = new WechatChannel({ requestJson: (request, options) => this.wechatJson(request, options) }); }
+  async wechatJson({ origin, entryUrl, endpoint, body }, { signal } = {}) {
+    const allowed = { 'https://yuanbao.tencent.com': '/api/weixin/get_parse_result', 'https://channels.weixin.qq.com': '/finder-preview/api/feed/get_feed_info' };
+    const entry = new URL(entryUrl);
+    if (allowed[origin] !== endpoint || entry.origin !== origin || entry.username || entry.password) throw Error('微信解析请求的来源或接口无效。');
+    const tab = await this.tab(entryUrl, signal), { m } = await this.ensure(signal);
+    try {
+      await this.waitReady(tab, signal);
+      const expression = `(async()=>{const r=await fetch(${JSON.stringify(endpoint)},{method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:${JSON.stringify(JSON.stringify(body))}});const text=await r.text();if(text.length>4194304)throw Error('Response too large');let data;try{data=JSON.parse(text)}catch{return{status:r.status}};const video=document.querySelector('video');return{status:r.status,data,media:video?{duration:Number.isFinite(video.duration)?video.duration:0,audio:video.webkitAudioDecodedByteCount>0}:null}})()`;
+      const response = await cdpCommand(tab.wsUrl, 'Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, { signal, timeout: 90000 });
+      if (response.exceptionDetails || !response.result?.value) throw Error('微信解析请求未完成，请检查收集浏览器中的登录或网络。');
+      return response.result.value;
+    } finally { await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); }
+  }
   get endpoint() { return 'http://127.0.0.1:' + this.getSettings().browserPort; }
   async backgroundTab(signal) {
     const { m } = await this.ensure(signal);
@@ -95,12 +110,13 @@ class CollectionBrowser {
     const result = [];
     for (const site of sites) { const cookies = await this.cookies(site.url, signal);
       // Presence is not proof of an authenticated, unexpired account.
-      const auth = { douyin: /sessionid|sid_guard/, bilibili: /SESSDATA/, tiktok: /sessionid|sid_guard/, youtube: /SAPISID|LOGIN_INFO|__Secure-1PSID/, x: /auth_token/ }[site.id];
+      const auth = { douyin: /sessionid|sid_guard/, bilibili: /SESSDATA/, tiktok: /sessionid|sid_guard/, youtube: /SAPISID|LOGIN_INFO|__Secure-1PSID/, x: /auth_token/, wechat: /hy_token|hy_user|session|login|uin/i }[site.id];
       result.push({ ...site, state: cookies.some(c => auth.test(c.name) && (c.session || !c.expires || c.expires > Date.now() / 1000)) ? 'saved' : 'missing', message: '访问权限以实际读取结果为准' });
     } return result;
   }
   async inspect(url, { signal, progress = () => {} } = {}) {
     await assertPublicUrl(url);
+    if (isWechatShare(url)) return this.wechat.resolve(url, { signal, progress });
     if (/\.(?:png|jpe?g|webp|gif|avif|bmp|svg|mp[34]|m4[av]|wav|ogg|flac|aac|opus|aiff?|wma|webm|mov|mkv)(?:\?|$)/i.test(url)) {
       const extension = new URL(url).pathname.split('.').pop().toLowerCase();
       return normalizeDocument({ title: decodeURIComponent(new URL(url).pathname.split('/').pop()), url,
