@@ -28,6 +28,12 @@ class CollectionMedia {
   }
   async acquire(node, directory, { signal, progress = () => {} } = {}) {
     if (!mediaKinds.has(node.kind) || !node.url) throw Error('未找到原始媒体地址。');
+    if (node.platform === 'wechat') {
+      const document = await this.browser.wechat.resolve(node.sourceUrl, { signal, progress });
+      const current = document.nodes.find(item => item.kind === 'video');
+      if (!current || node.contentId && current.contentId !== node.contentId) throw Error('微信分享对应的视频已改变，未将不同视频混入原任务。');
+      node = { ...node, url: current.url, direct: true };
+    }
     fs.mkdirSync(directory, { recursive: true }); progress('正在下载' + ({ image: '原图', audio: '音频', video: '视频' }[node.kind]) + '…');
     if (node.kind === 'image' && new URL(node.url).hostname === 'pbs.twimg.com') { const url = new URL(node.url); if (url.searchParams.get('format') === 'webp' && url.searchParams.get('name') === 'orig') { url.searchParams.set('format', 'jpg'); node = { ...node, url: url.href }; } }
     const direct = node.direct || node.kind === 'image' || /\.(?:mp[34]|m4[av]|wav|ogg|flac|aac|opus|aiff?|wma|webm|mov|mkv)(?:\?|$)/i.test(node.url);
@@ -54,6 +60,10 @@ class CollectionMedia {
     const real = fs.realpathSync(file), relative = path.relative(fs.realpathSync(directory), real);
     if (relative.startsWith('..') || path.isAbsolute(relative) || !fs.statSync(real).isFile()) throw Error('下载结果不在当前任务目录。');
     const metadata = node.kind === 'image' ? {} : await this.probe(real, signal);
+    if (node.platform === 'wechat') {
+      try { await run(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', '-xerror', ...inputArgs(real), '-t', '2', '-map', '0:v:0', '-map', '0:a?', '-f', 'null', '-'], { signal, timeout: 60000 }); }
+      catch (error) { signal?.throwIfAborted(); throw Error('微信视频尚不能正常解码，可能需要额外解密；原文件已保留，未作为完整视频上传。'); }
+    }
     if (node.expectedAudio && !metadata.audio) throw Error('原网页包含独立音轨，但下载文件缺少音轨，未将其当作完整视频。');
     if (node.duration && metadata.duration < node.duration - Math.max(2, node.duration * .02)) throw Error('下载文件短于原始媒体，可能只获取到了试看或不完整片段。');
     return { path: real, kind: node.kind, bytes: fs.statSync(real).size, ...metadata };

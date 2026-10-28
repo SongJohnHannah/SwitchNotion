@@ -59,6 +59,7 @@ function normalizeDocument(value) {
     if (Array.isArray(n.spans)) node.spans = n.spans.filter(s => s && typeof s.text === 'string').map(s => ({ text: s.text, ...(s.href && /^https?:\/\//.test(s.href) ? { href: s.href } : {}) }));
     if (n.duration > 0) node.duration = Number(n.duration);
     if (n.platform) node.platform = String(n.platform).slice(0, 40);
+    if (typeof n.contentId === 'string' && /^[a-f\d]{64}$/.test(n.contentId)) node.contentId = n.contentId;
     if (n.direct === true) node.direct = true;
     if (n.expectedAudio === true) node.expectedAudio = true;
     return node;

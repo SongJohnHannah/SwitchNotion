@@ -17,3 +17,4 @@ NotionSwitch 自写源代码采用根目录的 MIT 许可证。
 
 - 快捷收集内置 [SongJohnHannah/media-kit](https://github.com/SongJohnHannah/media-kit) 1.1.0 的独立运行代码，按上游声明的 MIT 许可使用。原始文件哈希、来源和本地适配说明位于 `src/collection/media-kit/manifest.json` 与 `NOTICE.md`。
 - yt-dlp 与 FFmpeg 在需要时从各自发布来源下载到本机，不随迁移包携带。FFmpeg 对应平台的完整许可保存在本机收集组件目录 `collection/bin/FFMPEG-LICENSE.txt`；项目 MIT 许可证不替代这些组件的原有许可。
+- 视频号分享链接解析流程参考 [nobiyou/wx_channel v5.6.9](https://github.com/nobiyou/wx_channel/tree/v5.6.9)，按 MIT 许可适配为 JavaScript。来源、边界和完整许可位于 `src/collection/wechat-NOTICE.md`；不携带其 EXE、驱动或证书安装代码。
