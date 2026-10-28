@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { sourceDate } = require('./native-autofill-date.cjs');
+const { emptyProperty, pendingState } = require('./native-autofill-store.cjs');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = message => { throw Error('Notion Autofill ' + message); };
 const plain = value => Array.isArray(value) ? value.map(span => typeof span?.[0] === 'string' ? span[0] : '').join('') : '';
@@ -62,7 +63,7 @@ class AutofillExecutor {
       if (!recovered.ok) fail('此前字段写入结果尚未确认，本次只核验、不重复提交。');
       job.status = 'verified'; this.save();
     }
-    const snapshot = await store.load(info, signal), prepared = [], cancelled = new Set(), recordMap = { __version__: 3, block: {} };
+    const snapshot = await store.load(info, signal), prepared = [], cancelled = new Set(), skipped = new Set(), recordMap = { __version__: 3, block: {} };
     notify({ stage: 'reading-complete', totalRows: snapshot.rows.length });
     const config = this.provider.config();
     if (config.mode !== 'deepseek') fail('请先在配置中启用 DeepSeek。');
@@ -71,8 +72,12 @@ class AutofillExecutor {
       const rowSignal = rowSignals.get(row.pageId), active = AbortSignal.any([...(signal ? [signal] : []), ...(rowSignal ? [rowSignal] : [])]);
       const stopRow = () => { cancelled.add(row.pageId); notify({ stage: 'cancelled', rowId: row.pageId }); };
       if (rowSignal?.aborted) { stopRow(); continue; }
-      if (info.fillMode === 'emptyTargetProperties' && info.propertyIds.some(id => plain(row.properties[id]).trim())) continue;
-      const key = hash([store.userId, info.spaceId, info.collectionId, info.workflowId, row.pageId, [...info.propertyIds].sort()]);
+      const emptyOnly = info.fillMode === 'emptyTargetProperties', propertyIds = emptyOnly ? info.propertyIds.filter(id => emptyProperty(row.properties[id], snapshot.fields.find(field => field.id === id))) : info.propertyIds;
+      if (!propertyIds.length) { skipped.add(row.pageId); notify({ stage: 'skipped', rowId: row.pageId }); continue; }
+      const target = emptyOnly ? { ...snapshot, info: { ...snapshot.info, propertyIds }, fields: snapshot.fields.filter(field => propertyIds.includes(field.id)) } : snapshot;
+      const identity = [store.userId, info.spaceId, info.collectionId, info.workflowId, row.pageId, [...propertyIds].sort()];
+      if (emptyOnly) identity.push(pendingState(row, info.propertyIds));
+      const key = hash(identity);
       let job = this.jobs.get(key);
       if (job?.status === 'verified' && row.sourceHash === job.plan.afterHash) {
         const actual = await store.verify(job.plan, signal);
@@ -82,7 +87,7 @@ class AutofillExecutor {
         notify({ stage: 'generating', rowId: row.pageId }); let output = '';
         try {
           for await (const delta of this.provider.generate({ config: { ...config, maxTokens: Math.min(config.maxTokens || 16384, 16384) },
-            messages: messages(snapshot, row), signal: active })) {
+            messages: messages(target, row), signal: active })) {
             active.throwIfAborted(); output += delta; if (output.length > 40000) fail('模型字段结果过长，未提交不完整结果。');
           }
           active.throwIfAborted();
@@ -91,7 +96,7 @@ class AutofillExecutor {
           throw error;
         }
         signal?.throwIfAborted();
-        job = { key, scope, status: 'prepared', plan: store.plan(snapshot, row, outputObject(output)), createdAt: new Date().toISOString() };
+        job = { key, scope, status: 'prepared', plan: store.plan(target, row, outputObject(output), emptyOnly ? { statusPropertyIds: info.propertyIds } : undefined), createdAt: new Date().toISOString() };
         this.jobs.set(key, job); this.save();
       }
       prepared.push({ job, reused: false });
@@ -126,7 +131,7 @@ class AutofillExecutor {
       this.log({ type: 'autofill-row-verified', fieldCount: job.plan.propertyIds.length });
       notify({ stage: 'verified', rowId: job.plan.rowId, verifiedRows, totalRows: prepared.length });
     }
-    return { verifiedRows, reusedRows, cancelledRowIds: [...cancelled], skippedRows: snapshot.rows.length - verifiedRows - cancelled.size, recordMap };
+    return { verifiedRows, reusedRows, cancelledRowIds: [...cancelled], skippedRowIds: [...skipped], skippedRows: skipped.size, recordMap };
   }
 }
 module.exports = { AutofillExecutor, messages, outputObject };

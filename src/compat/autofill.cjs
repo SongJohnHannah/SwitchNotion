@@ -2,6 +2,12 @@ const { createHash } = require('node:crypto');
 const { parse } = require('./parser.cjs');
 const assetName = '57590-72d9a46f46f85b70.js';
 const sourceHash = 'd4de61fe17ab1265d0d3a6590a4628b984b0478bdf5f4dadccadc6abe218bbba';
+const currentAssetName = '57590-3242f968a3670cd0.js';
+const currentSourceHash = '1735c0788b8c9c9359b0034a3ca1bfd6d26194eacafd8c89cda0e3fb45152113';
+const reviewed = new Map([
+  [sourceHash, { viewFunction: 'S', captureAt: 'let k=i.id,v=null==(t=a.collectionViewStore())?void 0:t.id;', pendingFunction: 'U' }],
+  [currentSourceHash, { viewFunction: 'P', captureAt: 'let v=i.id,k=null==(t=a.collectionViewStore())?void 0:t.id;', pendingFunction: 'E' }]
+]);
 const isAutofillAsset = asset => /^57590-[a-f\d]{16}\.js$/.test(asset);
 const isAutofillCandidate = (source, asset) => isAutofillAsset(asset) || /[,{]\s*414741\s*\(/.test(source);
 
@@ -63,7 +69,8 @@ function captureViewSnapshot(context) {
   } catch { return null; }
 }
 function adaptAutofill(source, asset, onAdaptation) {
-  if (!isAutofillAsset(asset) || createHash('sha256').update(source).digest('hex') !== sourceHash) throw Object.assign(Error('Unreviewed native Autofill module'), { notionSwitchKind: 'autofill' });
+  const profile = reviewed.get(createHash('sha256').update(source).digest('hex'));
+  if (!isAutofillAsset(asset) || !profile) throw Object.assign(Error('Unreviewed native Autofill module'), { notionSwitchKind: 'autofill' });
   const calls = /await ([A-Za-z_$][\w$]*)\.api\.callCellCompatibleApi\(\{eventName:"(triggerLiteAgentAutofill|triggerAgentOverCollection)"/g;
   if ([...source.matchAll(calls)].length !== 4) throw Error('Changed native Autofill entry points');
   const poll = '(' + pollNativeAutofill.toString() + ')';
@@ -72,10 +79,10 @@ function adaptAutofill(source, asset, onAdaptation) {
   if (result.split(original).length !== 2) throw Error('Changed native Autofill queue subscriber');
   const queued = 'if(l.type==="success"&&l.data?.notionSwitchAutofill?.version===1&&/^addf11ed-/i.test(l.data.notionSwitchAutofill.jobId)){await l.handleRecordMapForResponsePromise;a?.(l.data.notionSwitchAutofill.initial.value);return{success:true};}';
   result = result.replace(original, 'if("failed"===l.type)return{success:!1};' + queued + 'try{var n;let e=await (0,r(655696).cK)');
-  const begin = result.indexOf('async function S(e)'), end = result.indexOf('function _(e)', begin);
+  const begin = result.indexOf('async function ' + profile.viewFunction + '(e)'), end = result.indexOf('function _(e)', begin);
   if (begin < 0 || end < begin) throw Error('Changed native Autofill view producer');
   let view = result.slice(begin, end);
-  const captureAt = 'let k=i.id,v=null==(t=a.collectionViewStore())?void 0:t.id;';
+  const captureAt = profile.captureAt;
   const emptyAt = 'if(0===C.length)return{success:!0,firstNWorkflowAutomationRunIds:[],totalBlocks:0};';
   if (view.split(captureAt).length !== 2 || view.split(emptyAt).length !== 2 || view.split('type:"viewFill",workflowPointer:').length !== 3)
     throw Error('Changed native Autofill view scope');
@@ -86,7 +93,7 @@ function adaptAutofill(source, asset, onAdaptation) {
   // metadata writes; group progress uses the verified local run records.
   const markAt = view.indexOf('if((function(e){let{fillMode:t,resultStores:o,collectionStore:i,propertyIds:a}=e;');
   const markEnd = view.indexOf('}),A){', markAt);
-  if (markAt < 0 || markEnd < markAt || !view.slice(markAt, markEnd).endsWith('.forEach(e=>{U({blockStore:e,propertyIds:c,environment:l})'))
+  if (markAt < 0 || markEnd < markAt || !view.slice(markAt, markEnd).endsWith('.forEach(e=>{' + profile.pendingFunction + '({blockStore:e,propertyIds:c,environment:l})'))
     throw Error('Changed native Autofill view pending-cell mutation');
   view = view.slice(0, markAt) + 'if(A){' + view.slice(markEnd + '}),A){'.length);
   result = result.slice(0, begin) + view + result.slice(end);
@@ -94,4 +101,4 @@ function adaptAutofill(source, asset, onAdaptation) {
   onAdaptation?.({ moduleId: '414741', kind: 'autofill', mode: 'reviewed' });
   return result;
 }
-module.exports = { adaptAutofill, pollNativeAutofill, invokeLiteAutofill, captureViewSnapshot, isAutofillAsset, isAutofillCandidate, assetName, sourceHash };
+module.exports = { adaptAutofill, pollNativeAutofill, invokeLiteAutofill, captureViewSnapshot, isAutofillAsset, isAutofillCandidate, assetName, sourceHash, currentAssetName, currentSourceHash };

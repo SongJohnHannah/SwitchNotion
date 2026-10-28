@@ -98,12 +98,12 @@ class NativeAutofillJobs {
       try {
         const result = await this.executor.fill(info, store, controller.signal, event => {
           const row = job.rows.find(value => value.pageId === event.rowId);
-          if (row) row.status = event.stage === 'verified' ? 'success' : event.stage === 'cancelled' ? 'cancelled' : 'running';
+          if (row) row.status = event.stage === 'verified' ? 'success' : event.stage === 'cancelled' ? 'cancelled' : event.stage === 'skipped' ? 'skipped' : 'running';
           job.version++; job.updatedAt = Date.now();
         }, { rowSignals: new Map([...rowControllers].map(([id, value]) => [id, value.signal])) });
         job.recordMap = result.recordMap;
         for (const row of job.rows) if (!['success', 'cancelled'].includes(row.status)) row.status = result.cancelledRowIds.includes(row.pageId) ? 'cancelled' :
-          info.fillMode === 'emptyTargetProperties' && info.propertyIds.some(id => snapshot.rows.find(value => value.pageId === row.pageId)?.properties[id]?.length) ? 'skipped' : 'success';
+          result.skippedRowIds?.includes(row.pageId) ? 'skipped' : 'success';
       } catch (error) {
         job.error = controller.signal.aborted ? 'Notion Autofill 任务已停止；已提交的写入会保留核验记录。' : safeMessage(error);
         for (const row of job.rows) if (!['success', 'cancelled'].includes(row.status)) row.status = controller.signal.aborted ? 'cancelled' : 'failure';
@@ -111,7 +111,7 @@ class NativeAutofillJobs {
       const uncertain = [...this.executor.jobs.values()].some(value => ['submitted', 'uncertain'].includes(value.status) &&
         value.plan.userId === job.ownerId && value.plan.spaceId === job.info.spaceId && job.info.rowIds.includes(value.plan.rowId));
       for (const row of job.rows) if (!uncertain && row.status !== 'success') {
-        try { if (!await store.clearPending(snapshot, row.pageId, AbortSignal.timeout(15000))) throw Error('pending state changed'); }
+        try { if (!await store.clearPending(snapshot, row.pageId, AbortSignal.timeout(15000), blocks => { job.recordMap ||= { __version__: 3, block: {} }; Object.assign(job.recordMap.block ||= {}, blocks); })) throw Error('pending state changed'); }
         catch { row.error = 'Notion Autofill 字段任务状态未能清理，请重新加载记录核对。'; if (row.status === 'skipped') row.status = 'failure'; }
       }
       job.status = job.rows.some(row => ['failure', 'cancelled'].includes(row.status)) ? 'failure' : 'success';

@@ -9,6 +9,14 @@ const hash = value => createHash('sha256').update(JSON.stringify(canonical(value
 const plain = value => Array.isArray(value) ? value.map(span => typeof span?.[0] === 'string' ? span[0] : '').join('') : '';
 const types = new Set(['text', 'title', 'select', 'multi_select', 'status', 'email', 'url', 'phone_number', 'number', 'checkbox', 'date']);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
+function emptyProperty(value, field) {
+  if (field?.type === 'checkbox' && Array.isArray(value)) return plain(value) !== 'Yes';
+  return value == null || Array.isArray(value) && value.every(span => Array.isArray(span) && typeof span[0] === 'string' && !span[0].trim() && (span[1] == null || Array.isArray(span[1]) && !span[1].length));
+}
+function pendingState(row, ids) {
+  const state = row.records.find(value => value.id === row.pageId)?.format?.agent_workflow_status || {};
+  return Object.fromEntries([...ids].sort().map(id => [id, structuredClone(state[id] ?? null)]));
+}
 function autofillInput(input) {
   const spaceId = uuid(input?.spaceId), collectionId = uuid(input?.collectionId), workflowId = uuid(input?.workflowPointer?.id);
   if (!spaceId || !collectionId || !workflowId || input.workflowPointer.table !== 'workflow' || uuid(input.workflowPointer.spaceId) !== spaceId) fail('工作区、数据库或工作流标识无效。');
@@ -132,7 +140,7 @@ class NativeAutofillStore {
     if (info.spaceId !== this.spaceId) fail('请求不属于当前登录工作区。');
     return info.type === 'viewFill' ? resolveViewInfo(this, info, signal) : info;
   }
-  plan(snapshot, row, output) {
+  plan(snapshot, row, output, { statusPropertyIds } = {}) {
     if (!snapshot.rows.some(value => value.pageId === row.pageId) || !object(output) ||
         Object.keys(output).length !== snapshot.fields.length || snapshot.fields.some(field => !Object.hasOwn(output, field.id))) fail('模型结果字段不完整或包含未选择字段。');
     const properties = {};
@@ -159,18 +167,23 @@ class NativeAutofillStore {
     }
     return { id: randomUUID(), transactionId: randomUUID(), spaceId: this.spaceId, userId: this.userId,
       rowId: row.pageId, propertyIds: [...snapshot.info.propertyIds], info: { ...snapshot.info, rowIds: [row.pageId] },
+      ...(statusPropertyIds ? { statusPropertyIds: [...statusPropertyIds], statusBefore: pendingState(row, statusPropertyIds) } : {}),
       sourceHash: row.sourceHash, before: Object.fromEntries(snapshot.info.propertyIds.map(id => [id, row.properties[id] || []])), properties,
       afterHash: sourceHash(snapshot, row, { ...row.properties, ...properties }) };
   }
   async submit(snapshot, plan, signal, onSubmit = () => {}) {
     signal?.throwIfAborted();
     if (plan.spaceId !== this.spaceId || plan.userId !== this.userId || snapshot.info.collectionId !== plan.info.collectionId) fail('字段写回范围已变化。');
-    const fresh = await this.load(plan.info, signal);
+    const statusIds = plan.statusPropertyIds || plan.propertyIds;
+    if (!Array.isArray(statusIds) || !statusIds.length || new Set(statusIds).size !== statusIds.length || statusIds.some(id => !snapshot.info.propertyIds.includes(id)) ||
+        plan.propertyIds.some(id => !statusIds.includes(id)) || hash([...plan.propertyIds].sort()) !== hash(Object.keys(plan.properties).sort()) || hash([...plan.info.propertyIds].sort()) !== hash([...plan.propertyIds].sort())) fail('字段或任务状态超出本次选择范围。');
+    const fresh = await this.load({ ...plan.info, propertyIds: statusIds }, signal);
     if (fresh.rows[0].sourceHash !== plan.sourceHash) fail('记录、字段结构或指令在生成期间发生变化，未提交旧结果。');
+    if (plan.statusBefore && hash(pendingState(fresh.rows[0], statusIds)) !== hash(plan.statusBefore)) fail('目标字段任务已变化，未覆盖新的填充任务。');
     const pointer = { table: 'block', id: plan.rowId, spaceId: this.spaceId };
     const operations = [
       { pointer, command: 'update', path: ['properties'], args: plan.properties },
-      { pointer, command: 'update', path: ['format', 'agent_workflow_status'], args: Object.fromEntries(plan.propertyIds.map(id => [id, null])) },
+      { pointer, command: 'update', path: ['format', 'agent_workflow_status'], args: Object.fromEntries(statusIds.map(id => [id, null])) },
       { pointer, command: 'update', path: [], args: { last_edited_time: Date.now(), last_edited_by_table: 'notion_user', last_edited_by_id: this.userId } }
     ];
     const payload = { requestId: plan.id, transactions: [{ id: plan.transactionId, spaceId: this.spaceId, operations }] };
@@ -181,23 +194,25 @@ class NativeAutofillStore {
   async verify(plan, signal) {
     const values = await this.read('block', [plan.rowId], signal), row = values.get(plan.rowId);
     const equal = expected => plan.propertyIds.every(id => hash(row.properties?.[id] || []) === hash(expected[id] || []));
-    const cleared = plan.propertyIds.every(id => row.format?.agent_workflow_status?.[id] == null);
+    const cleared = (plan.statusPropertyIds || plan.propertyIds).every(id => row.format?.agent_workflow_status?.[id] == null);
     return { ok: equal(plan.properties) && cleared, unchanged: equal(plan.before), recordMap: { __version__: 3,
       block: { [plan.rowId]: { spaceId: this.spaceId, value: { role: this.roles.get('block:' + plan.rowId), value: row } } } } };
   }
-  async clearPending(snapshot, rowId, signal) {
+  async clearPending(snapshot, rowId, signal, onRead = () => {}) {
     const original = snapshot.rows.find(row => row.pageId === rowId)?.records.find(value => value.id === rowId);
     if (!original) fail('任务状态不属于本次所选记录。');
     const row = (await this.read('block', [rowId], signal, true)).get(rowId);
     if (row.parent_table !== 'collection' || uuid(row.parent_id) !== snapshot.info.collectionId) return false;
     const fields = snapshot.info.propertyIds.filter(id => original.format?.agent_workflow_status?.[id]?.type === 'creatingTask' &&
       JSON.stringify(original.format.agent_workflow_status[id]) === JSON.stringify(row.format?.agent_workflow_status?.[id]));
-    if (!fields.length) return true;
+    const report = value => onRead({ [rowId]: { spaceId: this.spaceId, value: { role: this.roles.get('block:' + rowId), value } } });
+    if (!fields.length) { report(row); return true; }
     await this.native.api('saveTransactionsFanout', { requestId: randomUUID(), transactions: [{ id: randomUUID(), spaceId: this.spaceId,
       operations: [{ pointer: { table: 'block', id: rowId, spaceId: this.spaceId }, command: 'update',
         path: ['format', 'agent_workflow_status'], args: Object.fromEntries(fields.map(id => [id, null])) }] }] }, { signal, spaceId: this.spaceId });
     const after = (await this.read('block', [rowId], signal)).get(rowId);
+    report(after);
     return fields.every(id => after.format?.agent_workflow_status?.[id] == null);
   }
 }
-module.exports = { autofillInput, NativeAutofillStore, sourceHash };
+module.exports = { autofillInput, NativeAutofillStore, sourceHash, emptyProperty, pendingState };
