@@ -1,7 +1,7 @@
 const { createHash } = require('node:crypto');
 const { uuid } = require('./native-context.cjs');
 const origin = 'https://calendar-api.notion.so';
-const endpoints = new Set(['getNotionSessionUsers', 'getUser', 'getCalendars', 'getEvent', 'createEvent', 'updateEvents']);
+const endpoints = new Set(['getNotionSessionUsers', 'getUser', 'getCalendars', 'getEvent', 'getEvents', 'createEvent', 'updateEvents']);
 class CalendarConnection {
   constructor({ createWindow, ready = async () => {}, fetchImpl = globalThis.fetch }) { Object.assign(this, { createWindow, ready, fetchImpl }); this.sessions = new Map(); this.windows = new Set(); this.connecting = new Map(); }
   async api(entry, endpoint, body, signal) {

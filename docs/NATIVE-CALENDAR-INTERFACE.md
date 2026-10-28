@@ -1,5 +1,13 @@
 # 客户端日历 AI：读取、空闲时间与写入
 
+## 已连接日历查询与本次范围
+
+用户已明确允许主动查询时，把同一 Notion 账号所选已连接日历的必要事件标题、时间、地点和描述交给已配置的 DeepSeek。`list_calendar_sources` 现在列出可读日历并标注 `writable`；`search_connected_calendar_events` 逐个读取实际选择的日历，包含只读日历。创建/修改仅允许 `writable=true`，仍执行原生确认。Home 可见日历原工具保持其明确范围，不把 Home 结果称作所有已连接日历。
+
+新增读取复用已审核 Calendar `/v2/getEvents` 的 queries 数组，按当前账号/日历核对回包，展开窗口内的重复事件，完整读取分页后再返回。最多 31 天、20 页和 10,000 条扫描记录；展示最多 200 条/60,000 字符，省略时明确 `complete=false`。分页循环、归属变化、未知时间与缺失后续页明确失败；不读其他人员账号或附件。6 组合成检查包括只读日历分页、重复记录、越权写入拒绝、错误归属/游标、空日历/范围及实际 Agent MCP 审批状态；原有十组建库/日历写入检查继续通过，真实业务服务读写为 0。
+
+对照[官方日历 AI 说明](https://www.notion.com/help/notion-calendar-ai-connector)，公开能力重点是事件检索和问答。先前把整个 Calendar 应用的重复日程编辑、删除、同事排期和自动会议链接都列为本项缺口，范围过宽；本次不继续扩展这些功能。用户已明确要求的非重复事件创建与修改继续保留。原生专用卡片的显示不逐个复刻，实际操作使用已接入的原生确认和聊天状态。新增代码均为跨平台 Node 接口，Mac 见 N24。
+
 ## 本轮写入交付（2026-10-28）
 
 普通侧栏与原生日历 AI 对话增加 `connect_calendar`、`list_calendar_sources`、`get_calendar_event`、`create_calendar_event`、`update_calendar_event`、`verify_calendar_write`。可创建非重复事件、修改标题/日期/时区/地点/描述/参与人，支持全天日期和参与人邀请。读取 Home 可见事件及空闲时间仍沿用下面的原生只读接口；写入列表来自 Calendar 中当前账号有写权限的日历，两者范围明确区分。

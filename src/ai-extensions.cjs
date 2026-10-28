@@ -3,6 +3,7 @@ const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { McpClient, validateServer } = require('./mcp-client.cjs');
 const { scopeKey } = require('./workspace-memory.cjs');
+const { approvalState } = require('./approval-state.cjs');
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const configuration = value => ({ ...value, servers: value?.servers?.map(({ oauth, ...server }) => ({ ...server, ...(oauth ? { oauth: { grantId: oauth.grantId, resource: oauth.resource, issuer: oauth.issuer, clientId: oauth.clientId, scope: oauth.scope } } : {}) })) });
 const definition = (name, description, properties, required) => ({ type: 'function', function: { name, description, parameters: { type: 'object', properties, required, additionalProperties: false } } });
@@ -84,8 +85,9 @@ class AiExtensions {
     } catch (error) { return { ok: false, error: /^Notion (?:MCP|工作区记忆)/.test(error.message) ? error.message : 'Notion MCP 连接失败，请检查服务地址、命令和授权。' }; }
   }
   async open({ userId, spaceId, signal, task, operationScope }) {
+    const approval = approvalState(request => this.approve(request));
     const key = scopeKey({ userId, spaceId }), servers = this.servers(key).filter(item => item.enabled), fingerprint = digest(configuration(this.read().scopes[key] || {})), catalogues = new Map();
-    const browser = this.read().scopes[key]?.browser && this.browser?.open({ userId, spaceId, signal, check: () => check() });
+    const browser = this.read().scopes[key]?.browser && this.browser?.open({ userId, spaceId, signal, check: () => check(), approve: (request, name) => approval.confirm(request, name) });
     const files = this.pageFiles?.open({ userId, spaceId, signal });
     const output = this.generatedFiles?.open({ userId, spaceId, signal });
     const check = () => { signal?.throwIfAborted(); if (digest(configuration(this.read().scopes[key] || {})) !== fingerprint) throw Error('Notion MCP 服务设置已改变，请重新发送问题。'); };
@@ -98,13 +100,13 @@ class AiExtensions {
     definitions.push(...(output?.definitions || []));
     const approvedSpaces = new Set(); let approvalDenied = false;
     const mode = this.state(key).approval;
-    return { definitions, check, beforeTool: async (name, args, label) => {
+    return { definitions, check, onApproval: approval.observe, beforeTool: async (name, args, label) => {
       check(); const target = !args.workspace_id || args.workspace_id === 'current' ? spaceId : args.workspace_id;
       if (mode === 'task' && approvedSpaces.has(target)) return;
       if (approvalDenied) throw Object.assign(Error('Notion 审批本轮修改已被拒绝，未执行后续写入。'), { writeOutcome: 'not_submitted' });
       const preview = JSON.stringify(args, null, 2);
       if (preview.length > 16000) throw Object.assign(Error('Notion 审批操作内容过长，无法完整显示，请将修改拆分。'), { writeOutcome: 'not_submitted' });
-      const allowed = await this.approve({ title: '批准 Notion 修改', message: label || name, detail: '本轮任务：' + task.slice(0, 12000) + '\n\n本次修改：\n' + preview + (mode === 'task' ? '\n\n允许后，本轮任务在这个工作区内的后续 Notion 修改继续执行。' : ''), signal });
+      const allowed = await approval.confirm({ title: '批准 Notion 修改', message: label || name, detail: '本轮任务：' + task.slice(0, 12000) + '\n\n本次修改：\n' + preview + (mode === 'task' ? '\n\n允许后，本轮任务在这个工作区内的后续 Notion 修改继续执行。' : ''), signal }, name);
       check(); if (!allowed) { approvalDenied = true; throw Object.assign(Error('Notion 审批用户拒绝了本轮修改，未提交操作。'), { writeOutcome: 'not_submitted' }); }
       approvedSpaces.add(target);
     }, execute: async (name, args) => {
@@ -120,7 +122,7 @@ class AiExtensions {
         const schema = tool.inputSchema;
         if (schema.required?.some(key => !Object.hasOwn(args.arguments, key)) || schema.additionalProperties === false && Object.keys(args.arguments).some(key => !Object.hasOwn(schema.properties || {}, key))) throw Error('Notion MCP 参数缺失或包含未知字段。');
         const preview = JSON.stringify(args.arguments, null, 2); if (preview.length > 12000) throw Error('Notion MCP 参数过长，无法完整确认，请拆分请求。');
-        if (!await this.approve({ title: '批准 MCP 工具操作', message: server.name + ' · ' + tool.name, detail: '当前任务：' + task.slice(0, 1000) + '\n\n服务：' + (server.url || server.command) + '\n参数：\n' + preview, signal })) throw Error('Notion MCP 用户取消了这次操作。');
+        if (!await approval.confirm({ title: '批准 MCP 工具操作', message: server.name + ' · ' + tool.name, detail: '当前任务：' + task.slice(0, 1000) + '\n\n服务：' + (server.url || server.command) + '\n参数：\n' + preview, signal }, 'mcp_call_tool')) throw Error('Notion MCP 用户取消了这次操作。');
         check();
       }
       const client = await this.client(key, server, { signal, cwd: this.root });

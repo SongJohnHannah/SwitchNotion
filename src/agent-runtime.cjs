@@ -6,7 +6,7 @@ const { operationKey, factHash, progressPage, readPayload } = require('./agent-p
 const { definitelyNotWritten, failureInfo } = require('./notion-errors.cjs');
 const { modelFileProperties } = require('./file-properties.cjs');
 const MAX_MODEL_ROUNDS = 32, MAX_TOOL_OPERATIONS = 256, EXECUTION_BATCH_SIZE = 8;
-const labels = { connect_calendar: '连接 Notion Calendar', list_calendar_sources: '查看可写日历', get_calendar_event: '读取日历事件', create_calendar_event: '创建日历事件', update_calendar_event: '修改日历事件', verify_calendar_write: '核对日历写入', search_web: '搜索公开网页', read_web_page: '读取公开网页', read_task_progress: '核对已完成的任务进度', delegate_research: '安排多个 Agent 协同分析', list_workspaces: '查看已授权工作区', search_pages: '搜索已授权页面', read_page: '读取页面', append_page: '追加页面内容', replace_page_text: '替换页面内容',
+const labels = { connect_calendar: '连接 Notion Calendar', list_calendar_sources: '查看已连接日历', search_connected_calendar_events: '查询已连接日历事件', get_calendar_event: '读取日历事件', create_calendar_event: '创建日历事件', update_calendar_event: '修改日历事件', verify_calendar_write: '核对日历写入', search_web: '搜索公开网页', read_web_page: '读取公开网页', read_task_progress: '核对已完成的任务进度', delegate_research: '安排多个 Agent 协同分析', list_workspaces: '查看已授权工作区', search_pages: '搜索已授权页面', read_page: '读取页面', append_page: '追加页面内容', replace_page_text: '替换页面内容',
   create_page: '创建页面', read_page_info: '读取页面信息', update_page_info: '更新页面信息', move_page: '移动页面', trash_page: '移至回收站', restore_page: '恢复页面',
   search_databases: '查找数据库', read_database: '读取数据库字段', query_database: '查询数据库记录', create_database: '创建数据库', update_database: '更新数据库', update_database_schema: '调整数据库字段', trash_database: '将数据库移至回收站', restore_database: '恢复数据库', create_database_entry: '新增数据库记录', read_database_entry: '读取记录字段', read_database_entry_property: '读取记录完整字段', update_database_entry: '更新记录字段',
   read_block: '读取内容块', read_block_children: '读取页面结构', append_blocks: '插入内容块', update_block: '更新内容块', trash_block: '移除内容块', restore_block: '恢复内容块',
@@ -29,6 +29,12 @@ async function runAgent({ provider, config, messages, workspace, web, memory, ex
   const memorySession = memory && aiScope?.userId && aiScope?.spaceId && !readOnlyAgent ? memory.open(aiScope, mainTask) : null;
   const extraSession = extensions && aiScope?.userId && aiScope?.spaceId && !readOnlyAgent && !research && !recoveryReadOnly ? await extensions.open({ ...aiScope, signal, task: mainTask, operationScope }) : null;
   const services = [memorySession, extraSession, nativeGuidance, ...nativeServices].filter(Boolean);
+  for (const service of services) service.onApproval?.(step => {
+    onStep(step);
+    const label = labels[step.name] || ({ mcp_call_tool: 'MCP 工具操作', browser_click: '网页点击', browser_fill: '网页填写' })[step.name] || '本次操作';
+    if (step.state === 'awaiting_approval') onText('\n\n> 等待你确认：' + label + '。请在原生确认窗口允许或取消。\n\n');
+    else if (['approval_declined', 'approval_cancelled'].includes(step.state)) onText('\n\n> 已取消确认：' + label + '，未通过此确认提交操作。\n\n');
+  });
   const tools = [...(session?.definitions || []), ...(web?.definitions || []), ...services.flatMap(service => service.definitions)].filter(t => !(readOnlyAgent || recoveryReadOnly || research) || !writeTools.has(t.function.name) && !['save_workspace_memory', 'delete_workspace_memory'].includes(t.function.name));
   const checkServices = async () => { for (const service of services) { await service.check?.(); await service.verify?.(); } };
   if (nativeGuidance?.message) messages.splice(1, 0, nativeGuidance.message);
@@ -221,7 +227,7 @@ async function runAgent({ provider, config, messages, workspace, web, memory, ex
         }
         const prior = writeTools.has(name) && verified.get(operationKey(name, args, checkpoint.originContext));
         if (writeTools.has(name) && !prior) {
-          if (extraSession?.beforeTool && !nativeWrites.has(name)) { onStep({ name, state: 'awaiting_approval' }); await extraSession.beforeTool(name, args, labels[name]); onStep({ name, state: 'started' }); }
+          if (extraSession?.beforeTool && !nativeWrites.has(name)) await extraSession.beforeTool(name, args, labels[name]);
           if (checkpoint.uncertainWrite) throw Error('此前写入的结果未确定，本轮已停止后续写入。请先读取页面检查。');
           checkpoint.uncertainWrite = true; checkpoint.pendingWrite = { name, arguments: args, arguments_hash: receipt(name, args, {}).arguments_hash }; saveCheckpoint();
           writeIntentStarted = true;

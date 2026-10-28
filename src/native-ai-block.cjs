@@ -5,6 +5,7 @@ const { researchWorkspace } = require('./research-scope.cjs');
 const { runAgent } = require('./agent-runtime.cjs');
 const { dataMessage } = require('./agent-context.cjs');
 const { propertyKey } = require('./file-properties.cjs');
+const { readForeignSource } = require('./native-ai-block-sources.cjs');
 
 const plain = value => typeof value === 'string' ? value : Array.isArray(value) ? value.map(item => typeof item?.[0] === 'string' ? item[0] : '').join('') : '';
 const textOf = block => block.type === 'table_row' ? Object.values(block.properties || {}).map(plain).join(' | ') : plain(block.properties?.title);
@@ -48,14 +49,15 @@ async function generateAiBlock({ input, store, provider, workspace, readFile, re
     if (!search.notion) throw Error('AI block 所选搜索来源尚未接入，请选择 Notion 工作区、页面或数据库。');
   }
   if (config.context !== undefined && (!Array.isArray(config.context) || config.context.length > 32)) throw Error('AI block 来源列表无效或过多，请减少来源。');
-  const selected = config.context ?? [{ type: 'currentPage', pageId }], selections = new Map();
+  const selected = config.context ?? [{ type: 'currentPage', pageId }], selections = new Map(), foreign = [];
   for (const source of selected) {
     const id = uuid(source?.pageId), collectionId = uuid(source?.collectionId);
-    if (!id || !['currentPage', 'page', 'collection'].includes(source.type) || source.type === 'currentPage' && id !== pageId ||
+    if (!id || !['currentPage', 'page', 'collection'].includes(source.type) || source.type === 'currentPage' && (id !== pageId || source.spaceId !== undefined && uuid(source.spaceId) !== spaceId) ||
         source.type === 'collection' && (!collectionId || source.viewId !== undefined) ||
-        source.spaceId !== undefined && uuid(source.spaceId) !== spaceId) throw Error('AI block 来源无效；请明确选择同一工作区的页面或数据库，连接器及未识别的视图范围尚未接入。');
-    const value = source.type === 'collection' ? { type: 'collection', pageId: id, collectionId } : { type: 'page', pageId: id };
-    const key = value.type === 'collection' ? 'collection:' + collectionId : 'page:' + id;
+        source.spaceId !== undefined && !uuid(source.spaceId)) throw Error('AI block 来源无效；请明确选择页面或数据库，连接器及未识别的视图范围尚未接入。');
+    const targetSpace = uuid(source.spaceId) || spaceId;
+    const value = { ...(source.type === 'collection' ? { type: 'collection', pageId: id, collectionId } : { type: 'page', pageId: id }), ...(targetSpace !== spaceId ? { spaceId: targetSpace } : {}) };
+    const key = targetSpace + ':' + (value.type === 'collection' ? 'collection:' + collectionId : 'page:' + id);
     if (!selections.has(key)) selections.set(key, value);
   }
   const instruction = config.type === 'summarizeThisPage' ? '总结明确选择的来源内容。' : config.type === 'extractKeyPointsFromThisPage' ? '提取明确选择的来源内容中的关键要点，用清晰的列表呈现。' : plain(config.autofillInstructions).trim();
@@ -144,7 +146,10 @@ async function generateAiBlock({ input, store, provider, workspace, readFile, re
     checkSize(result); return result;
   };
   for (const source of selections.values()) {
-    if (source.type === 'page') sources.push(await readPage(source.pageId));
+    if (source.spaceId) {
+      const value = await readForeignSource(workspace, source, signal, beforeRead);
+      sources.push(value); foreign.push({ source, value });
+    } else if (source.type === 'page') sources.push(await readPage(source.pageId));
     else {
       const { rowIds, ...database } = await databases.load(source, signal);
       checkSize(database);
@@ -189,6 +194,10 @@ async function generateAiBlock({ input, store, provider, workspace, readFile, re
     if (markdownString.length > 100000) throw Error('AI block 生成结果过长。');
   }
   await databases.verify(signal);
+  for (const { source, value } of foreign) {
+    const latest = await readForeignSource(workspace, source, signal, beforeRead);
+    if (JSON.stringify(latest) !== JSON.stringify(value)) throw Error('AI block 跨工作区来源或权限已改变，未返回过期结果。');
+  }
   // Native UI applies the returned preview. Do not return stale content after
   // the user changes a selected source or the AI block configuration.
   for (let at = 0, ids = [...snapshots.keys()]; at < ids.length; at += 64) {

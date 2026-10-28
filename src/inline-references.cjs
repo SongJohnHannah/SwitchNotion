@@ -27,7 +27,7 @@ const normalizePreview = text => text.normalize('NFC').replace(/[*_`~]/g, '').re
 
 // All I/O goes through the existing scoped Router. This module has no paths,
 // Electron dependencies, model tools, writes, or operating-system branches.
-function createInlineReferenceReader({ workspace, resolveFile, maxFiles = 8, maxFileBytes = 24 * 1024 * 1024, maxCalls = 128, maxBlocks = 800, maxCharacters = 160000, timeoutMs = resolveFile ? 300000 : 30000 } = {}) {
+function createInlineReferenceReader({ workspace, resolveFile, maxFiles = 8, maxFileBytes = 24 * 1024 * 1024, maxCalls = 128, maxBlocks = 800, maxCharacters = 160000, timeoutMs = resolveFile ? 300000 : 30000, databaseReferences = [], includeDatabaseBodies = false } = {}) {
   return async ({ pointers = [], selection, pageId, spaceId, signal }) => {
     pointers = referencePointers(pointers, spaceId);
     if (!workspace?.open || !uuid(spaceId)) fail('读取连接尚未配置，请先添加该工作区的连接。');
@@ -179,7 +179,10 @@ function createInlineReferenceReader({ workspace, resolveFile, maxFiles = 8, max
             if (!uuid(row.page_id) || seenRows.has(uuid(row.page_id))) fail('数据库记录分页重复或标识无效，请重新读取。');
             seenRows.add(uuid(row.page_id));
             if (++blocks > maxBlocks) fail('数据库记录过多，请缩小范围。');
-            rows.push(await completeEntry(row, scope)); checkSize(rows);
+            if (includeDatabaseBodies && rows.length >= 200) fail('数据库超过 200 条记录，请缩小范围。');
+            const entry = await completeEntry(row, scope);
+            if (includeDatabaseBodies) entry.body = await readPage(uuid(row.page_id), scope, { title: row.title });
+            rows.push(entry); checkSize(rows);
           }
           if (!result.has_more) break;
           if (!result.next_cursor || cursors.has(result.next_cursor)) fail('数据库记录分页不完整。');
@@ -187,7 +190,7 @@ function createInlineReferenceReader({ workspace, resolveFile, maxFiles = 8, max
         } while (true);
       }
       return { kind: 'database', schema, rows, complete: true, view_scope: 'database-all-records',
-        note: '这些是明确引用的数据库记录属性；未确认原生视图筛选，不包含每条记录的正文。' };
+        note: includeDatabaseBodies ? '这些是明确选择的数据源记录属性与记录自身正文；未应用原生视图筛选，不展开子页或关联页面。' : '这些是明确引用的数据库记录属性；未确认原生视图筛选，不包含每条记录的正文。' };
     }
     async function blockTree(block, scope, ancestors = new Set()) {
       const id = uuid(block.id); if (ancestors.has(id)) fail('内容出现循环引用。');
@@ -222,6 +225,7 @@ function createInlineReferenceReader({ workspace, resolveFile, maxFiles = 8, max
       return value;
     }
     async function objectReference(pointer, fullPage) {
+      if (databaseReferences.includes(pointer.id)) return readDatabase(pointer.id, pointer.spaceId);
       const { id, spaceId: scope } = pointer; let block;
       try { block = await readBlock(id, scope); }
       catch (error) {
