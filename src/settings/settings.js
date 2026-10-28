@@ -151,20 +151,33 @@ async function showMcp(container, key) {
   const form = item => {
     const body = element('div', 'memory-entry'), field = (label, value = '', type = 'text') => { const node = element('input'); node.type = type; node.value = value; node.placeholder = label; node.setAttribute('aria-label', label); body.append(node); return node; };
     const name = field('服务名称', item?.name), transport = element('select'); transport.setAttribute('aria-label', 'MCP 传输类型');
-    for (const [value, label] of [['http', 'Streamable HTTP'], ['stdio', '本机 stdio']]) { const option = element('option', '', label); option.value = value; transport.append(option); } transport.value = item?.transport || 'http'; body.append(transport);
+    for (const [value, label] of [['http', 'Streamable HTTP'], ['sse', '旧版 HTTP + SSE'], ['stdio', '本机 stdio']]) { const option = element('option', '', label); option.value = value; transport.append(option); } transport.value = item?.transport || 'http'; body.append(transport);
     const url = field('服务 URL，例如 https://example.com/mcp', item?.url), token = field(item?.keyConfigured ? '已保存服务密钥，留空保留' : '服务 Bearer Token（可选）', '', 'password');
-    const forget = field(''); forget.type = 'checkbox'; const forgetLabel = element('label', 'check-label'); forgetLabel.append(forget, document.createTextNode('清除已保存服务密钥')); body.append(forgetLabel);
+    const forget = field(''); forget.type = 'checkbox'; const forgetLabel = element('label', 'check-label'); forgetLabel.append(forget, document.createTextNode('清除服务凭据（含 OAuth 登录）')); body.append(forgetLabel);
     const command = field('本机命令或可执行文件路径', item?.command), args = field('参数 JSON 数组，例如 ["/路径/server.js"]', JSON.stringify(item?.args || []));
     const enabled = field(''); enabled.type = 'checkbox'; enabled.checked = item?.enabled !== false; const enabledLabel = element('label', 'check-label'); enabledLabel.append(enabled, document.createTextNode('启用此服务')); body.append(enabledLabel);
-    const visibility = () => { url.hidden = token.hidden = forgetLabel.hidden = transport.value !== 'http'; command.hidden = args.hidden = transport.value !== 'stdio'; }; transport.addEventListener('change', visibility); visibility();
+    const visibility = () => { url.hidden = token.hidden = forgetLabel.hidden = transport.value === 'stdio'; command.hidden = args.hidden = transport.value !== 'stdio'; }; transport.addEventListener('change', visibility); visibility();
     const action = (label, callback) => { const node = element('button', 'button secondary', label); node.type = 'button'; node.addEventListener('click', () => operation(body, callback)); body.append(node); };
     action(item ? '保存服务' : '添加服务', async () => {
       let argumentsList; try { argumentsList = JSON.parse(args.value); } catch { toast('命令参数需要填写 JSON 字符串数组。'); return; }
-      const response = await api.mcpSave({ key, ...(item ? { id: item.id } : {}), name: name.value, transport: transport.value, enabled: enabled.checked, ...(transport.value === 'http' ? { url: url.value, token: token.value, forgetToken: forget.checked } : { command: command.value, args: argumentsList }) });
+      const response = await api.mcpSave({ key, ...(item ? { id: item.id } : {}), name: name.value, transport: transport.value, enabled: enabled.checked, ...(transport.value !== 'stdio' ? { url: url.value, token: token.value, forgetToken: forget.checked } : { command: command.value, args: argumentsList }) });
       if (response.ok) { await showMcp(container, key); toast('MCP 已保存。'); } else toast(response.error);
     });
     if (item) {
       action('检测连接', async () => { const response = await api.mcpTest({ key, id: item.id }); toast(response.ok ? response.result.message : response.error); });
+      if (item.transport !== 'stdio') {
+        body.append(element('p', 'field-help', item.oauthConnected ? item.oauthExpired ? 'OAuth 登录已过期，请重新登录。' : '已通过 OAuth 登录此服务。' : '需要网页登录的服务可使用 OAuth；在系统浏览器确认服务和所需权限。'));
+        const clientId = field('OAuth Client ID（支持自动注册时留空）'), scope = field('OAuth 权限范围（通常留空）');
+        const cancel = element('button', 'button secondary', '取消登录'); cancel.type = 'button'; cancel.disabled = true; cancel.dataset.unavailable = 'true';
+        cancel.addEventListener('click', async () => { cancel.disabled = true; await api.mcpCancel({ key, id: item.id }); });
+        action(item.oauthConnected ? '重新 OAuth 登录' : 'OAuth 登录', async () => {
+          cancel.disabled = false; toast('正在打开系统浏览器，请完成授权；可在这里取消。');
+          try { const response = await api.mcpLogin({ key, id: item.id, clientId: clientId.value, scope: scope.value }); if (response.ok) { await showMcp(container, key); toast('OAuth 登录已保存。'); } else toast(response.error); }
+          finally { cancel.disabled = true; }
+        });
+        body.append(cancel);
+        if (item.oauthConnected) action('退出 OAuth 登录', async () => { const response = await api.mcpLogout({ key, id: item.id }); if (response.ok) { await showMcp(container, key); toast('已移除本机登录凭据。'); } else toast(response.error); });
+      }
       action('移除服务', async () => { const response = await api.mcpRemove({ key, id: item.id }); if (response.ok) await showMcp(container, key); else toast(response.error); });
     }
     return body;

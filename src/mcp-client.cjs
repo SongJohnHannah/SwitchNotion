@@ -2,6 +2,7 @@ const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { SseTransport } = require('./mcp-sse.cjs');
 const VERSION = '2025-06-18', LIMIT = 2 * 1024 * 1024;
 const fail = message => { throw Error('Notion MCP ' + message); };
 function endpoint(value) {
@@ -10,10 +11,10 @@ function endpoint(value) {
   return url.href;
 }
 function validateServer(input) {
-  if (!input || !['http', 'stdio'].includes(input.transport) || typeof input.name !== 'string' || !input.name.trim() || input.name.length > 80 || typeof input.enabled !== 'boolean') fail('服务名称、传输类型或开关无效。');
+  if (!input || !['http', 'sse', 'stdio'].includes(input.transport) || typeof input.name !== 'string' || !input.name.trim() || input.name.length > 80 || typeof input.enabled !== 'boolean') fail('服务名称、传输类型或开关无效。');
   const server = { id: input.id || randomUUID(), name: input.name.trim(), transport: input.transport, enabled: input.enabled };
   if (!/^[a-f\d-]{36}$/.test(server.id)) fail('服务标识无效。');
-  if (server.transport === 'http') {
+  if (server.transport !== 'stdio') {
     server.url = endpoint(input.url);
     if (input.token !== undefined && (typeof input.token !== 'string' || input.token.length > 4096 || /[\r\n]/.test(input.token))) fail('服务密钥无效。');
     server.token = input.token || '';
@@ -56,6 +57,10 @@ class McpClient {
     this.pending = new Map(); this.next = 0; this.sessionId = null; this.version = VERSION; this.closed = false;
   }
   async start() {
+    if (this.server.transport === 'sse') {
+      this.sse = new SseTransport({ ...this.server, fetchImpl: this.fetchImpl, signal: this.parentSignal, timeoutMs: this.timeoutMs, validateEndpoint: endpoint });
+      await this.sse.open();
+    }
     if (this.server.transport === 'stdio') {
       const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => /^(?:PATH|SystemRoot|WINDIR|TEMP|TMP|HOME|USERPROFILE|APPDATA|LOCALAPPDATA|LANG|LC_ALL)$/i.test(name)));
       let command = this.server.command, args = this.server.args;
@@ -79,8 +84,8 @@ class McpClient {
         }
       });
     }
-    const result = await this.request('initialize', { protocolVersion: VERSION, capabilities: {}, clientInfo: { name: 'NotionSwitch', version: '0.2.0' } });
-    if (!['2024-11-05', VERSION, '2025-11-25'].includes(result?.protocolVersion) || !result?.capabilities?.tools) fail('服务未提供兼容的工具能力。');
+    const result = await this.request('initialize', { protocolVersion: this.server.transport === 'sse' ? '2024-11-05' : VERSION, capabilities: {}, clientInfo: { name: 'NotionSwitch', version: '0.2.0' } });
+    if (!['2024-11-05', '2025-03-26', VERSION, '2025-11-25'].includes(result?.protocolVersion) || !result?.capabilities?.tools) fail('服务未提供兼容的工具能力。');
     this.version = result.protocolVersion;
     await this.request('notifications/initialized', {}, true);
     return this;
@@ -90,7 +95,10 @@ class McpClient {
     const signal = AbortSignal.any([...(this.parentSignal ? [this.parentSignal] : []), AbortSignal.timeout(this.timeoutMs)]);
     signal.throwIfAborted(); const id = notification ? undefined : ++this.next, message = { jsonrpc: '2.0', ...(notification ? {} : { id }), method, params };
     let value;
-    if (this.server.transport === 'stdio') {
+    if (this.server.transport === 'sse') {
+      if (!this.sse) fail('SSE 服务未启动。');
+      value = await this.sse.request(message, signal);
+    } else if (this.server.transport === 'stdio') {
       if (!this.child || this.child.exitCode !== null) fail('本机服务未启动。');
       if (notification) { this.child.stdin.write(JSON.stringify(message) + '\n'); return {}; }
       value = await new Promise((resolve, reject) => {
@@ -132,6 +140,7 @@ class McpClient {
     if (this.closed) return; this.closed = true;
     for (const item of this.pending.values()) item.reject(Error('Notion MCP 连接已关闭。')); this.pending.clear();
     this.child?.stdin.destroy(); this.child?.kill();
+    this.sse?.close();
     if (this.sessionId && this.server.transport === 'http') void this.fetchImpl(this.server.url, { method: 'DELETE', headers: { 'Mcp-Session-Id': this.sessionId, 'MCP-Protocol-Version': this.version, ...(this.server.token ? { authorization: 'Bearer ' + this.server.token } : {}) }, signal: AbortSignal.timeout(3000), redirect: 'error', credentials: 'omit' }).then(response => response.body?.cancel()).catch(() => {});
   }
 }

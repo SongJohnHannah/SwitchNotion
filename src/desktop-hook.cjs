@@ -16,6 +16,7 @@ const { ProviderRouter } = require('./provider.cjs');
 const { WebSources } = require('./web-sources.cjs');
 const { WorkspaceMemory } = require('./workspace-memory.cjs');
 const { AiExtensions } = require('./ai-extensions.cjs');
+const { McpOAuth } = require('./mcp-oauth.cjs');
 const { AiBrowser } = require('./ai-browser.cjs');
 const { attachmentType } = require('./media-transcript.cjs');
 const { resolveNativeInstructions } = require('./native-instructions.cjs');
@@ -73,7 +74,9 @@ const aiBrowser = new AiBrowser({ createWindow: createAuxiliaryWindow, ready: ()
 const calendarConnection = new CalendarConnection({ createWindow: createAuxiliaryWindow, ready: () => app.whenReady() });
 const calendarWrites = new CalendarWrites({ root, connection: calendarConnection, approve: approveAi });
 app.on('will-quit', () => calendarConnection.close());
-const extensions = new AiExtensions({ root, memory, browser: aiBrowser, approve: approveAi });
+const mcpOAuth = new McpOAuth({ openBrowser: async url => { await app.whenReady(); await shell.openExternal(url); } });
+app.on('will-quit', () => mcpOAuth.close());
+const extensions = new AiExtensions({ root, memory, browser: aiBrowser, oauth: mcpOAuth, approve: approveAi });
 const generatedFiles = new GeneratedFiles({ root, printPdf: async (title, text, signal) => {
   signal?.throwIfAborted(); await app.whenReady();
   const window = createAuxiliaryWindow({ show: false, webPreferences: { partition: 'notion-switch-pdf-' + crypto.randomUUID(), nodeIntegration: false, contextIsolation: true, sandbox: true, javascript: false } });
