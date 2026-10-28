@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const { pipeline } = require('node:stream/promises');
 const { Transform } = require('node:stream');
 const { publicUrl } = require('./model.cjs');
+const defaultLookup = process.platform === 'darwin' ? require('../compat/macos-public-dns.cjs').macPublicLookup : dns.lookup;
 function effectiveProxy(explicit = '') {
   if (explicit) return explicit;
   for (const name of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']) {
@@ -24,7 +25,7 @@ function privateAddress(ip) {
   const [a, b] = v.split('.').map(Number);
   return a === 0 || a === 10 || a === 127 || a >= 224 || a === 169 && b === 254 || a === 172 && b >= 16 && b <= 31 || a === 192 && [0, 168].includes(b) || a === 100 && b >= 64 && b <= 127 || a === 198 && [18, 19].includes(b);
 }
-async function assertPublicUrl(value, lookup = dns.lookup) {
+async function assertPublicUrl(value, lookup = defaultLookup) {
   const url = new URL(publicUrl(value)), host = url.hostname.replace(/^\[|\]$/g, '');
   if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) throw Error('收集链接不能访问本机或内网地址。');
   const addresses = net.isIP(host) ? [{ address: host, family: net.isIP(host) }] : await lookup(host, { all: true });
@@ -42,7 +43,8 @@ async function openResponse(value, { signal, headers = {}, proxy = '', lookup, r
     const p = new URL(proxy);
     if (!['http:', 'https:'].includes(p.protocol)) throw Error('资源下载目前需要 HTTP 或 HTTPS 代理。');
     const tunnel = await new Promise((resolve, reject) => {
-      const request = (p.protocol === 'https:' ? https : http).request(p, { method: 'CONNECT', path: url.host + (url.port ? '' : url.protocol === 'https:' ? ':443' : ':80'), signal });
+      const destination = process.platform === 'darwin' && addresses.macPublicDns ? addresses[0].address + ':' + (url.port || (url.protocol === 'https:' ? '443' : '80')) : url.host + (url.port ? '' : url.protocol === 'https:' ? ':443' : ':80');
+      const request = (p.protocol === 'https:' ? https : http).request(p, { method: 'CONNECT', path: destination, signal });
       request.once('connect', (response, socket) => response.statusCode === 200 ? resolve(socket) : (socket.destroy(), reject(Error('代理连接失败。'))));
       request.once('error', reject); request.end();
     });
