@@ -66,6 +66,23 @@ M1 使用 faster-whisper Medium / CPU INT8，尚未开启 Apple GPU 加速。下
 
 ## 验证证据
 
+### 2026-10-28 本机兼容核对
+
+在 macOS 26.6、Apple Silicon arm64、Notion 7.41.0 / Electron 44.9.1 上检查当前项目，未构建分发包。发现当前客户端加载的四份资源被旧适配拒绝：录音传输模块改为 697264、录音控制器随之更新、浮动附件转换模块改为 296328、Autofill 脚本重新构建。
+
+修复放在 `src/compat/macos-client.cjs`，公共入口仅增加 Darwin 分发；Windows 继续走原来的适配路径。新资源仍须匹配逐文件 SHA-256，未知改动继续拒绝。录音复用已有收尾实现并指向当前传输；附件复用已有解析回执处理；Autofill 保留当前视图快照、进度和确认前不写 pending 元数据的约束。平台启动、签名、登录及 Windows 源码未修改。
+
+| 检查 | 本机结果及范围 |
+| --- | --- |
+| Mac 专项 | 8 项通过：旧版兼容、新版生产响应适配、散列变化拒绝、Windows 分支隔离、连续两次录音收尾、浮动附件本地回执与普通订阅、Autofill 两条视图分支及无快照拒绝 |
+| 源码回归 | 排除 `package-*`，104 个现有测试文件共 678 项：649 通过、28 跳过、1 失败。失败项是既有 `web-agent` 夹具未提供新指令解析器及会话桥 mock；修复前相同失败，在忽略目录的一次性副本补齐 mock 后该项通过。没有修改共用测试来掩盖结果 |
+| 真实模型 | 使用项目模型目录的 Flash、Pro，分别只发送合成字符串并收到 `MAC-AI-927`，不发送真实页面或文件 |
+| 本机语音 | Large-v3 Turbo / CPU INT8 成功加载；macOS 自带语音合成的短音频经项目实际离线 worker 返回 `this is a synthetic test, the project code is 927`，未使用麦克风 |
+| 本机 OCR | Apple Vision 正确识别合成 PNG 和扫描 PDF 的 `SYNTHETIC OCR CODE 927`。本机尚未准备 mediaocr，这项不记作 mediaocr 引擎验收 |
+| 扩展服务 | 7 项合成验收通过：记忆/技能与工作区隔离、真实 stdio MCP 子进程、MCP 审批拒绝及防重复、手动后台任务、日历时区与全天冲突、PDF/DOCX/XLSX 解析、TXT/CSV/JSON/XLSX/PPTX 生成下载。XLSX/PPTX 的 ZIP、XML 和正文另行读取核对 |
+
+上述服务与脚本回放不能代替全部原生控件验收。本轮重启核对期间系统工具确认 Mac 处于锁屏状态，无法访问原生窗口；窗口点击、实际麦克风、PDF 打印、真实外部日历/MCP 服务及页面/Home 独立建库向导仍不记为通过。只使用忽略目录中的合成数据，详细日志为 `.notion-switch/mac-arm64/mac-ai-source-tests-final.log` 和 `mac-ai-live/`，不随代码提交。
+
 ### 追加 AI 功能手动核对
 
 拉取本次源码后，先完全退出（⌘Q），再用原来的入口打开。无需重新打包，也不用调整已正常的登录或音频设置。以下编号与之前的 M01～M07 分开。
