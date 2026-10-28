@@ -13,6 +13,9 @@ const assets = Object.freeze({
   // Later rollout only reordered lazy chunk dependencies in neighbouring
   // modules; recorder 331787 and audio recorder 392719 are byte-identical.
   '89269-d6dd7560b2d4cf66.js': { kind: 'recording', moduleId: '331787', hash: '5bfadbd1b22d5d247291c517ac901c9c2faa8828216837b25535fda65a25868c' },
+  // 2026-10-29: only neighbouring lazy dependencies changed again;
+  // recorder 331787 and audio recorder 392719 remain byte-identical.
+  '89269-0cf389326d6293f8.js': { kind: 'recording', moduleId: '331787', hash: '9a18a183638d988a699ef90715f1310c858636c3ac4da63f65413fa0794b1fa7' },
   '51103-1249b090dd731220.js': { kind: 'attachments', moduleId: '175529', hash: '390857956053ace5c09b2f9c65ace352363d3244126a8f5a61a2b9c1dd997abb' },
   '57590-3242f968a3670cd0.js': { kind: 'autofill', moduleId: '414741', hash: '1735c0788b8c9c9359b0034a3ca1bfd6d26194eacafd8c89cda0e3fb45152113' }
 });

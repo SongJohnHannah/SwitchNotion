@@ -27,7 +27,9 @@ const { BackgroundAgents } = require('./background-agents.cjs');
 const { AiTransfer } = require('./ai-transfer.cjs');
 const { PageFiles } = require('./page-files.cjs');
 const { openNativePageFiles } = require('./native-page-files.cjs');
-const { GeneratedFiles, xml: escapeFileText } = require('./generated-files.cjs');
+const { GeneratedFiles: SharedGeneratedFiles, xml: escapeFileText } = require('./generated-files.cjs');
+const macFileDownloads = platform.id === 'darwin' ? require('./compat/macos-generated-files.cjs') : null;
+const GeneratedFiles = macFileDownloads?.MacGeneratedFiles || SharedGeneratedFiles;
 const { NotionRouter } = require('./notion-routing.cjs');
 const { nativeModelCatalog } = require('./native-models.cjs');
 const { setupSettings, isSettings, createAuxiliaryWindow } = require('./settings-window.cjs');
@@ -407,6 +409,7 @@ app.on('web-contents-created', (_event, contents) => {
   contents.on('did-finish-load', () => { let origin; try { origin = new URL(contents.getURL()).origin; } catch { origin = 'unknown'; } log({ type: 'page-loaded', origin }); });
   contents.on('did-finish-load', () => {
     try { const url = new URL(contents.getURL()); if (url.protocol === 'https:' && isNotion(url.hostname)) void contents.executeJavaScript(wizardEntryScript).catch(() => {}); } catch {}
+    if (macFileDownloads) try { const url = new URL(contents.getURL()); if (url.protocol === 'https:' && isNotion(url.hostname)) void contents.executeJavaScript(macFileDownloads.downloadScript).catch(() => {}); } catch {}
   });
 });
 app.on('browser-window-created', (_event, win) => {

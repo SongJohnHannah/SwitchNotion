@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import platformModule from '../src/platform/index.cjs';
+import macRuntime from '../src/platform/macos-runtime.cjs';
 import { inspectDesktop } from './desktop-compat.mjs';
 import { prependToEntry, assertSourceUnchanged } from './asar.mjs';
 
@@ -20,7 +21,11 @@ function local(root, name) {
   for (let cursor = path.dirname(target); cursor !== base; cursor = path.dirname(cursor)) if (fs.lstatSync(cursor, { throwIfNoEntry: false })?.isSymbolicLink()) throw Error('更新目录含链接，未移动文件。');
   return target;
 }
-function remove(root, name) { const target = local(root, name); if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true }); }
+function remove(root, name, platform) {
+  const target = local(root, name); if (!fs.existsSync(target)) return;
+  if (platform.id === 'darwin') macRuntime.removeMacRuntimeDirectory(target, { fsImpl: fs });
+  else fs.rmSync(target, { recursive: true, force: true });
+}
 function move(root, from, to) {
   const source = local(root, from), target = local(root, to);
   for (let attempt = 0; ; attempt++) {
@@ -73,7 +78,7 @@ export function rollbackRuntime({ root = stateRoot, platform = createDesktopPlat
   catch (error) { if (fs.existsSync(local(root, discarded))) move(root, discarded, 'runtime'); throw error; }
   writeJson(local(root, 'prepared.json'), { ...prior, pendingValidation: false });
   writeJson(local(root, 'update-status.json'), { status: 'restored', message: reason, heldHash: holdHash || rejected?.sourceHash, checkedAt: new Date().toISOString() });
-  fs.unlinkSync(local(root, 'runtime-previous.json')); remove(root, discarded);
+  fs.unlinkSync(local(root, 'runtime-previous.json')); remove(root, discarded, platform);
   return prior;
 }
 export function acceptRuntime({ root = stateRoot, platform = createDesktopPlatform() } = {}) {
@@ -116,7 +121,7 @@ export function prepareRuntime({ root = stateRoot, platform = createDesktopPlatf
     fs.writeFileSync(staged.archive, prependToEntry(original, build.entry, prefix));
     platform.finalizeRuntime(staged);
     assertSourceUnchanged(originalPath, build.hash);
-    remove(root, 'runtime-previous'); if (fs.existsSync(local(root, 'runtime-previous.json'))) fs.unlinkSync(local(root, 'runtime-previous.json'));
+    remove(root, 'runtime-previous', platform); if (fs.existsSync(local(root, 'runtime-previous.json'))) fs.unlinkSync(local(root, 'runtime-previous.json'));
     if (fs.existsSync(local(root, 'runtime'))) { move(root, 'runtime', 'runtime-previous'); if (previous) writeJson(local(root, 'runtime-previous.json'), previous); }
     try { move(root, stage, 'runtime'); installed = true; }
     catch (error) { if (fs.existsSync(local(root, 'runtime-previous'))) move(root, 'runtime-previous', 'runtime'); throw error; }
@@ -126,7 +131,7 @@ export function prepareRuntime({ root = stateRoot, platform = createDesktopPlatf
     return { ...prepared, updateStatus: 'prepared', sourceArchiveUnchanged: true };
   } catch (error) {
     if (installed && fs.existsSync(local(root, 'runtime-previous.json'))) rollbackRuntime({ root, platform, reason: '更新失败，已恢复原型。' });
-    if (stage) remove(root, stage);
+    if (stage) remove(root, stage, platform);
     const message = /(?:sk-|ntn_|secret_)/.test(error.message) ? '更新未完成，保留现有原型。' : error.message;
     writeJson(local(root, 'update-status.json'), { status: 'blocked', message, checkedAt: new Date().toISOString() });
     if (previous && canReuse()) return { ...previous, updateStatus: 'blocked', message };

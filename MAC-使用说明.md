@@ -66,6 +66,8 @@ M1 使用 faster-whisper Medium / CPU INT8，尚未开启 Apple GPU 加速。下
 
 ## 验证证据
 
+最新逐项结果见 [2026-10-29 Mac 清单复验](docs/MAC-CHECKLIST-ACCEPTANCE-2026-10-29.md)：包含当前录音资源、生成文件下载、Finder 更新目录清理、只读共享，以及新增视频号的实际阻挡原因。未完成的原生项单独列明。
+
 ### 2026-10-28 本机兼容核对
 
 在 macOS 26.6、Apple Silicon arm64、Notion 7.41.0 / Electron 44.9.1 上检查当前项目，未构建分发包。发现当前客户端加载的四份资源被旧适配拒绝：录音传输模块改为 697264、录音控制器随之更新、浮动附件转换模块改为 296328、Autofill 脚本重新构建。

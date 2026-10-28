@@ -75,7 +75,7 @@ const currentAssets = {
   connection: '17048-b38a7b8f431620b1.js', recording: '89269-451ea294ba9323c0.js',
   attachments: '51103-1249b090dd731220.js', autofill: '57590-3242f968a3670cd0.js'
 };
-const currentRecordings = [currentAssets.recording, '89269-d6dd7560b2d4cf66.js'];
+const currentRecordings = [currentAssets.recording, '89269-d6dd7560b2d4cf66.js', '89269-0cf389326d6293f8.js'];
 const cached = name => new URL('../research/.public-assets/' + name, import.meta.url);
 const fixtureMissing = name => !fs.existsSync(cached(name)) && 'Optional public macOS client fixture unavailable';
 function functionSource(source, moduleId, name) {

@@ -2,6 +2,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 
+function removeMacRuntimeDirectory(target, { fsImpl = fs, wait = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
+  // Finder can recreate .DS_Store between recursive removal and rmdir.
+  // Retry only that transient failure, with a bounded wait.
+  for (let attempt = 0; ; attempt++) {
+    try { fsImpl.rmSync(target, { recursive: true, force: true }); return; }
+    catch (error) { if (error.code !== 'ENOTEMPTY' || attempt >= 5) throw error; wait(100); }
+  }
+}
+
 function supportsArm64(bytes) {
   if (bytes.length < 8) return false;
   if (bytes.readUInt32LE(0) === 0xfeedfacf) return bytes.readUInt32LE(4) === 0x0100000c;
@@ -75,4 +84,4 @@ function createMacRuntime({ execFileSync, fsImpl = fs }) {
     }
   };
 }
-module.exports = { createMacRuntime, validateBundleLinks, headerHash, supportsArm64 };
+module.exports = { createMacRuntime, validateBundleLinks, headerHash, supportsArm64, removeMacRuntimeDirectory };

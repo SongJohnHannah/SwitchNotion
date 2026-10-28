@@ -10,6 +10,25 @@ import { inspectDesktop } from '../scripts/desktop-compat.mjs';
 import { readArchive, sha256 } from '../scripts/asar.mjs';
 const { createDesktopPlatform } = platformModule;
 
+test('Mac cleanup tolerates a recreated Finder file, preserves neighboring state and bounds persistent failures', t => {
+  fs.mkdirSync(path.resolve('.notion-switch'), { recursive: true });
+  const directory = fs.mkdtempSync(path.resolve('.notion-switch/test-mac-cleanup-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const target = path.join(directory, 'runtime-discarded'), profile = path.join(directory, 'profile');
+  fs.mkdirSync(target); fs.writeFileSync(path.join(target, '.DS_Store'), 'Finder fixture'); fs.writeFileSync(profile, 'preserved');
+  let attempts = 0, waits = 0;
+  runtimeModule.removeMacRuntimeDirectory(target, { fsImpl: { rmSync: (file, options) => {
+    attempts++; if (attempts === 1) fs.rmdirSync(file); else fs.rmSync(file, options);
+  } }, wait: () => { waits++; } });
+  assert.equal(attempts, 2); assert.equal(waits, 1); assert.equal(fs.existsSync(target), false);
+  assert.equal(fs.readFileSync(profile, 'utf8'), 'preserved');
+  for (const [code, count] of [['ENOTEMPTY', 6], ['EACCES', 1]]) {
+    let calls = 0; const failure = Object.assign(Error('fixture'), { code });
+    assert.throws(() => runtimeModule.removeMacRuntimeDirectory(target, { fsImpl: { rmSync: () => { calls++; throw failure; } }, wait() {} }), error => error === failure);
+    assert.equal(calls, count);
+  }
+});
+
 function archive(version = '7.40.20') {
   const source = 'const electron=require("electron");const hooks=["session-created","web-contents-created","protocol.handle","session.fromPartition","whenReady","notion.com"];';
   const files = { 'package.json': JSON.stringify({ name: 'Notion', productName: 'Notion', version, main: './.webpack/main', devDependencies: { electron: '44.9.1' } }), '.webpack/main/index.js': source };
