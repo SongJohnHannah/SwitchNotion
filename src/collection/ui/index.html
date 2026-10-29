@@ -1,44 +1,98 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
-<title>Switch Notion · 快捷收集</title><link rel="stylesheet" href="collection.css"><script src="collection.js" defer></script></head>
-<body><header><span class="brand">↓</span><strong>快捷收集</strong><span id="shortcut" class="key"></span><button id="hide" class="icon" aria-label="收起窗口">×</button></header>
-<main><form id="capture-form"><label class="sr-only" for="links">网页链接或本地音视频路径</label><textarea id="links" rows="3" placeholder="粘贴网页链接或本地音视频路径，多项可分行输入" spellcheck="false"></textarea>
-<div class="destination-row"><span>保存到</span><button id="destination-pill" type="button" class="destination">选择工作区、数据库或页面 ⌄</button></div>
-<div class="capture-actions"><div class="collect-group"><button type="submit" class="primary" id="collect">全部收集 ↵</button><button type="button" id="prompt-open" class="prompt-trigger" aria-haspopup="dialog" aria-controls="prompt-dialog">✧ 提取要求</button></div><button type="button" id="preview" class="secondary">识别后选择</button></div></form>
-<div class="compact-footer"><span id="queue-state">支持网页链接和本地音视频路径</span><button id="expand" class="text">展开选项 ⌄</button></div>
-<div class="prompt-status"><button id="prompt-status" class="text">自动提取 · 文章 / 音视频</button><button id="last-result" class="text" hidden>打开刚保存的 Notion ↗</button></div>
-<p id="message" role="status" hidden></p>
-<div id="expanded" hidden>
-<section><div class="section-heading"><h2>保存位置</h2><button id="connections" class="text">管理连接 ↗</button></div>
-<label for="workspace">Notion 工作区</label><div class="row"><select id="workspace"><option value="">加载工作区…</option></select><button id="refresh-workspaces" class="secondary">刷新</button></div>
-<div class="search-row"><input id="destination-search" placeholder="搜索数据库或父页面，也可粘贴 Notion 链接"><button id="search" class="secondary">搜索</button></div>
-<div id="destinations" class="destinations"></div><button id="more-destinations" class="text" hidden>加载更多位置</button><div id="favorites" class="favorites"></div>
-<div class="row"><button id="favorite" class="text">☆ 收藏当前位置</button><button id="default-destination" class="text">设为默认保存位置</button><button id="open-destination" class="text">打开保存位置 ↗</button><button id="create-library" class="text">在所选父页面下新建收集库</button></div></section>
-<section><h2>本次处理选项</h2><div class="options-grid">
-<label class="check"><input id="transcribe" type="checkbox" checked>生成语音逐字稿</label><label class="check"><input id="vision" type="checkbox" checked>DeepSeek 图片／画面识别</label>
-<label class="check"><input id="compress" type="checkbox" checked>压缩视频，保留完整时长</label><label class="check"><input id="keepLocal" type="checkbox">保留本地原始副本</label>
-<label>压缩画质<select id="quality"><option value="720p">清晰优先 · 720p</option><option value="1080p">更清晰 · 1080p</option><option value="original">保留原始分辨率</option></select></label>
-<div><span class="label">收集类型</span><div id="type-options" class="type-options"><label><input type="checkbox" value="text" checked>正文</label><label><input type="checkbox" value="image" checked>图片</label><label><input type="checkbox" value="video" checked>视频</label><label><input type="checkbox" value="audio" checked>音频</label></div></div></div>
-<p class="hint">逐字稿在本机生成。开启 DeepSeek 识别会将图片或视频关键帧发送给已配置的 Flash 模型；分析单独保存，不改写原文。</p>
-<div class="row"><button id="save-defaults" class="secondary">保存以上选项为默认</button><button id="open-downloads" class="text">打开下载文件夹</button><button id="choose-directory" class="text">选择本地目录</button></div><p id="local-directory" class="hint"></p></section>
-<section id="selection-section" hidden><div class="section-heading"><h2>选择要收集的内容</h2><button id="select-all" class="text">全选／清空</button></div><p id="selection-title"></p><div id="selection-list" class="selection-list"></div><div class="row"><button id="save-selected" class="primary">收集所选内容</button><button id="reread" class="secondary">登录后重新读取</button></div></section>
-<section id="accounts-section"><div class="section-heading"><h2>平台账号</h2><button id="check-accounts" class="text">检测登录资料</button></div><p id="accounts-feedback" class="hint" role="status" aria-live="polite" hidden></p><div id="accounts" class="accounts"></div>
-<div class="search-row"><input id="custom-site" placeholder="其他网站地址，如 https://example.com"><button id="login-site" class="secondary">打开登录</button></div><p id="accounts-help" class="hint">清理已完成任务不会清除网站登录。登录资料保存在本机收集浏览器中，重启后继续复用；检测到资料不代表登录仍有效，访问权限以实际读取为准。</p></section>
-<details><summary>组件、快捷键与高级设置</summary><p id="components" class="hint"></p><button id="prepare" class="secondary">检测并准备下载／压缩组件</button>
-<div class="options-grid advanced"><label>全局快捷键<input id="shortcut-input" placeholder="CommandOrControl+Shift+J"></label><label>浏览器调试端口<input id="browser-port" type="number" min="1024" max="65535"></label></div>
-<label>收集浏览器<div class="row"><input id="browser-path" readonly placeholder="自动检测 Chrome / Edge / Brave"><button id="choose-browser" class="secondary">选择</button></div></label>
-<label>浏览器登录资料目录<div class="row"><input id="browser-profile" readonly placeholder="默认使用 Switch Notion 的独立浏览器资料"><button id="choose-profile" class="secondary">选择</button><button id="reset-profile" class="text">默认</button></div></label><p class="hint">可选择以前 media-kit 使用的独立浏览器资料目录来复用登录；不要选择正在使用的普通 Chrome 默认资料目录。</p>
-<label>网络代理<input id="proxy" placeholder="可选：http://127.0.0.1:端口" spellcheck="false"></label><p class="hint">留空时沿用启动环境的 HTTP/HTTPS 代理。Windows 与 Apple Silicon Mac 共用设置，浏览器登录资料保存在当前电脑。</p><button id="save-advanced" class="secondary">保存高级设置</button></details>
-<label class="check history-setting"><input id="keep-history" type="checkbox">在本机保留已完成的收集历史</label><p class="hint">默认关闭。成功保存并核验后清理本机任务、临时文件与对应写入记录；正在处理和待补全内容保留恢复进度。Notion 和主动保留的本地副本不受影响。</p>
-<details id="tasks-section" hidden><summary id="tasks-summary">当前处理</summary><div class="section-heading"><span class="hint">仅显示处理中或需要继续的项目</span><select id="status-filter"><option value="all">全部</option><option value="active">处理中</option><option value="attention">待处理</option><option value="completed">已完成</option></select></div><input id="task-search" placeholder="搜索标题、来源或保存位置"><div id="tasks" class="tasks"></div></details>
-<footer>关闭窗口后继续处理。完成后到 Notion 查看，未完成内容可恢复。</footer>
-</div></main>
-<dialog id="prompt-dialog" aria-labelledby="prompt-title"><form id="prompt-form"><div class="dialog-heading"><div><span class="eyebrow">MINI SKILLS</span><h2 id="prompt-title">内容提取要求</h2></div><button id="prompt-close" type="button" class="icon" aria-label="关闭提取要求">×</button></div>
-<p class="dialog-intro">先保存原文、配图、媒体与逐字稿，再在页面最后追加独立的 AI / Skill 输出，不改写原始内容。</p>
-<label for="extraction-mode">本次及后续收集</label><select id="extraction-mode"><option value="auto">自动选择 · 文章 / 音视频</option><option value="article">固定使用 · 文章精读</option><option value="video">固定使用 · 音视频提取</option><option value="off">仅保存原文 · 不提取</option></select>
-<div class="prompt-tabs" role="tablist" aria-label="提取模板"><button id="tab-article" type="button" role="tab" aria-selected="true" aria-controls="prompt-editor">文章类</button><button id="tab-video" type="button" role="tab" aria-selected="false" aria-controls="prompt-editor">视频 / 音频类</button><button id="prompt-reset" type="button" class="text">恢复这份模板</button></div>
-<label id="prompt-label" for="prompt-editor">文章精读提示词 · 可自由修改</label><textarea id="prompt-editor" rows="13" maxlength="12000" spellcheck="false"></textarea>
-<p class="hint">正文、逐字稿和已开启的图片识别结果会交给 DeepSeek，关闭图片识别不影响正文与逐字稿提取。已开始的收集沿用提交时的模板。</p>
-<p id="prompt-error" role="status" hidden></p><div class="dialog-actions"><button id="prompt-cancel" type="button" class="secondary">取消</button><button id="prompt-save" type="submit" class="primary">保存并使用</button></div>
-</form></dialog></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Switch Notion · 快捷收集</title>
+  <link rel="stylesheet" href="collection.css"><script src="collection.js" defer></script>
+</head>
+<body>
+  <header><span class="brand" aria-hidden="true">↓</span><strong>快捷收集</strong><span id="shortcut" class="key"></span><button id="hide" class="icon" aria-label="收起窗口">×</button></header>
+  <main>
+    <form id="capture-form" class="capture-card">
+      <div class="capture-heading"><h1>收集到你的知识库</h1><span>网页、音视频与本地文件</span></div>
+      <label class="sr-only" for="links">网页链接或本地音视频路径</label>
+      <textarea id="links" rows="2" placeholder="粘贴链接或本地音视频路径，多项可分行输入…" spellcheck="false"></textarea>
+      <div class="destination-row"><span>保存到</span><button id="destination-pill" type="button" class="destination">选择工作区、数据库或页面 ⌄</button></div>
+      <div class="capture-actions"><div class="collect-group"><button type="submit" class="primary" id="collect">全部收集 ↵</button><button type="button" id="prompt-open" class="prompt-trigger" aria-haspopup="dialog" aria-controls="prompt-dialog">提取要求</button></div><button type="button" id="preview" class="secondary">识别后选择</button></div>
+    </form>
+    <div class="compact-footer"><span id="queue-state">支持网页链接和本地音视频路径</span><button id="expand" class="text" aria-expanded="false" aria-controls="expanded">展开选项 ⌄</button></div>
+    <div class="prompt-status"><button id="prompt-status" class="text">自动提取 · 文章 / 音视频</button><button id="last-result" class="text" hidden>打开刚保存的 Notion ↗</button></div>
+    <p id="message" role="status" hidden></p>
+
+    <div id="expanded" hidden>
+      <nav class="settings-tabs" role="tablist" aria-label="收集设置">
+        <button id="settings-tab-destination" type="button" role="tab" aria-selected="true" aria-controls="panel-destination" data-tab="destination">保存位置</button>
+        <button id="settings-tab-options" type="button" role="tab" aria-selected="false" aria-controls="panel-options" tabindex="-1" data-tab="options">处理选项</button>
+        <button id="settings-tab-accounts" type="button" role="tab" aria-selected="false" aria-controls="accounts-section" tabindex="-1" data-tab="accounts">平台账号</button>
+        <button id="settings-tab-advanced" type="button" role="tab" aria-selected="false" aria-controls="panel-advanced" tabindex="-1" data-tab="advanced">高级设置</button>
+      </nav>
+      <section id="panel-destination" class="panel" role="tabpanel" aria-labelledby="settings-tab-destination" data-panel="destination">
+        <div class="section-heading"><div><h2>保存位置</h2><p>选择工作区，再找到要保存的数据库或页面。</p></div><button id="connections" class="secondary">管理连接 ↗</button></div>
+        <label for="workspace">Notion 工作区</label>
+        <div class="row"><select id="workspace"><option value="">加载工作区…</option></select><button id="refresh-workspaces" class="secondary">刷新</button></div>
+        <label class="sr-only" for="destination-search">搜索保存位置</label>
+        <div class="search-row"><input id="destination-search" placeholder="搜索数据库、父页面，或粘贴 Notion 链接"><button id="search" class="secondary">搜索</button></div>
+        <div id="destinations" class="destinations" aria-label="搜索结果"></div><button id="more-destinations" class="secondary more-button" hidden>加载更多位置</button>
+        <div class="favorites-heading"><h3>常用位置</h3><button id="favorite" class="text" disabled>☆ 收藏当前位置</button></div>
+        <div id="favorites" class="favorites"></div>
+        <div class="destination-actions"><button id="default-destination" class="secondary" disabled>设为默认位置</button><button id="open-destination" class="secondary" disabled>打开保存位置 ↗</button><button id="create-library" class="secondary" disabled>新建收集库</button></div>
+        <p class="hint">新建收集库前，请先选中一个父页面。</p>
+      </section>
+      <section id="panel-options" class="panel" role="tabpanel" aria-labelledby="settings-tab-options" data-panel="options" hidden>
+        <div class="section-heading"><div><h2>本次处理选项</h2><p>按需要开启处理，下一次收集即可使用。</p></div></div>
+        <div class="options-grid">
+          <label class="option-card"><span><strong>生成语音逐字稿</strong><small>在本机将音视频转为文字</small></span><input id="transcribe" type="checkbox" checked></label>
+          <label class="option-card"><span><strong>图片与画面识别</strong><small>使用 DeepSeek 分析图片及视频关键帧</small></span><input id="vision" type="checkbox" checked></label>
+          <label class="option-card"><span><strong>压缩视频</strong><small>减小文件体积，保留完整时长</small></span><input id="compress" type="checkbox" checked></label>
+          <label class="option-card"><span><strong>保留本地副本</strong><small>同时保留原始文件和处理结果</small></span><input id="keepLocal" type="checkbox"></label>
+        </div>
+        <div class="setting-group"><h3>画质与内容</h3><div class="options-grid">
+          <label>压缩画质<select id="quality"><option value="720p">清晰优先 · 720p</option><option value="1080p">更清晰 · 1080p</option><option value="original">保留原始分辨率</option></select></label>
+          <div><span class="label">收集类型</span><div id="type-options" class="type-options"><label><input type="checkbox" value="text" checked>正文</label><label><input type="checkbox" value="image" checked>图片</label><label><input type="checkbox" value="video" checked>视频</label><label><input type="checkbox" value="audio" checked>音频</label></div></div>
+        </div><p class="hint">识别图片与画面时会发送到已配置的 DeepSeek 模型，分析单独保存，原文保持原样。</p></div>
+        <div class="setting-group"><h3>本地保存</h3><p id="local-directory" class="path-hint"></p><div class="action-row"><button id="choose-directory" class="secondary">选择保存目录</button><button id="open-downloads" class="secondary">打开下载文件夹 ↗</button></div></div>
+        <div class="panel-footer"><span class="hint">想让以后都按这些选项处理？</span><button id="save-defaults" class="primary">保存为默认选项</button></div>
+      </section>
+      <section id="accounts-section" class="panel" role="tabpanel" aria-labelledby="settings-tab-accounts" data-panel="accounts" hidden>
+        <div class="section-heading"><div><h2>平台账号</h2><p>不用提前登录，收集时会检查内容是否可访问。</p></div><button id="check-accounts" class="secondary">检测登录状态</button></div>
+        <div id="accounts" class="accounts"></div>
+        <div class="setting-group"><label for="custom-site">其他网站</label><div class="row"><input id="custom-site" placeholder="输入网站地址，如 https://example.com"><button id="login-site" class="secondary">打开网站 ↗</button></div></div>
+        <p id="accounts-feedback" class="feedback" role="status" aria-live="polite" hidden></p>
+        <p id="accounts-help" class="hint">登录保存在本机，清理任务不会清除登录。可直接收集，需要登录时会提示。</p>
+      </section>
+      <section id="panel-advanced" class="panel" role="tabpanel" aria-labelledby="settings-tab-advanced" data-panel="advanced" hidden>
+        <div class="section-heading"><div><h2>高级设置</h2><p>浏览器、快捷键和组件，按需调整即可。</p></div></div>
+        <div class="setting-group first-group"><h3>浏览器与登录资料</h3>
+          <label for="browser-path">收集浏览器</label><div class="row"><input id="browser-path" readonly placeholder="自动检测 Chrome / Edge / Brave"><button id="choose-browser" class="secondary">选择浏览器</button></div>
+          <label class="spaced-label" for="browser-profile">登录资料目录</label><div class="row"><input id="browser-profile" readonly placeholder="使用独立浏览器资料，登录后会保留"><button id="choose-profile" class="secondary">选择目录</button><button id="reset-profile" class="secondary">恢复默认</button></div>
+          <p class="hint">可复用以前 media-kit 的独立资料目录；请选择独立目录，避免与正在使用的日常浏览器冲突。</p>
+        </div>
+        <div class="setting-group"><h3>快捷键与网络</h3><div class="options-grid"><label>全局快捷键<input id="shortcut-input" placeholder="CommandOrControl+Shift+J"></label><label>浏览器调试端口<input id="browser-port" type="number" min="1024" max="65535"></label></div>
+          <label class="spaced-label" for="proxy">网络代理 <span class="optional">可选</span></label><input id="proxy" placeholder="http://127.0.0.1:端口" spellcheck="false"><p class="hint">留空时使用启动环境中的代理配置。</p>
+          <div class="action-row"><button id="save-advanced" class="primary">保存高级设置</button></div>
+        </div>
+        <div class="setting-group component-row"><div><h3>下载与媒体组件</h3><p id="components" class="hint"></p></div><button id="prepare" class="secondary">检测并准备组件</button></div>
+        <div class="setting-group"><label class="option-card history-setting"><span><strong>保留已完成的收集历史</strong><small>关闭时只保留处理中和需要补全的任务</small></span><input id="keep-history" type="checkbox"></label><p class="hint">清理本机历史不影响 Notion 内容、主动保留的副本或网站登录。</p></div>
+      </section>
+      <section id="selection-section" class="panel" hidden><div class="section-heading"><div><h2>选择要收集的内容</h2><p>点击整行即可勾选。</p></div><button id="select-all" class="secondary">全选／清空</button></div><p id="selection-title"></p><div id="selection-list" class="selection-list"></div><div class="action-row"><button id="save-selected" class="primary">收集所选内容</button><button id="reread" class="secondary">登录后重新读取</button></div></section>
+      <details id="tasks-section" class="panel tasks-panel" hidden><summary id="tasks-summary">当前任务</summary><div class="section-heading task-filters"><label class="sr-only" for="task-search">搜索收集任务</label><input id="task-search" placeholder="搜索标题、来源或保存位置"><label class="sr-only" for="status-filter">任务状态</label><select id="status-filter"><option value="all">全部状态</option><option value="active">处理中</option><option value="attention">待处理</option><option value="completed">已完成</option></select></div><div id="tasks" class="tasks"></div></details>
+      <footer>关闭窗口后继续在后台处理 · 未完成的内容可随时恢复</footer>
+    </div>
+  </main>
+  <dialog id="prompt-dialog" aria-labelledby="prompt-title"><form id="prompt-form">
+    <div class="dialog-heading"><div><span class="eyebrow">内容提取</span><h2 id="prompt-title">告诉 AI 你想留下什么</h2></div><button id="prompt-close" type="button" class="icon" aria-label="关闭提取要求">×</button></div>
+    <p class="dialog-intro">先保存原文与媒体，再在文末追加独立的 AI 提取结果。</p>
+    <label for="extraction-mode">提取方式</label><select id="extraction-mode"><option value="auto">自动选择 · 文章 / 音视频</option><option value="article">固定使用 · 文章精读</option><option value="video">固定使用 · 音视频提取</option><option value="off">仅保存原文 · 不提取</option></select>
+    <div class="prompt-tabs" role="tablist" aria-label="提取模板"><button id="tab-article" type="button" role="tab" aria-selected="true" aria-controls="prompt-editor">文章类</button><button id="tab-video" type="button" role="tab" aria-selected="false" aria-controls="prompt-editor">视频 / 音频类</button><button id="prompt-reset" type="button" class="text">恢复这份模板</button></div>
+    <label id="prompt-label" for="prompt-editor">文章精读提示词 · 可自由修改</label><textarea id="prompt-editor" rows="10" maxlength="12000" spellcheck="false"></textarea>
+    <p class="hint">已开始的收集使用提交时的模板；修改后对下一次收集生效。</p><p id="prompt-error" role="status" hidden></p>
+    <div class="dialog-actions"><button id="prompt-cancel" type="button" class="secondary">取消</button><button id="prompt-save" type="submit" class="primary">保存并使用</button></div>
+  </form></dialog>
+  <dialog id="wechat-help" aria-labelledby="wechat-help-title">
+    <div class="dialog-heading"><h2 id="wechat-help-title">微信视频号怎么收集？</h2><button id="wechat-help-close" class="icon" aria-label="关闭视频号说明">×</button></div>
+    <ol class="help-steps"><li><strong>在微信里复制分享链接</strong><p>将公开视频号的分享链接粘贴到上方输入框，然后开始收集。</p></li><li><strong>收集时检查是否可读取</strong><p>当前收集器不做视频号网页登录检测。能否读取，以这条分享链接的实际结果为准；只允许微信内查看的内容可能无法取得。</p></li><li><strong>仅在提示授权时打开腾讯元宝</strong><p>当前解析流程借助腾讯元宝的分享链接接口。元宝是单独的腾讯 AI 网站，并非视频号登录页；登录元宝也不等于视频号内容一定可下载。</p></li></ol>
+    <div class="dialog-actions"><button id="wechat-yuanbao" class="secondary">打开腾讯元宝（解析授权）↗</button><button id="wechat-help-done" class="primary">知道了</button></div>
+  </dialog>
+</body>
+</html>

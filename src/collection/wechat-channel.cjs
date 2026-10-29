@@ -33,7 +33,7 @@ class WechatChannel {
     if (!exportId || !token) {
       const response = await this.requestJson({ origin: 'https://yuanbao.tencent.com', entryUrl: 'https://yuanbao.tencent.com/',
         endpoint: '/api/weixin/get_parse_result', body: { type: 'video_channel_url', url: source, scene: 1 } }, { signal });
-      if ([401, 403].includes(response.status) || [401, 403].includes(Number(response.data?.code))) throw failure('微信分享解析需要腾讯网页会话，请在“平台账号”的微信视频号入口登录后重试。', true);
+      if ([401, 403].includes(response.status) || [401, 403].includes(Number(response.data?.code))) throw failure('此分享链接解析需要腾讯元宝授权。请查看“平台账号 → 微信视频号 → 使用说明”，按需登录腾讯元宝后重试；元宝并非视频号登录页。', true);
       if (!successful(response.status) || response.data?.code !== 0 || !response.data.data?.playable_url) throw failure('微信分享链接尚未解析成功，请确认分享仍有效并重试。');
       parsed = response.data.data; playable = new URL(httpsUrl(parsed.playable_url));
       if (playable.hostname !== 'channels.weixin.qq.com' || !/^\/finder-preview\/pages\/(?:feed|sph)$/.test(playable.pathname)) throw failure('微信解析返回了未知页面，未继续访问。');
@@ -42,7 +42,7 @@ class WechatChannel {
     if (!exportId || !token || exportId.length > 8192 || token.length > 8192) throw failure('微信分享链接没有返回完整的视频访问参数。');
     const response = await this.requestJson({ origin: 'https://channels.weixin.qq.com', entryUrl: playable.href,
       endpoint: '/finder-preview/api/feed/get_feed_info', body: { baseReq: { generalToken: token }, exportId } }, { signal });
-    if ([401, 403].includes(response.status)) throw failure('微信视频详情需要有效网页会话，请在微信视频号入口登录后重试。', true);
+    if ([401, 403].includes(response.status)) throw failure('此视频号链接的网页访问已失效或无权访问。请在微信中确认可见并重新复制分享链接；仅微信内可看的内容不保证能收集。', true);
     const data = response.data, info = data?.data?.feedInfo, author = data?.data?.authorInfo;
     if (!successful(response.status) || data?.errCode !== 0 || !info) throw failure('微信没有返回可访问的视频详情，请检查链接和账号权限。');
     const videoUrl = info.originVideoUrl || info.fullUrl || info.videoUrl || info.h264VideoInfo?.videoUrl || info.h265VideoInfo?.videoUrl;

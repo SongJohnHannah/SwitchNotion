@@ -1,6 +1,6 @@
 'use strict';
 const api = window.collection, $ = id => document.getElementById(id);
-let state, chosen, expanded = false, selectedJob, destinationResults = [], cursors = {}, searchTimer, refreshTimer, searchVersion = 0, promptDraft, promptTab = 'article', checkingAccounts = false;
+let state, chosen, expanded = false, activePanel = 'destination', selectedJob, destinationResults = [], cursors = {}, searchTimer, refreshTimer, searchVersion = 0, promptDraft, promptTab = 'article', checkingAccounts = false;
 const names = { paragraph: '正文', heading: '标题', quote: '引用', list: '列表', code: '代码', divider: '分隔', link: '链接', image: '图片', video: '视频', audio: '音频' };
 const statuses = { queued: '等待中', reading: '识别中', downloading: '下载中', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需登录／检查完整性', completed: '已保存', partial: '待补全', failed: '失败', cancelled: '已停止', interrupted: '可继续' };
 const active = ['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving'];
@@ -8,7 +8,13 @@ const element = (tag, cls, text) => { const node = document.createElement(tag); 
 function message(text, error = false) { $('message').textContent = text || ''; $('message').hidden = !text; $('message').classList.toggle('error', error); }
 async function request(action, input) { const response = await api.request(action, input); if (!response.ok) { message(response.error, true); throw Error(response.error); } return response.result; }
 function button(label, callback, cls = 'text') { const b = element('button', cls, label); b.type = 'button'; b.addEventListener('click', () => Promise.resolve().then(callback).catch(() => {})); return b; }
-function setExpanded(value) { expanded = value; $('expanded').hidden = !value; $('expand').textContent = value ? '收起选项 ⌃' : '展开选项 ⌄'; void api.request('expand', { expanded: value }); if (value) void loadWorkspaces().catch(() => {}); }
+function setExpanded(value) { expanded = value; $('expanded').hidden = !value; $('expand').textContent = value ? '收起选项 ⌃' : '展开选项 ⌄'; $('expand').setAttribute('aria-expanded', String(value)); void api.request('expand', { expanded: value }); if (value && activePanel === 'destination') void loadWorkspaces().catch(() => {}); }
+function setPanel(name, focus = false) {
+  activePanel = name;
+  for (const tab of document.querySelectorAll('[data-tab]')) { const current = tab.dataset.tab === name; tab.setAttribute('aria-selected', String(current)); tab.tabIndex = current ? 0 : -1; if (current && focus) tab.focus(); }
+  for (const panel of document.querySelectorAll('[data-panel]')) panel.hidden = panel.dataset.panel !== name;
+  if (expanded && name === 'destination') void loadWorkspaces().catch(() => {});
+}
 function readOptions() {
   return { transcribe: $('transcribe').checked, vision: $('vision').checked, compress: $('compress').checked, keepLocal: $('keepLocal').checked,
     quality: $('quality').value, types: [...$('type-options').querySelectorAll('input:checked')].map(i => i.value), destination: chosen, extraction: state.settings.extraction };
@@ -47,13 +53,41 @@ async function searchDestinations(more = false) {
   cursors = result.cursors; destinationResults = more ? [...destinationResults, ...result.results] : result.results;
   const list = $('destinations'); list.replaceChildren();
   if (!destinationResults.length) list.append(element('p', 'hint', '没有找到已授权位置。请在 Notion 目标页面中添加对应连接。'));
-  for (const item of destinationResults) { const b = button((item.kind === 'database' ? '▦  ' : '▤  ') + item.label, () => choose(item), 'destination-item' + (chosen?.id === item.id && chosen?.workspaceId === item.workspaceId ? ' selected' : '')); b.append(element('small', '', item.kind === 'database' ? '数据库' : '父页面')); list.append(b); }
+  for (const item of destinationResults) {
+    const b = button('', () => choose(item), 'destination-item');
+    b.dataset.id = item.id; b.dataset.workspaceId = item.workspaceId;
+    const indicator = element('span', 'destination-selected', '✓ 已选中'); indicator.setAttribute('aria-hidden', 'true');
+    b.append(element('span', 'destination-label', (item.kind === 'database' ? '▦  ' : '▤  ') + item.label), element('small', '', item.kind === 'database' ? '数据库' : '父页面'), indicator); list.append(b);
+  }
+  updateDestinationSelection();
   $('more-destinations').hidden = !result.hasMore;
 }
-function choose(item) { chosen = item; $('destination-pill').textContent = item.workspaceName + ' / ' + item.label + ' ⌄'; void refresh().catch(() => {}); }
-function renderFavorites() { const root = $('favorites'); root.replaceChildren(); for (const item of state.settings.favorites) root.append(button('★ ' + item.workspaceName + ' / ' + item.label, () => choose(item), 'favorite-chip')); }
+function updateDestinationSelection() {
+  for (const node of document.querySelectorAll('.destination-item, .favorite-chip')) {
+    const selected = node.dataset.id === chosen?.id && node.dataset.workspaceId === chosen?.workspaceId;
+    node.classList.toggle('selected', selected); node.setAttribute('aria-pressed', String(selected));
+    const indicator = node.querySelector('.destination-selected'); if (indicator) indicator.hidden = !selected;
+    const check = node.querySelector('.favorite-check'); if (check) check.hidden = !selected;
+  }
+  for (const id of ['favorite', 'default-destination', 'open-destination']) $(id).disabled = !chosen;
+  $('create-library').disabled = !chosen || chosen.kind !== 'page' || chosen.workspaceId !== $('workspace').value;
+  const favorite = state?.settings.favorites.some(item => item.id === chosen?.id && item.workspaceId === chosen?.workspaceId);
+  $('favorite').textContent = favorite ? '★ 已收藏 · 点击取消' : '☆ 收藏当前位置';
+}
+function choose(item) { chosen = item; $('destination-pill').textContent = item.workspaceName + ' / ' + item.label + ' ⌄'; updateDestinationSelection(); void refresh().catch(() => {}); }
+function renderFavorites() {
+  const root = $('favorites'); root.replaceChildren();
+  if (!state.settings.favorites.length) root.append(element('div', 'favorites-empty', '收藏常用位置，下次点击卡片即可切换。'));
+  for (const item of state.settings.favorites) {
+    const b = button('', () => choose(item), 'favorite-chip'), copy = element('span', 'favorite-copy'), check = element('span', 'favorite-check', '✓');
+    b.dataset.id = item.id; b.dataset.workspaceId = item.workspaceId; check.setAttribute('aria-hidden', 'true');
+    const star = element('span', 'favorite-star', '★'); star.setAttribute('aria-hidden', 'true');
+    copy.append(element('strong', '', item.label), element('small', '', item.workspaceName)); b.append(star, copy, check); root.append(b);
+  }
+  updateDestinationSelection();
+}
 async function submit(preview) {
-  if (!preview && !chosen) { setExpanded(true); message('请先搜索并选择保存位置。', true); return; }
+  if (!preview && !chosen) { setPanel('destination'); setExpanded(true); message('请先搜索并选择保存位置。', true); return; }
   const result = await request('create', { input: $('links').value, options: readOptions(), preview });
   const pending = result.jobs.filter(job => job.status !== 'completed');
   const waiting = pending.find(job => ['awaiting_selection', 'needs_login'].includes(job.status));
@@ -100,32 +134,58 @@ function renderTasks() {
     card.append(actions); root.append(card);
   }
 }
-async function accounts() {
+async function accounts(verify = false) {
   if (checkingAccounts) return;
   checkingAccounts = true;
   const control = $('check-accounts'), feedback = $('accounts-feedback'), root = $('accounts');
-  control.disabled = true; control.textContent = '检测中…'; root.setAttribute('aria-busy', 'true'); root.replaceChildren();
-  feedback.hidden = false; feedback.classList.remove('error'); feedback.textContent = '正在检测本机收集浏览器中的登录资料…';
+  if (verify) message('');
+  control.disabled = true; control.textContent = '检测中…'; root.setAttribute('aria-busy', 'true');
+  if (verify) for (const node of root.querySelectorAll('.account:not(.wechat)')) {
+    node.classList.remove('valid', 'missing'); node.classList.add('checking');
+    node.querySelector('.account-status').replaceChildren(element('span', 'status-dot'), document.createTextNode('正在检测…'));
+    const note = node.querySelector('.account-note'); if (note) note.hidden = true;
+  }
+  feedback.hidden = false; feedback.classList.remove('error'); feedback.textContent = verify ? '正在检测网站登录状态，可继续收集，无需等待…' : '正在准备平台列表…';
   try {
-    const data = await request('accounts');
+    const data = await request('accounts', { verify });
+    root.replaceChildren();
     for (const site of data) {
-      const node = element('div', 'account ' + site.state), status = element('small', '', site.state === 'saved' ? '本机有资料 · 未验证' : site.state === 'missing' ? '未发现登录资料' : '未能检测');
-      status.title = site.message || '是否可访问完整内容，以实际读取结果为准。';
-      node.append(element('span', '', site.name), status, button(site.state === 'missing' ? '去登录' : '打开网站', async () => {
+      const wechat = site.id === 'wechat', node = element('div', 'account ' + site.state + (wechat ? ' wechat' : '')), copy = element('div', 'account-copy');
+      const icons = { douyin: '♪', xiaohongshu: '红', bilibili: 'B', tiktok: '♪', youtube: '▶', x: 'X', wechat: '微' };
+      const icon = element('span', 'account-icon ' + site.id, icons[site.id] || '↗'); icon.setAttribute('aria-hidden', 'true');
+      const labels = { valid: '登录有效', missing: '需要登录', saved: '收集时检查', deferred: '收集时检查', unknown: /超时|连接|启动/.test(site.message || '') ? '连接未完成' : /安全验证/.test(site.message || '') ? '需安全验证' : '暂未确认', link: '分享时检查' };
+      const status = element('div', 'account-status'); status.title = site.message || '访问权限以实际读取结果为准。';
+      status.append(element('span', 'status-dot'), document.createTextNode(wechat ? labels.link : labels[site.state] || labels.deferred));
+      copy.append(element('div', 'account-name', site.name), status);
+      if (wechat) copy.append(element('div', 'account-note', '复制微信分享链接后，直接收集即可尝试。'));
+      const action = button(wechat ? '使用说明' : site.state === 'missing' ? '去登录' : '打开 ↗', async () => {
+        if (wechat) { $('wechat-help').showModal(); return; }
         try { const result = await request('login', { site: site.id }); feedback.classList.remove('error'); feedback.textContent = result.message; message(result.message); }
         catch (error) { feedback.classList.add('error'); feedback.textContent = '网站未能打开：' + error.message; }
-      })); root.append(node);
+      });
+      if (!wechat) { action.title = '在收集浏览器中打开' + site.name; action.setAttribute('aria-label', '打开' + site.name + '网站'); }
+      node.append(icon, copy, action); root.append(node);
     }
-    const unknown = data.filter(site => site.state === 'unknown'), saved = data.filter(site => site.state === 'saved').length;
-    feedback.textContent = '检测完成 · ' + new Date().toLocaleTimeString('zh-CN', { hour12: false }) + ' · ' + saved + ' 个网站有本机资料，登录有效性未验证。' + (unknown.length ? ' ' + [...new Set(unknown.map(site => site.message || '部分网站未能检测，请重试。'))].join('；') : '');
+    const unknown = data.filter(site => site.state === 'unknown'), valid = data.filter(site => site.state === 'valid').length;
+    feedback.textContent = verify ? '检测完成 · ' + new Date().toLocaleTimeString('zh-CN', { hour12: false }) + ' · ' + valid + ' 个已确认' + (unknown.length ? '，' + unknown.length + ' 个待确认。' : '。') : '可直接收集，需要登录时会提示。';
   } catch (error) { root.replaceChildren(); feedback.classList.add('error'); feedback.textContent = '检测未完成：' + error.message; }
-  finally { checkingAccounts = false; control.disabled = false; control.textContent = '检测登录资料'; root.setAttribute('aria-busy', 'false'); }
+  finally { checkingAccounts = false; control.disabled = false; control.textContent = '检测登录状态'; root.setAttribute('aria-busy', 'false'); }
 }
 $('capture-form').addEventListener('submit', event => { event.preventDefault(); void submit(false).catch(() => {}); });
 $('links').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void submit(false).catch(() => {}); } });
 $('preview').addEventListener('click', () => void submit(true).catch(() => {}));
-$('expand').addEventListener('click', () => setExpanded(!expanded)); $('destination-pill').addEventListener('click', () => setExpanded(true)); $('hide').addEventListener('click', () => api.request('hide'));
-document.addEventListener('keydown', event => { if (event.key === 'Escape' && !$('prompt-dialog').open) api.request('hide'); });
+$('expand').addEventListener('click', () => setExpanded(!expanded)); $('destination-pill').addEventListener('click', () => { setPanel('destination'); setExpanded(true); }); $('hide').addEventListener('click', () => api.request('hide'));
+for (const tab of document.querySelectorAll('[data-tab]')) {
+  tab.addEventListener('click', () => setPanel(tab.dataset.tab));
+  tab.addEventListener('keydown', event => {
+    const tabs = [...document.querySelectorAll('[data-tab]')], index = tabs.indexOf(tab);
+    const next = { ArrowRight: (index + 1) % tabs.length, ArrowLeft: (index + tabs.length - 1) % tabs.length, Home: 0, End: tabs.length - 1 }[event.key];
+    if (next !== undefined) { event.preventDefault(); setPanel(tabs[next].dataset.tab, true); }
+  });
+}
+for (const id of ['wechat-help-close', 'wechat-help-done']) $(id).addEventListener('click', () => $('wechat-help').close());
+$('wechat-yuanbao').addEventListener('click', () => void request('login', { site: 'wechat' }).then(result => { $('wechat-help').close(); message(result.message); }).catch(() => {}));
+document.addEventListener('keydown', event => { if (event.key === 'Escape' && !document.querySelector('dialog[open]')) api.request('hide'); });
 function editPromptTab(kind) {
   if (promptDraft) promptDraft[promptTab] = $('prompt-editor').value;
   promptTab = kind; $('prompt-editor').value = promptDraft[kind]; $('prompt-editor').scrollTop = 0;
@@ -174,7 +234,7 @@ $('choose-profile').addEventListener('click', () => void request('profile').then
 $('reset-profile').addEventListener('click', () => { $('browser-profile').value = ''; });
 $('save-advanced').addEventListener('click', () => void request('configure', { settings: { shortcut: $('shortcut-input').value, browserPort: Number($('browser-port').value), browserExecutable: $('browser-path').value, browserProfile: $('browser-profile').value, proxy: $('proxy').value.trim() } }).then(refresh).catch(() => {}));
 $('prepare').addEventListener('click', () => void request('prepare').then(result => { message(result.message); return refresh(); }).catch(() => {}));
-$('check-accounts').addEventListener('click', () => void accounts().catch(() => {})); $('login-site').addEventListener('click', () => void request('login', { site: $('custom-site').value.trim() }).then(r => message(r.message)).catch(() => {}));
+$('check-accounts').addEventListener('click', () => void accounts(true).catch(() => {})); $('login-site').addEventListener('click', () => void request('login', { site: $('custom-site').value.trim() }).then(r => message(r.message)).catch(() => {}));
 $('select-all').addEventListener('click', () => { const inputs = [...$('selection-list').querySelectorAll('input:not(:disabled)')], all = inputs.every(i => i.checked); inputs.forEach(i => { i.checked = !all; }); });
 $('save-selected').addEventListener('click', () => void request('select', { id: selectedJob, ids: [...$('selection-list').querySelectorAll('input:checked')].map(i => i.value), options: readOptions(), allowPartial: true }).then(refresh).catch(() => {}));
 $('reread').addEventListener('click', () => void request('reread', { id: selectedJob }).then(refresh).catch(() => {}));

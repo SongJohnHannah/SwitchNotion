@@ -30,7 +30,7 @@ try {
   assert.equal(doc.nodes[1].spans.find(s => s.href).href, 'https://example.com/reference');
   const workspaceId = '11111111-1111-4111-8111-111111111111', id = '22222222-2222-4222-8222-222222222222';
   const destination = { workspaceId, id, kind: 'database', dataSourceId: '33333333-3333-4333-8333-333333333333', workspaceName: 'openClaw', label: '资料收集' };
-  const fixture = { settings: preferences({ destination }), promptTemplates: templates, active: 1, binaries: { downloader: true, ffmpeg: true }, jobs: [
+  const fixture = { settings: preferences({ destination, favorites: [destination, { ...destination, id: '44444444-4444-4444-8444-444444444444', label: '视频笔记', kind: 'page' }] }), promptTemplates: templates, active: 1, binaries: { downloader: true, ffmpeg: true }, jobs: [
     { id: 'pending-fixture', title: 'B站 · 产品设计入门', url: 'https://www.bilibili.com/video/BVfixture', status: 'processing', message: '正在生成逐字稿：3 / 5 分钟', createdAt: new Date().toISOString(), options: preferences({ destination }) },
   ] };
   await page.addInitScript(data => {
@@ -41,7 +41,7 @@ try {
       if (action === 'state') result = window._collectionFixture;
       if (action === 'workspaces') result = { workspaces: [{ id: data.settings.destination.workspaceId, name: 'openClaw' }], unavailable: [] };
       if (action === 'destinations') result = { results: [data.settings.destination, { ...data.settings.destination, id: '44444444-4444-4444-8444-444444444444', label: '视频笔记', kind: 'page' }], cursors: {}, hasMore: false };
-      if (action === 'accounts') result = [{ id: 'douyin', name: '抖音', state: 'saved' }, { id: 'bilibili', name: 'B站', state: 'saved' }, { id: 'youtube', name: 'YouTube', state: 'missing' }];
+      if (action === 'accounts') result = [{ id: 'douyin', name: '抖音', state: 'valid' }, { id: 'xiaohongshu', name: '小红书', state: 'valid' }, { id: 'bilibili', name: 'B站', state: 'missing' }, { id: 'youtube', name: 'YouTube', state: 'deferred' }, { id: 'tiktok', name: 'TikTok', state: 'unknown', message: '网络暂时不可用，可在收集时继续检查。' }, { id: 'x', name: 'X', state: 'deferred' }, { id: 'wechat', name: '微信视频号', state: 'link' }];
       if (action === 'create') {
         const page = { id: data.settings.destination.id };
         result = data.duplicate ? { jobs: [{ id: 'completed-fixture', status: 'completed', existing: true, page }] } : { jobs: [{ id: 'created-fixture' }] };
@@ -51,13 +51,13 @@ try {
       return { ok: true, result };
     }, onShow: callback => { window._showCollection = callback; }, onChange: callback => { window._changeCollection = callback; } };
   }, fixture);
-  await page.setViewportSize({ width: 720, height: 368 });
+  await page.setViewportSize({ width: 580, height: 368 });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(pathToFileURL(path.join(project, 'src/collection/ui/index.html')).href);
   await page.getByText('openClaw / 资料收集 ⌄', { exact: true }).waitFor();
   await page.screenshot({ path: path.join(output, 'compact.png') });
   assert.equal(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight), true, 'compact window must not scroll at its default size');
-  await page.locator('#prompt-open').click(); await page.setViewportSize({ width: 820, height: 818 });
+  await page.locator('#prompt-open').click(); await page.setViewportSize({ width: 620, height: 768 });
   await page.locator('#prompt-dialog').waitFor({ state: 'visible' });
   await page.screenshot({ path: path.join(output, 'prompts.png') });
   await page.locator('#prompt-editor').fill('# 文章模板\n只提取原文支持的操作步骤');
@@ -67,10 +67,28 @@ try {
   await page.locator('#tab-article').click(); assert.ok((await page.locator('#prompt-editor').inputValue()).includes('操作步骤'));
   await page.locator('#prompt-save').click(); await page.locator('#prompt-dialog').waitFor({ state: 'hidden' });
   assert.ok((await page.evaluate(() => window._collectionFixture.settings.extraction.video)).includes('不编造画面'));
-  await page.locator('#expand').click(); await page.setViewportSize({ width: 820, height: 818 });
+  await page.locator('#expand').click(); await page.setViewportSize({ width: 620, height: 768 });
   await page.locator('.destination-item').first().waitFor();
+  await page.locator('#settings-tab-destination').focus(); await page.keyboard.press('ArrowRight');
+  assert.equal(await page.locator('#settings-tab-options').getAttribute('aria-selected'), 'true');
+  await page.keyboard.press('End'); assert.equal(await page.locator('#settings-tab-advanced').getAttribute('aria-selected'), 'true');
+  await page.keyboard.press('Home'); assert.equal(await page.locator('#settings-tab-destination').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('.destination-item').first().getAttribute('aria-pressed'), 'true');
+  await page.locator('.destination-item').nth(1).click();
+  assert.equal(await page.locator('.destination-item').nth(1).getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('.destination-item').first().getAttribute('aria-pressed'), 'false');
+  await page.locator('.favorite-chip').first().click();
+  assert.equal(await page.locator('.destination-item').first().getAttribute('aria-pressed'), 'true');
   await page.screenshot({ path: path.join(output, 'expanded.png'), fullPage: true });
-  await page.locator('#vision').uncheck(); await page.locator('#links').fill('https://example.com/article\nC:\\媒体资料\\本地视频.mp4'); await page.locator('#collect').click();
+  for (const name of ['options', 'accounts', 'advanced']) {
+    await page.locator('#settings-tab-' + name).click();
+    assert.equal(await page.locator('[data-panel]:visible').count(), 1);
+    await page.screenshot({ path: path.join(output, name + '.png'), fullPage: true });
+  }
+  await page.locator('#settings-tab-options').click();
+  await page.locator('label').filter({ has: page.locator('#vision') }).click();
+  assert.equal(await page.locator('#vision').isChecked(), false, 'The entire option card must be clickable');
+  await page.locator('#links').fill('https://example.com/article\nC:\\媒体资料\\本地视频.mp4'); await page.locator('#collect').click();
   const calls = await page.evaluate(() => window._collectionCalls);
   assert.equal(calls.find(c => c.action === 'create').input.options.vision, false);
   assert.ok(calls.find(c => c.action === 'create').input.input.includes('本地视频.mp4'));
@@ -83,6 +101,13 @@ try {
   await page.locator('#last-result').waitFor({ state: 'visible' });
   await page.evaluate(() => { window._collectionFixture.jobs = []; window._changeCollection(); });
   await page.locator('#tasks-section').waitFor({ state: 'hidden' });
-  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ extractor: { nodes: doc.nodes.length, fullTextCharacters: doc.nodes.at(-1).text.length, orderVerified: true }, renderer: { errors, perTaskVisionOverride: true, editableTemplates: true, mixedLocalInput: true, emptyHistoryHidden: true }, screenshots: ['compact.png', 'prompts.png', 'expanded.png'] }, null, 2));
+  for (const width of [480, 580, 620, 820]) {
+    await page.setViewportSize({ width, height: 818 });
+    for (const name of ['destination', 'options', 'accounts', 'advanced']) {
+      await page.locator('#settings-tab-' + name).click();
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, name + ' must fit the window at ' + width + 'px');
+    }
+  }
+  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ extractor: { nodes: doc.nodes.length, fullTextCharacters: doc.nodes.at(-1).text.length, orderVerified: true }, renderer: { errors, perTaskVisionOverride: true, editableTemplates: true, mixedLocalInput: true, emptyHistoryHidden: true, destinationAndFavoriteSelection: true, keyboardTabs: true, fullCardCheckboxes: true, responsiveWidths: [480, 580, 620, 820] }, screenshots: ['compact.png', 'prompts.png', 'expanded.png', 'options.png', 'accounts.png', 'advanced.png'] }, null, 2));
   console.log('Collection browser extraction and UI checks passed. Screenshots: ' + output);
 } finally { await browser.close(); }
