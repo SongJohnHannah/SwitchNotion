@@ -116,6 +116,16 @@
 
 真实页面标识、下载路径和完整结果仅保存在忽略目录：`new-main-collection-result.local.json`、`new-main-collection-live.log`、`new-main-fixtures/sampling-result.json`、`new-main-20261029-final-regression.log`。新公共脚本仅缓存于 `research/.public-assets/`，不随提交分发。
 
+## 双击应用入口补验（同步 ad06c4e 后）
+
+同一个 `main` 合并账号检测及紧凑收集框的新提交 `4d86073`、`ad06c4e`，保留此前本地 Mac 提交。检查 `/Applications/SwitchNotion.app`，确认其为本项目的原生源码启动器，项目路径仍指向当前文件夹。
+
+更新后的首次启动曾出现进程就绪但没有窗口，随后由原有健康检查终止；从现有 CLI 重试可恢复。检查发现原生安装入口同步 `waitUntilExit`，没有运行 Cocoa 事件循环。本次仅改 `scripts/macos-app-launcher.m`：通过任务完成回调保留退出状态，等待期间运行 Cocoa 事件循环，并在子进程结束后停止、唤醒并退出循环。没有提高健康检查超时，也没有修改 Windows 或共用启动检查。
+
+用原安装脚本重新编译、签名并刷新本机应用入口，签名校验通过。完全退出隔离实例，备份运行缓存元数据后使适配器缓存失效，以模拟首次更新；再通过系统应用启动入口运行已安装应用。实际完成运行副本重建，新的隔离进程出现窗口，`pendingValidation=false`，安装入口日志记录 `launched=true`，没有启动超时。随后原生菜单可打开新提交的紧凑快捷收集框。此结果验证源码安装入口，无需额外制作分发 ZIP；后续普通代码更新沿用现有入口，此次原生启动器修复须重新运行安装脚本刷新一次，本机已经完成。
+
+Mac 启动、Mac 分发及新增账号状态三个现有测试文件共 23 项：22 通过、1 项可选官方缓存检查跳过、0 失败。详细日志在忽略目录 `double-click-launch-20261029-tests.log`。Notion 在线页面在补验中仍返回连接错误，刷新后未恢复，不能据本地窗口启动通过宣称在线页面或新增账号登录完整链路通过；本轮没有修改网络设置或进行新一轮采集业务验收。
+
 ## 本机证据
 
 详细日志位于忽略目录 `.notion-switch/mac-arm64/mac-ai-live/`，不随提交携带：`latest-source-tests-native.log`、`final-mac-scope-tests.log`、`new-checklist-protocol-result.json`、`generated-native-download-result.json`。公开客户端脚本仅缓存在忽略的 `research/.public-assets/`，不随代码提交。
