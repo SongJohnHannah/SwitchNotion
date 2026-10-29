@@ -49,7 +49,7 @@ try {
       }
       if (action === 'configure') Object.assign(data.settings, input.settings);
       return { ok: true, result };
-    }, onShow: callback => { window._showCollection = callback; }, onChange: callback => { window._changeCollection = callback; } };
+    }, getPathForFile: file => window._droppedFilePaths?.[file.name] || '', onShow: callback => { window._showCollection = callback; }, onChange: callback => { window._changeCollection = callback; } };
   }, fixture);
   await page.setViewportSize({ width: 580, height: 368 });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
@@ -57,6 +57,39 @@ try {
   await page.getByText('openClaw / 资料收集 ⌄', { exact: true }).waitFor();
   await page.screenshot({ path: path.join(output, 'compact.png') });
   assert.equal(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight), true, 'compact window must not scroll at its default size');
+  const dropped = ['C:\\媒体资料\\拖入 视频.mp4', '/Users/me/Downloads/拖入 音频.m4a'];
+  await page.locator('#links').fill('https://example.com/existing');
+  const dragFiles = async (paths, type = 'drop', target = 'links') => page.evaluate(({ paths, type, target }) => {
+    const transfer = new DataTransfer(); window._droppedFilePaths = {};
+    paths.forEach((path, index) => { const name = 'dropped-' + index; transfer.items.add(new File(['fixture'], name)); window._droppedFilePaths[name] = path; });
+    const event = new DragEvent(type, { dataTransfer: transfer, bubbles: true, cancelable: true });
+    (document.getElementById(target) || document.body).dispatchEvent(event); return event.defaultPrevented;
+  }, { paths, type, target });
+  assert.equal(await dragFiles(dropped, 'dragover'), true);
+  assert.equal(await page.locator('#links').evaluate(node => node.classList.contains('file-dragover')), true);
+  await page.screenshot({ path: path.join(output, 'file-dragover.png') });
+  await page.locator('#links').evaluate(node => node.setSelectionRange(0, 0));
+  assert.equal(await dragFiles(dropped), true);
+  const appended = 'https://example.com/existing\n' + dropped.join('\n');
+  assert.equal(await page.locator('#links').inputValue(), appended, 'Windows and Mac paths append after existing text, regardless of cursor position');
+  assert.equal(await page.locator('#links').evaluate(node => node.classList.contains('file-dragover')), false);
+  await page.screenshot({ path: path.join(output, 'file-paths.png') });
+  await dragFiles([...dropped, dropped[0]]);
+  assert.equal(await page.locator('#links').inputValue(), appended, 'Repeated file drops must not duplicate paths');
+  await dragFiles(['']);
+  assert.equal(await page.locator('#links').inputValue(), appended, 'An unavailable native path must preserve existing inputs');
+  assert.ok((await page.locator('#message').textContent()).includes('无法读取'));
+  await dragFiles(['/Users/me/bad\nname.mp4']);
+  assert.equal(await page.locator('#links').inputValue(), appended, 'A filename containing a newline must not create multiple sources');
+  assert.equal(await dragFiles(dropped, 'drop', 'outside'), true);
+  assert.equal(await page.locator('#links').inputValue(), appended, 'File drops outside the source input must not navigate or add paths');
+  assert.equal(await page.evaluate(() => {
+    const dataTransfer = new DataTransfer(); dataTransfer.setData('text/plain', 'https://example.com/link');
+    const event = new DragEvent('drop', { dataTransfer, bubbles: true, cancelable: true });
+    document.getElementById('links').dispatchEvent(event); return event.defaultPrevented;
+  }), false, 'Ordinary text/link dragging keeps the native input behavior');
+  assert.equal((await page.evaluate(() => window._collectionCalls)).some(call => call.action === 'create'), false, 'Dropping a file must not start collection');
+  await page.locator('#links').fill('');
   await page.locator('#prompt-open').click(); await page.setViewportSize({ width: 620, height: 768 });
   await page.locator('#prompt-dialog').waitFor({ state: 'visible' });
   await page.screenshot({ path: path.join(output, 'prompts.png') });
@@ -108,6 +141,6 @@ try {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, name + ' must fit the window at ' + width + 'px');
     }
   }
-  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ extractor: { nodes: doc.nodes.length, fullTextCharacters: doc.nodes.at(-1).text.length, orderVerified: true }, renderer: { errors, perTaskVisionOverride: true, editableTemplates: true, mixedLocalInput: true, emptyHistoryHidden: true, destinationAndFavoriteSelection: true, keyboardTabs: true, fullCardCheckboxes: true, responsiveWidths: [480, 580, 620, 820] }, screenshots: ['compact.png', 'prompts.png', 'expanded.png', 'options.png', 'accounts.png', 'advanced.png'] }, null, 2));
+  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ extractor: { nodes: doc.nodes.length, fullTextCharacters: doc.nodes.at(-1).text.length, orderVerified: true }, renderer: { errors, droppedWindowsAndMacPaths: true, duplicateDropsIgnored: true, unavailablePathsPreserveInput: true, fileDropsDoNotSubmitOrNavigate: true, perTaskVisionOverride: true, editableTemplates: true, mixedLocalInput: true, emptyHistoryHidden: true, destinationAndFavoriteSelection: true, keyboardTabs: true, fullCardCheckboxes: true, responsiveWidths: [480, 580, 620, 820] }, screenshots: ['compact.png', 'file-dragover.png', 'file-paths.png', 'prompts.png', 'expanded.png', 'options.png', 'accounts.png', 'advanced.png'] }, null, 2));
   console.log('Collection browser extraction and UI checks passed. Screenshots: ' + output);
 } finally { await browser.close(); }

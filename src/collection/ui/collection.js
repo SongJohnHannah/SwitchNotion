@@ -172,6 +172,37 @@ async function accounts(verify = false) {
   finally { checkingAccounts = false; control.disabled = false; control.textContent = '检测登录状态'; root.setAttribute('aria-busy', 'false'); }
 }
 $('capture-form').addEventListener('submit', event => { event.preventDefault(); void submit(false).catch(() => {}); });
+const linksInput = $('links');
+const hasFiles = event => [...(event.dataTransfer?.types || [])].includes('Files') || event.dataTransfer?.files.length > 0;
+// File drops outside the input must not navigate away from the collection window.
+for (const type of ['dragover', 'drop']) document.addEventListener(type, event => {
+  if (hasFiles(event)) { event.preventDefault(); if (type === 'dragover') event.dataTransfer.dropEffect = 'none'; }
+});
+for (const type of ['dragenter', 'dragover']) linksInput.addEventListener(type, event => {
+  if (!hasFiles(event)) return;
+  event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy'; linksInput.classList.add('file-dragover');
+});
+function clearFileDrag() { linksInput.classList.remove('file-dragover'); }
+linksInput.addEventListener('dragleave', clearFileDrag);
+document.addEventListener('drop', clearFileDrag);
+document.addEventListener('dragend', clearFileDrag);
+window.addEventListener('blur', clearFileDrag);
+linksInput.addEventListener('drop', event => {
+  if (!hasFiles(event)) return;
+  event.preventDefault(); event.stopPropagation(); clearFileDrag();
+  try {
+    const files = [...event.dataTransfer.files];
+    if (!files.length) throw Error('请从 Finder 或资源管理器拖入本机文件，或直接粘贴完整路径。');
+    const paths = files.map(file => api.getPathForFile(file));
+    if (paths.some(path => !path || /[\r\n\0]/.test(path))) throw Error('无法读取拖入文件的完整路径，请从 Finder 或资源管理器拖入本机文件，或直接粘贴路径。');
+    const existing = new Set(linksInput.value.split(/\r?\n/).map(line => line.trim().replace(/^['"]|['"]$/g, '')));
+    const additions = [...new Set(paths)].filter(path => !existing.has(path));
+    const value = linksInput.value + (additions.length && linksInput.value && !linksInput.value.endsWith('\n') ? '\n' : '') + additions.join('\n');
+    if (value.length > 65536 || paths.length > 30) throw Error('每次最多添加 30 个文件，输入内容不能超过 65536 个字符。');
+    linksInput.value = value; linksInput.focus(); linksInput.setSelectionRange(value.length, value.length); linksInput.scrollTop = linksInput.scrollHeight;
+    message(additions.length ? '已添加 ' + additions.length + ' 个文件路径；本地收集支持音频和视频，点击收集后开始处理。' : '这些文件路径已在输入框中。');
+  } catch (error) { message(error.message || '无法读取文件路径，请直接粘贴完整路径。', true); }
+});
 $('links').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void submit(false).catch(() => {}); } });
 $('preview').addEventListener('click', () => void submit(true).catch(() => {}));
 $('expand').addEventListener('click', () => setExpanded(!expanded)); $('destination-pill').addEventListener('click', () => { setPanel('destination'); setExpanded(true); }); $('hide').addEventListener('click', () => api.request('hide'));
