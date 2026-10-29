@@ -75,7 +75,12 @@ const currentAssets = {
   connection: '17048-b38a7b8f431620b1.js', recording: '89269-451ea294ba9323c0.js',
   attachments: '51103-1249b090dd731220.js', autofill: '57590-3242f968a3670cd0.js'
 };
-const currentRecordings = [currentAssets.recording, '89269-d6dd7560b2d4cf66.js', '89269-0cf389326d6293f8.js'];
+const rolloutAssets = {
+  connection: '17048-1137957f6d84ddda.js', recording: '89269-273e8b8f54972a92.js',
+  attachments: '51103-ac42935fe4417d27.js', autofill: '57590-160e036019c0fda3.js'
+};
+const allAssets = [...Object.entries(currentAssets), ...Object.entries(rolloutAssets)];
+const currentRecordings = [currentAssets.recording, '89269-d6dd7560b2d4cf66.js', '89269-0cf389326d6293f8.js', rolloutAssets.recording];
 const cached = name => new URL('../research/.public-assets/' + name, import.meta.url);
 const fixtureMissing = name => !fs.existsSync(cached(name)) && 'Optional public macOS client fixture unavailable';
 function functionSource(source, moduleId, name) {
@@ -85,9 +90,15 @@ function functionSource(source, moduleId, name) {
   assert.ok(fn, 'Native function must exist: ' + name);
   return source.slice(fn.start, fn.end);
 }
+function moduleSource(source, moduleId) {
+  const ast = parse(source, { ecmaVersion: 2024 });
+  const module = ast.body[1].expression.arguments[0].elements[1].properties.find(node => node.key.value === moduleId);
+  assert.ok(module, 'Native module must exist: ' + moduleId);
+  return source.slice(module.start, module.end);
+}
 
-test('current Mac assets enter the production response adapter and changed bytes remain rejected', { skip: Object.values(currentAssets).some(name => fixtureMissing(name)) && 'Optional public macOS client fixtures unavailable' }, async () => {
-  for (const [kind, name] of Object.entries(currentAssets)) {
+test('current Mac assets enter the production response adapter and changed bytes remain rejected', { skip: allAssets.some(([, name]) => fixtureMissing(name)) && 'Optional public macOS client fixtures unavailable' }, async () => {
+  for (const [kind, name] of allAssets) {
     const source = fs.readFileSync(cached(name), 'utf8');
     const result = await adaptResponse(new Response(source), name, { ...options, prepare: () => {
       assert.ok(!['attachments', 'autofill'].includes(kind), 'File and field adapters must not prepare recording');
@@ -95,11 +106,14 @@ test('current Mac assets enter the production response adapter and changed bytes
     assert.deepEqual(result.kinds, [kind]); new vm.Script(await result.response.text());
     assert.throws(() => macClient.adaptMacClient(source + '\n', name, options), /Unreviewed/);
     if (kind === 'recording') assert.equal(macClient.adaptMacClient(source, name), source);
-    if (kind === 'connection') assert.equal(result.changed, false, 'Native watchdog and connection behavior stay intact');
+    if (kind === 'connection') {
+      assert.equal(result.changed, false, 'Native watchdog and connection behavior stay intact');
+      if (name === rolloutAssets.connection) assert.match(source, /openMossCaptureSupported:Y/, 'Preserve the caller-supplied capture capability');
+    }
   }
 });
 
-test('the Mac dispatch preserves the current upstream Windows compatibility path', { skip: Object.values(currentAssets).some(name => fixtureMissing(name)) && 'Optional public macOS client fixtures unavailable' }, () => {
+test('the Mac dispatch preserves the current upstream Windows compatibility path', { skip: allAssets.some(([, name]) => fixtureMissing(name)) && 'Optional public macOS client fixtures unavailable' }, () => {
   const require = createRequire(new URL('../src/client-compat.cjs', import.meta.url));
   const module = { exports: {} };
   const windowsRequire = id => {
@@ -107,7 +121,7 @@ test('the Mac dispatch preserves the current upstream Windows compatibility path
     return require(id);
   };
   vm.runInNewContext(fs.readFileSync(new URL('../src/client-compat.cjs', import.meta.url), 'utf8'), { require: windowsRequire, module, process: { platform: 'win32' } });
-  for (const name of new Set([...Object.values(currentAssets), ...currentRecordings])) {
+  for (const name of new Set([...allAssets.map(([, name]) => name), ...currentRecordings])) {
     if (fixtureMissing(name)) continue;
     const source = fs.readFileSync(cached(name), 'utf8');
     if (name === currentAssets.autofill) {
@@ -156,8 +170,10 @@ for (const recording of currentRecordings) test(`Mac ${recording} releases captu
   assert.match(source, /finishOpenMossSourceCapture/); assert.match(source, /this.deadlineAtMs=e.clock.now\(\)\+12e3/);
 });
 
-test('the current Mac attachment consumer uses its renamed converter for local documents and retains ordinary task subscriptions', { skip: fixtureMissing(currentAssets.attachments) }, async () => {
-  const source = macClient.adaptMacClient(fs.readFileSync(cached(currentAssets.attachments), 'utf8'), currentAssets.attachments);
+for (const name of [currentAssets.attachments, rolloutAssets.attachments]) test(`Mac ${name} uses its converter for local documents and retains ordinary task subscriptions`, { skip: fixtureMissing(name) }, async () => {
+  const original = fs.readFileSync(cached(name), 'utf8');
+  const source = macClient.adaptMacClient(original, name);
+  assert.equal(moduleSource(source, 743423), moduleSource(original, 743423), 'Ordinary uploads retain the rollout import');
   let subscriptions = 0, received;
   const origin = 'https://app.notion.com', url = origin + '/notion-switch-inline-document/synthetic-file';
   const value = { contentType: 'application/pdf', fileSizeBytes: 927, numPages: 1 };
@@ -180,8 +196,10 @@ test('the current Mac attachment consumer uses its renamed converter for local d
   assert.equal(received.headers, undefined); assert.equal(subscriptions, 1);
 });
 
-test('both current Mac Autofill view branches preserve the originating query and progress without pending writes or hosted tasks', { skip: fixtureMissing(currentAssets.autofill) }, async () => {
-  const source = macClient.adaptMacClient(fs.readFileSync(cached(currentAssets.autofill), 'utf8'), currentAssets.autofill);
+for (const name of [currentAssets.autofill, rolloutAssets.autofill]) test(`Mac ${name} preserves both Autofill view branches without pending writes or hosted tasks`, { skip: fixtureMissing(name) }, async () => {
+  const original = fs.readFileSync(cached(name), 'utf8');
+  const source = macClient.adaptMacClient(original, name);
+  assert.equal(moduleSource(source, 982302), moduleSource(original, 982302), 'The instruction fallback stays unchanged');
   for (const lite of [false, true]) {
     const calls = [], updates = [], initialized = [], completed = [], notifications = [], jobId = 'addf11ed-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const marker = { version: 1, jobId, initial: { value: { groupId: jobId, totalBlocks: 1, workflowAutomationRunIds: ['synthetic-run'] } } };
