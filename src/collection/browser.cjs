@@ -107,14 +107,33 @@ class CollectionBrowser {
     try { return (await cdpCommand(tab.wsUrl, 'Network.getCookies', { urls: [url] }, { signal })).cookies || []; }
     finally { await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); }
   }
+  async readAccountStatus(tab, site, signal) {
+    const result = await cdpCommand(tab.wsUrl, 'Runtime.evaluate', { expression: '(' + inspectAccount.toString() + ')(' + JSON.stringify(site.id) + ')', awaitPromise: true, returnByValue: true }, { signal, timeout: 8000 });
+    const value = result.result?.value;
+    if (result.exceptionDetails || !value || !['valid', 'missing', 'unknown'].includes(value.state)) throw Error('登录检查未完成。');
+    return { state: value.state, message: String(value.message || '').slice(0, 200), retry: value.retry !== false };
+  }
   async verifyAccount(site, signal) {
     const { m } = await this.ensure(signal), tab = await this.tab(site.url, signal);
+    const until = Date.now() + 12000;
+    let latest = { state: 'unknown', message: '未找到明确的当前账号状态，可在收集时继续检查。' };
     try {
-      await this.waitReady(tab, signal);
-      const result = await cdpCommand(tab.wsUrl, 'Runtime.evaluate', { expression: '(' + inspectAccount.toString() + ')(' + JSON.stringify(site.id) + ')', awaitPromise: true, returnByValue: true }, { signal, timeout: 15000 });
-      const value = result.result?.value;
-      if (result.exceptionDetails || !value || !['valid', 'missing', 'unknown'].includes(value.state)) throw Error('登录检查未完成。');
-      return { state: value.state, message: String(value.message || '').slice(0, 200), checkedAt: new Date().toISOString() };
+      // Authenticated page data arrives before video/ad resources finish. Do
+      // not gate account checks on the document's complete event.
+      do {
+        signal?.throwIfAborted();
+        try {
+          latest = await this.readAccountStatus(tab, site, signal);
+          if (latest.state !== 'unknown' || latest.retry === false) break;
+        } catch (error) {
+          signal?.throwIfAborted();
+          // Navigation can replace the execution context during a probe.
+          if (!error.cdpCode) latest = { state: 'unknown', message: '网页状态读取未完成，可在收集时继续检查。' };
+        }
+        if (Date.now() >= until) break;
+        await new Promise(resolve => setTimeout(resolve, 400));
+      } while (Date.now() < until);
+      return { state: latest.state, message: latest.message, checkedAt: new Date().toISOString() };
     } finally { await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); }
   }
   async accounts(signal, { verify = false } = {}) {

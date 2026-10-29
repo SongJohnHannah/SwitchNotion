@@ -3,12 +3,28 @@
 async function inspectAccount(site) {
   const domains = { douyin: 'douyin.com', xiaohongshu: 'xiaohongshu.com', bilibili: 'bilibili.com', tiktok: 'tiktok.com', youtube: 'youtube.com', x: 'x.com' };
   const domain = domains[site], host = location.hostname;
-  const verdict = (state, message) => ({ state, message });
+  const verdict = (state, message, retry = state === 'unknown') => ({ state, message, retry });
   if (!domain || !(host === domain || host.endsWith('.' + domain))) return verdict('unknown', '网页跳转到了其他网站，未能确认登录。');
   const visible = node => !!node && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden';
   const visibleMatch = selector => [...document.querySelectorAll(selector)].some(visible);
-  if (/验证码|安全验证|安全校验|captcha|security check/i.test(document.title) || visibleMatch('iframe[src*="captcha"], iframe[src*="verifycenter"], [data-testid="ocfArkoseFrame"]') || /\/account\/access/.test(location.pathname)) return verdict('unknown', '网站要求安全验证，请在收集浏览器中处理后重试。');
+  if (/验证码|安全验证|安全校验|captcha|security check|verify you are human/i.test(document.title) || visibleMatch('iframe[src*="captcha"], iframe[src*="verifycenter"], [data-testid="ocfArkoseFrame"]') || /\/account\/access/.test(location.pathname)) return verdict('unknown', '网站要求安全验证，请在收集浏览器中处理后重试。', false);
   if (/\/(?:login|signin|i\/flow\/login)(?:\/|$)/.test(location.pathname)) return verdict('missing', '网站显示登录页，请登录后重新检测。');
+
+  if (site === 'douyin') {
+    const source = document.getElementById('RENDER_DATA')?.textContent;
+    if (source && source.length <= 4 * 1024 * 1024) {
+      let data;
+      try { data = JSON.parse(source); } catch { try { data = JSON.parse(decodeURIComponent(source)); } catch {} }
+      const user = data?.app?.user;
+      if (user?.isLogin === true && typeof user.info?.uid === 'string' && user.info.uid && user.info.uid !== '0') return verdict('valid', '抖音页面的当前账号数据已确认登录。');
+      if (user?.isLogin === false) return verdict('missing', '抖音页面显示当前会话未登录。');
+    }
+  }
+  if (site === 'youtube') {
+    const loggedIn = typeof window.ytcfg?.get === 'function' ? window.ytcfg.get('LOGGED_IN') : window.ytcfg?.data_?.LOGGED_IN;
+    if (loggedIn === true) return verdict('valid', 'YouTube 页面返回的当前账号配置已确认登录。');
+    if (loggedIn === false) return verdict('missing', 'YouTube 页面返回的当前会话尚未登录。');
+  }
 
   if (site === 'bilibili') {
     try {
@@ -44,6 +60,7 @@ async function inspectAccount(site) {
     x: 'a[data-testid="loginButton"], a[href="/i/flow/login"]'
   };
   if (loginSelectors[site] && visibleMatch(loginSelectors[site])) return verdict('missing', '网站显示登录入口，尚未确认有效账号。');
+  if (site === 'tiktok' && document.readyState === 'complete' && !(document.body?.innerText || '').trim() && !document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__')?.textContent?.trim()) return verdict('unknown', 'TikTok 页面没有加载出账号信息，请在收集浏览器中打开后重试。');
   return verdict('unknown', '未找到明确的当前账号状态，可直接收集，按实际访问结果检查。');
 }
 module.exports = { inspectAccount };

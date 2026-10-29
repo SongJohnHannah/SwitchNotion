@@ -6,16 +6,66 @@ const require = createRequire(import.meta.url);
 const { inspectAccount } = require('../src/collection/account-status.cjs');
 const { CollectionBrowser } = require('../src/collection/browser.cjs');
 
-function inspect(site, { url, title = '', selectors = {}, state, response, fetchError } = {}) {
-  const domains = { bilibili: 'www.bilibili.com', xiaohongshu: 'www.xiaohongshu.com', youtube: 'www.youtube.com', x: 'x.com' };
+function inspect(site, { url, title = '', selectors = {}, state, response, fetchError, renderData, ytLoggedIn, ready = 'complete' } = {}) {
+  const domains = { douyin: 'www.douyin.com', bilibili: 'www.bilibili.com', xiaohongshu: 'www.xiaohongshu.com', youtube: 'www.youtube.com', tiktok: 'www.tiktok.com', x: 'x.com' };
   const location = new URL(url || 'https://' + domains[site] + '/');
-  const context = { location, AbortSignal, window: { __INITIAL_STATE__: state },
-    document: { title, querySelectorAll: selector => selectors[selector] || [] }, getComputedStyle: () => ({ visibility: 'visible' }),
+  const context = { location, AbortSignal, window: { __INITIAL_STATE__: state, ytcfg: { get: () => ytLoggedIn } },
+    document: { title, readyState: ready, querySelectorAll: selector => selectors[selector] || [], getElementById: id => id === 'RENDER_DATA' && renderData ? { textContent: encodeURIComponent(JSON.stringify(renderData)) } : null }, getComputedStyle: () => ({ visibility: 'visible' }),
     fetch: async (url, options) => { assert.equal(url, 'https://api.bilibili.com/x/web-interface/nav'); assert.equal(options.credentials, 'include'); assert.equal(options.cache, 'no-store'); if (fetchError) throw Error('offline'); return { ok: response?.ok !== false, json: async () => response?.data }; }
   };
   return vm.runInNewContext('(' + inspectAccount.toString() + ')(' + JSON.stringify(site) + ')', context);
 }
 const visible = { getClientRects: () => [{ width: 32, height: 32 }] };
+
+test('Douyin recognizes its own server-provided logged-in account state even when profile links are hidden', async () => {
+  const verdict = await inspect('douyin', { renderData: { app: { user: { isLogin: true, info: { uid: 'synthetic-current-user' } } } } });
+  assert.equal(verdict.state, 'valid', 'The current Douyin page says isLogin=true, but the collector reports an unknown account');
+  assert.equal((await inspect('douyin', { renderData: { app: { user: { isLogin: false } } } })).state, 'missing');
+  assert.equal((await inspect('douyin', { renderData: { app: { user: { isLogin: true, info: { uid: '0' } } } } })).state, 'unknown');
+  assert.equal((await inspect('douyin', { renderData: { note: { author: { isLogin: true, uid: 'someone-else' } } } })).state, 'unknown');
+});
+
+test('YouTube recognizes authenticated server configuration before avatars and other page resources finish loading', async () => {
+  assert.equal((await inspect('youtube', { ytLoggedIn: true, ready: 'loading' })).state, 'valid');
+  assert.equal((await inspect('youtube', { ytLoggedIn: false })).state, 'missing');
+  assert.equal((await inspect('youtube', { ytLoggedIn: 'true' })).state, 'unknown');
+  assert.equal((await inspect('youtube', { ytLoggedIn: true, title: '安全验证' })).state, 'unknown');
+  assert.equal((await inspect('youtube', { ytLoggedIn: true, url: 'https://youtube.com.evil.example/' })).state, 'unknown');
+});
+
+test('an empty TikTok page stays unconfirmed and explains that account data has not loaded', async () => {
+  const result = await inspect('tiktok');
+  assert.equal(result.state, 'unknown'); assert.match(result.message, /没有加载出账号信息/);
+});
+
+test('live verification can confirm an account without waiting for all page resources, and closes its own tab', async () => {
+  const browser = new CollectionBrowser({}), closed = [];
+  browser.ensure = async () => ({ m: { cdpCloseTab: async (_endpoint, id) => closed.push(id) } });
+  browser.tab = async () => ({ tabId: 'owned-probe-tab' });
+  browser.waitReady = async () => { throw Error('A streaming page never reaches complete'); };
+  browser.readAccountStatus = async () => ({ state: 'valid', message: 'site says logged in' });
+  browser.getSettings = () => ({ browserPort: 19333 });
+  assert.equal((await browser.verifyAccount({ id: 'youtube', url: 'https://www.youtube.com/' }, AbortSignal.timeout(1000))).state, 'valid');
+  assert.deepEqual(closed, ['owned-probe-tab']);
+});
+
+test('verification retries changing page contexts and keeps an authenticated result once account data appears', async () => {
+  const browser = new CollectionBrowser({}), closed = []; let calls = 0;
+  browser.ensure = async () => ({ m: { cdpCloseTab: async (_endpoint, id) => closed.push(id) } });
+  browser.tab = async () => ({ tabId: 'owned-retry-tab' }); browser.getSettings = () => ({ browserPort: 19333 });
+  browser.readAccountStatus = async () => { if (++calls === 1) throw Object.assign(Error('Context replaced'), { cdpCode: -32000 }); return { state: 'valid', message: 'hydrated account confirmed' }; };
+  const result = await browser.verifyAccount({ id: 'x', url: 'https://x.com/' }, AbortSignal.timeout(2000));
+  assert.equal(result.state, 'valid'); assert.equal(calls, 2); assert.deepEqual(closed, ['owned-retry-tab']);
+});
+
+test('verification stops at a security challenge and closes only its own probe tab', async () => {
+  const browser = new CollectionBrowser({}), closed = []; let calls = 0;
+  browser.ensure = async () => ({ m: { cdpCloseTab: async (_endpoint, id) => closed.push(id) } });
+  browser.tab = async () => ({ tabId: 'owned-challenge-tab' }); browser.getSettings = () => ({ browserPort: 19333 });
+  browser.readAccountStatus = async () => { calls++; return { state: 'unknown', message: '请处理安全验证', retry: false }; };
+  assert.equal((await browser.verifyAccount({ id: 'x', url: 'https://x.com/' }, AbortSignal.timeout(1000))).state, 'unknown');
+  assert.equal(calls, 1); assert.deepEqual(closed, ['owned-challenge-tab']);
+});
 
 test('Bilibili checks the authenticated endpoint and distinguishes expired sessions from network failures', async () => {
   assert.equal((await inspect('bilibili', { response: { data: { code: 0, data: { isLogin: true, uname: 'private', mid: 'private' } } } })).state, 'valid');
