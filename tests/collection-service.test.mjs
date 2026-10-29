@@ -30,6 +30,15 @@ function fixture(t, extra = {}) {
 }
 async function idle(service) { for (let n = 0; n < 400; n++) { if (!service.running && !service.queue.length) return; await sleep(5); } throw Error('collection test did not settle'); }
 
+test('account checks are passive by default, require an explicit boolean for live verification, and leave the queue alone', async t => {
+  const f = fixture(t), checks = [];
+  f.service.browser.accounts = async (_signal, options) => { checks.push(options.verify); return [{ id: 'bilibili', state: options.verify ? 'valid' : 'deferred' }]; };
+  assert.equal((await f.service.request('accounts')).result[0].state, 'deferred');
+  assert.equal((await f.service.request('accounts', { verify: true })).result[0].state, 'valid');
+  assert.equal((await f.service.request('accounts', { verify: 'true' })).ok, false);
+  assert.deepEqual(checks, [false, true]); assert.equal(f.service.queue.length, 0);
+});
+
 test('deleting a failed task removes its files and journals, preserves other tasks and original sources, and survives restart', async t => {
   const f = fixture(t); f.service.notion.verifyTarget = async () => { throw Error('Notion 暂时离线'); };
   const source = path.join(f.root, '用户原始视频.mp4'); fs.writeFileSync(source, 'original');

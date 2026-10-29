@@ -11,13 +11,14 @@ function setupCollection({ root, speech, createWindow, openSettings, platform })
   function resize(expanded) {
     if (!window || window.isDestroyed()) return;
     const current = window.getBounds(), area = screen.getDisplayMatching(current).workArea;
-    const width = Math.min(expanded ? 820 : 720, area.width), height = Math.min(expanded ? 850 : 400, area.height);
+    const width = Math.min(expanded ? 620 : 580, area.width), height = Math.min(expanded ? 800 : 400, area.height);
+    if (window.isMaximized()) window.unmaximize();
     window.setBounds({ x: Math.max(area.x, Math.min(current.x, area.x + area.width - width)), y: Math.max(area.y, Math.min(current.y, area.y + area.height - height)), width, height });
   }
   async function open(expanded = false) {
     await app.whenReady();
     if (!window || window.isDestroyed()) {
-      window = createWindow({ width: 720, height: 400, minWidth: 480, minHeight: 350, title: 'Switch Notion · 快捷收集',
+      window = createWindow({ width: 580, height: 400, minWidth: 480, minHeight: 350, title: 'Switch Notion · 快捷收集',
         backgroundColor: '#ffffff', show: false, autoHideMenuBar: true, resizable: true, minimizable: true,
         webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, partition: 'notion-switch-collection', spellcheck: false } });
       window.removeMenu(); window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

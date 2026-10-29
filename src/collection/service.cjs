@@ -263,7 +263,7 @@ class CollectionService extends EventEmitter {
   }
   async request(action, input = {}) {
     const allowed = { state: [], configure: ['settings'], workspaces: [], destinations: ['workspaceId', 'query', 'cursors'], create: ['input', 'options', 'preview', 'force'],
-      select: ['id', 'ids', 'options', 'allowPartial'], cancel: ['id'], retry: ['id'], 'delete-task': ['id'], reread: ['id'], accounts: [], login: ['site'], prepare: [], 'create-library': ['workspaceId', 'parentId'] };
+      select: ['id', 'ids', 'options', 'allowPartial'], cancel: ['id'], retry: ['id'], 'delete-task': ['id'], reread: ['id'], accounts: ['verify'], login: ['site'], prepare: [], 'create-library': ['workspaceId', 'parentId'] };
     try {
       if (!Object.hasOwn(allowed, action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !allowed[action].includes(k))) throw Error('无法识别此项收集操作。');
       let result;
@@ -277,7 +277,7 @@ class CollectionService extends EventEmitter {
       else if (action === 'retry') result = this.retry(input.id);
       else if (action === 'delete-task') result = this.deleteTask(input.id);
       else if (action === 'reread') result = this.reread(input.id);
-      else if (action === 'accounts') result = await this.browser.accounts(AbortSignal.timeout(60000));
+      else if (action === 'accounts') { if (input.verify !== undefined && typeof input.verify !== 'boolean') throw Error('登录检测选项无效。'); result = await this.browser.accounts(AbortSignal.timeout(45000), { verify: input.verify === true }); }
       else if (action === 'login') { if (typeof input.site !== 'string' || input.site.length > 8192) throw Error('网站地址无效。'); result = await this.browser.login(input.site, AbortSignal.timeout(60000)); }
       else if (action === 'prepare') result = await this.prepare();
       else if (action === 'create-library') result = await this.createLibrary(input.workspaceId, input.parentId);

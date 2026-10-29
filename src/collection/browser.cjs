@@ -6,6 +6,7 @@ const { extractXiaohongshuPage } = require('./xiaohongshu.cjs');
 const { assertPublicUrl, effectiveProxy } = require('./network.cjs');
 const { normalizeDocument, hash } = require('./model.cjs');
 const { WechatChannel, isWechatShare } = require('./wechat-channel.cjs');
+const { inspectAccount } = require('./account-status.cjs');
 const sites = Object.freeze([
   { id: 'douyin', name: '抖音', url: 'https://www.douyin.com/' },
   { id: 'xiaohongshu', name: '小红书', url: 'https://www.xiaohongshu.com/explore' },
@@ -98,7 +99,7 @@ class CollectionBrowser {
     const { windowId } = await cdpCommand(tab.wsUrl, 'Browser.getWindowForTarget', { targetId: tab.tabId }, { signal });
     await cdpCommand(tab.wsUrl, 'Browser.setWindowBounds', { windowId, bounds: { windowState: 'normal' } }, { signal });
     await cdpCommand(tab.wsUrl, 'Page.bringToFront', {}, { signal });
-    return { message: '请在收集浏览器中登录；登录完成后返回此窗口检测或重试任务。' };
+    return { message: site === 'wechat' ? '已打开腾讯元宝，用于当前视频号分享链接的解析授权，并非视频号登录页。完成后请返回重试该分享链接。' : '请在收集浏览器中登录；完成后可检测登录状态，或直接重试收集任务。' };
   }
   async cookies(url, signal) {
     const { m } = await this.ensure(signal); const tab = await this.backgroundTab(signal);
@@ -106,15 +107,36 @@ class CollectionBrowser {
     try { return (await cdpCommand(tab.wsUrl, 'Network.getCookies', { urls: [url] }, { signal })).cookies || []; }
     finally { await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); }
   }
-  async accounts(signal) {
-    const m = await mediaKit();
-    if (!await m.isCdpReady(this.getSettings().browserPort)) return sites.map(site => ({ ...site, state: 'unknown', message: '浏览器尚未启动' }));
-    const result = [];
-    for (const site of sites) { const cookies = await this.cookies(site.url, signal);
-      // Presence is not proof of an authenticated, unexpired account.
-      const auth = { douyin: /sessionid|sid_guard/, xiaohongshu: /^web_session$/, bilibili: /SESSDATA/, tiktok: /sessionid|sid_guard/, youtube: /SAPISID|LOGIN_INFO|__Secure-1PSID/, x: /auth_token/, wechat: /hy_token|hy_user|session|login|uin/i }[site.id];
-      result.push({ ...site, state: cookies.some(c => auth.test(c.name) && (c.session || !c.expires || c.expires > Date.now() / 1000)) ? 'saved' : 'missing', message: '访问权限以实际读取结果为准' });
-    } return result;
+  async verifyAccount(site, signal) {
+    const { m } = await this.ensure(signal), tab = await this.tab(site.url, signal);
+    try {
+      await this.waitReady(tab, signal);
+      const result = await cdpCommand(tab.wsUrl, 'Runtime.evaluate', { expression: '(' + inspectAccount.toString() + ')(' + JSON.stringify(site.id) + ')', awaitPromise: true, returnByValue: true }, { signal, timeout: 15000 });
+      const value = result.result?.value;
+      if (result.exceptionDetails || !value || !['valid', 'missing', 'unknown'].includes(value.state)) throw Error('登录检查未完成。');
+      return { state: value.state, message: String(value.message || '').slice(0, 200), checkedAt: new Date().toISOString() };
+    } finally { await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); }
+  }
+  async accounts(signal, { verify = false } = {}) {
+    const deferred = site => ({ ...site, state: site.id === 'wechat' ? 'link' : 'deferred', message: site.id === 'wechat' ? '当前适配器按分享链接检查，腾讯元宝授权不代表视频号登录有效。' : '收集时检查内容是否可访问，也可以点击检测登录状态。' });
+    const scope = () => { const settings = this.getSettings?.() || {}; return JSON.stringify([settings.browserPort, settings.browserProfile, settings.browserExecutable, settings.proxy]); }, key = scope();
+    if (!verify) return this.accountChecks?.key === key && Date.now() - this.accountChecks.at < 120000 ? this.accountChecks.results : sites.map(deferred);
+    this.accountChecks = undefined;
+    try { await this.ensure(signal); }
+    catch { return sites.map(site => site.id === 'wechat' ? deferred(site) : { ...site, state: 'unknown', message: '收集浏览器未能启动，请检查浏览器设置；仍可稍后收集。' }); }
+    const results = sites.map(deferred), pending = sites.map((site, index) => ({ site, index })).filter(({ site }) => site.id !== 'wechat');
+    // Bound both concurrency and latency. An unavailable platform must not block
+    // the rest of the checks or the separate collection queue.
+    const worker = async () => {
+      while (pending.length) {
+        const { site, index } = pending.shift(), timeout = AbortSignal.timeout(15000), local = signal ? AbortSignal.any([signal, timeout]) : timeout;
+        try { results[index] = { ...site, ...await this.verifyAccount(site, local) }; }
+        catch { results[index] = { ...site, state: 'unknown', message: '网页检查超时或连接失败，可直接收集，按实际访问结果检查。' }; }
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    if (scope() !== key) return sites.map(site => site.id === 'wechat' ? deferred(site) : { ...site, state: 'unknown', message: '浏览器设置已改变，请重新检测当前登录资料。' });
+    this.accountChecks = { at: Date.now(), key, results }; return results;
   }
   async inspect(url, { signal, progress = () => {} } = {}) {
     await assertPublicUrl(url);
