@@ -97,12 +97,17 @@ class MeetingSummaryService {
     const stream = new ReadableStream({ start: controller => {
       const send = event => { if (!ended && !signal.aborted) controller.enqueue(encoder.encode(JSON.stringify(event) + '\n')); };
       Promise.resolve().then(() => this.run(summaryInput(endpoint, input), signal, meta, send)).then(result => {
+        this.lastError = '';
         send({ type: 'record-map', recordMap: result.recordMap });
         send({ type: 'notion-switch-summary-status', status: 'completed', verified: true, reused: !!result.reused });
       }).catch(error => {
         if (signal.aborted) return;
         const message = /^(?:会议|此前会议|该摘要|当前|同一摘要|生成|无法读取|所选|暂不支持|请先|DeepSeek)/.test(error.message || '') ? error.message : '会议笔记生成失败，原有转录与手写笔记保持不变。';
         this.lastError = message; this.log({ type: 'meeting-summary-failed', stage: 'generate-or-save' });
+        // Native stream helpers consume generic errors before onResponse.
+        // Notify the meeting callback first so it shows the failure and
+        // dismisses its preparation indicator, then terminate as an error.
+        send({ type: 'summarize-transcript-error', message });
         send({ type: 'error', message, errorCode: 500 });
       }).finally(() => { this.controllers.delete(abort); this.active--; if (!ended) { ended = true; try { controller.close(); } catch {} } });
     }, cancel: () => { ended = true; abort.abort(); } });
