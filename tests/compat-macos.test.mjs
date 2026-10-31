@@ -79,8 +79,9 @@ const rolloutAssets = {
   connection: '17048-1137957f6d84ddda.js', recording: '89269-273e8b8f54972a92.js',
   attachments: '51103-ac42935fe4417d27.js', autofill: '57590-160e036019c0fda3.js'
 };
-const allAssets = [...Object.entries(currentAssets), ...Object.entries(rolloutAssets)];
-const currentRecordings = [currentAssets.recording, '89269-d6dd7560b2d4cf66.js', '89269-0cf389326d6293f8.js', rolloutAssets.recording];
+const meetingAssets = { connection: '17048-5a213f6060eb4398.js', recording: '89269-53f38642561a101b.js' };
+const allAssets = [...Object.entries(currentAssets), ...Object.entries(rolloutAssets), ...Object.entries(meetingAssets)];
+const currentRecordings = [currentAssets.recording, '89269-d6dd7560b2d4cf66.js', '89269-0cf389326d6293f8.js', rolloutAssets.recording, meetingAssets.recording];
 const cached = name => new URL('../research/.public-assets/' + name, import.meta.url);
 const fixtureMissing = name => !fs.existsSync(cached(name)) && 'Optional public macOS client fixture unavailable';
 function functionSource(source, moduleId, name) {
@@ -151,7 +152,9 @@ for (const recording of currentRecordings) test(`Mac ${recording} releases captu
     if (id === 392719) return { Rk: async value => String(value[0].length), c9: () => events.push('capture-stopped') };
     assert.fail('Stop must not import the obsolete transport: ' + id);
   };
-  const actions = vm.runInNewContext('(class {' + entry + '})', { i: requireNative, S: () => ({ Ay: state }), setTimeout, clearTimeout, Float32Array });
+  const storeAlias = /\b([A-Za-z_$][\w$]*)=\(\)=>i\(585823\)/.exec(module)?.[1];
+  assert.ok(storeAlias, 'Resolve the store alias from the reviewed module');
+  const actions = vm.runInNewContext('(class {' + entry + '})', { i: requireNative, [storeAlias]: () => ({ Ay: state }), setTimeout, clearTimeout, Float32Array });
   Object.assign(actions, {
     sessionOwnership: { getCurrentGeneration: () => 1, isCurrentGeneration: () => true },
     audioEncoderQueue: { afterFlush: () => new Promise(resolve => { release = resolve; }), enqueue: run => run() },
@@ -168,6 +171,26 @@ for (const recording of currentRecordings) test(`Mac ${recording} releases captu
     assert.equal(actions.localAudioStop, undefined);
   }
   assert.match(source, /finishOpenMossSourceCapture/); assert.match(source, /this.deadlineAtMs=e.clock.now\(\)\+12e3/);
+});
+
+test('October 30 meeting assets retain the new handshake, recorder and capture-source settings', { skip: Object.values(meetingAssets).some(fixtureMissing) && 'Optional public macOS meeting fixtures unavailable' }, async () => {
+  const connection = fs.readFileSync(cached(meetingAssets.connection), 'utf8');
+  const recording = fs.readFileSync(cached(meetingAssets.recording), 'utf8');
+  const transport = await adaptResponse(new Response(connection), meetingAssets.connection, options);
+  assert.deepEqual(transport.kinds, ['connection']);
+  assert.equal(await transport.response.text(), connection, 'Keep the native OpenMoss bootstrap and watchdog');
+  assert.match(connection, /openMossCaptureSupported:G/);
+  assert.match(connection, /markPacketWritten/);
+  assert.match(connection, /watchdog_ms:3e4/);
+  const result = await adaptResponse(new Response(recording), meetingAssets.recording, options);
+  assert.deepEqual(result.kinds, ['recording']);
+  const patched = await result.response.text();
+  assert.match(patched, /new\(i\(193733\)\)\.AudioRecorder/);
+  assert.match(patched, /openMossCaptureSupported:H\.shouldRequestOpenMossCapture\(\)/);
+  assert.match(patched, /identityDiagnostics/);
+  assert.match(patched, /includeSystemAudio:!0/);
+  assert.match(macClient.adaptMacClient(recording, meetingAssets.recording, { ...options, inputMode: 'microphone' }), /includeSystemAudio:!1/);
+  assert.equal(moduleSource(patched, 392719), moduleSource(recording, 392719), 'The encoder and capture permissions remain intact');
 });
 
 for (const name of [currentAssets.attachments, rolloutAssets.attachments]) test(`Mac ${name} uses its converter for local documents and retains ordinary task subscriptions`, { skip: fixtureMissing(name) }, async () => {

@@ -4,13 +4,16 @@ const { adaptRecordingClient } = require('../speech/client.cjs');
 const documents = require('./inline-documents.cjs');
 const { pollNativeAutofill, invokeLiteAutofill, captureViewSnapshot } = require('./autofill.cjs');
 
-// Exact public assets observed in the macOS client on 2026-10-28/29. This
+// Exact public assets observed in the macOS client on 2026-10-28/30. This
 // adapter is dispatched only on Darwin; the existing Windows adapters stay
 // on their original path. Unknown bytes must still fail closed.
 const assets = Object.freeze({
   '17048-b38a7b8f431620b1.js': { kind: 'connection', moduleId: '697264', hash: 'bae8613c7c95b7983ea804f88fe527b50c780c9424734464555266917b134201' },
   // Preserve the rollout's caller-supplied OpenMoss capability flag.
   '17048-1137957f6d84ddda.js': { kind: 'connection', moduleId: '697264', hash: 'b5b2079e5acb49b02659e6e91ffd2a5dfe2c56d838ffc1ab0b45c7cb7088997e' },
+  // 2026-10-30: preserve OpenMoss bootstrap gating and packet-write tracking.
+  // The local server declines that optional capability; PCM/drain are unchanged.
+  '17048-5a213f6060eb4398.js': { kind: 'connection', moduleId: '697264', hash: '92b908e1d162dad3a9380b92d28b2f7cc92563a8e6eb4c5052d2d3bd4beac257' },
   '89269-451ea294ba9323c0.js': { kind: 'recording', moduleId: '331787', hash: '5501272ae32976cf9515d2672f46e21582bf4ed6162c679630989cbd2c200446' },
   // Later rollout only reordered lazy chunk dependencies in neighbouring
   // modules; recorder 331787 and audio recorder 392719 are byte-identical.
@@ -21,6 +24,9 @@ const assets = Object.freeze({
   // Recorder/encoder are unchanged; adjacent modules update lazy chunks
   // and the ordinary native file-upload import.
   '89269-273e8b8f54972a92.js': { kind: 'recording', moduleId: '331787', hash: '3c60fccc780c525bc8b51667f823223b7e225352dd79c332c3872c260fe94585' },
+  // New recorder import, speaker diagnostics and caller-supplied OpenMoss
+  // capability remain intact. Capture and stop/drain anchors are unchanged.
+  '89269-53f38642561a101b.js': { kind: 'recording', moduleId: '331787', hash: 'a9bc865fb9c3bb8bbadd76034226338cb033d2b4ac2e59cf27d812508fa62eb4' },
   '51103-1249b090dd731220.js': { kind: 'attachments', moduleId: '175529', hash: '390857956053ace5c09b2f9c65ace352363d3244126a8f5a61a2b9c1dd997abb' },
   '51103-ac42935fe4417d27.js': { kind: 'attachments', moduleId: '175529', uploadModule: '939261', hash: 'f578c989a7e27f8edb0ef487f9e627e7f29108ff1f925e1fa1dd46d84bd74bbf' },
   '57590-3242f968a3670cd0.js': { kind: 'autofill', moduleId: '414741', hash: '1735c0788b8c9c9359b0034a3ca1bfd6d26194eacafd8c89cda0e3fb45152113' },
