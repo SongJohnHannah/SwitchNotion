@@ -42,7 +42,8 @@ async function loadWorkspaces() {
   const data = await request('workspaces'), select = $('workspace'); select.replaceChildren(element('option', '', '选择工作区'));
   select.options[0].value = '';
   for (const item of data.workspaces) { const option = element('option', '', item.name + (item.readOnly ? '（只读）' : '')); option.value = item.id; option.disabled = item.readOnly; select.append(option); }
-  select.value = chosen?.workspaceId || data.workspaces.find(w => !w.readOnly)?.id || ''; select.dataset.loaded = '1';
+  select.value = chosen?.workspaceId || (Object.hasOwn(data, 'autoSelectWorkspaceId') ? data.autoSelectWorkspaceId : data.workspaces.find(w => !w.readOnly)?.id) || ''; select.dataset.loaded = '1';
+  if (data.selectionHint) $('destinations').replaceChildren(element('p', 'hint', data.selectionHint));
   if (select.value) await searchDestinations();
 }
 async function searchDestinations(more = false) {

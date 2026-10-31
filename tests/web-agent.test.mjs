@@ -69,7 +69,7 @@ test('read-only collaborators can use web-only sessions and return actual source
 });
 
 test('the actual desktop route uses the web-enabled native mock and rejects a foreign account before a second read', async t => {
-  const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-web-desktop-')); let reads = 0, forwarded = 0;
+  const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-web-desktop-')); let reads = 0, forwarded = 0, instructionReads = 0;
   const webSources = new WebSources({ root, fetchPublic: async url => { reads++; return { url, headers: { 'content-type': 'text/html' }, body: Buffer.from('<main>路由合成正文</main>') }; } });
   webSources.save({ enabled: 'enabled' });
   const provider = { status: () => ({ mode: 'deepseek' }), config: () => ({ mode: 'deepseek', multiAgent: false }), async* generate({ messages, onToolCalls }) {
@@ -79,15 +79,19 @@ test('the actual desktop route uses the web-enabled native mock and rejects a fo
   const mock = new NativeMock({ provider, webSources });
   t.after(() => { for (const item of mock.agent.threads.values()) item.stop?.('cleanup'); webSources.close(); assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
   const source = fs.readFileSync(new URL('../src/desktop-hook.cjs', import.meta.url), 'utf8');
+  const instructionStore = {};
   const context = { Request, Response, Headers, URL, mock, provider, json, settings: { speech: { enabled: false }, isLoginSyncing: () => false },
-    nativeSpeech: { enabled: false }, meetingBridge: { observe() {} }, recordings: { wake() {} }, createNativeImageAdapter: () => ({}),
+    nativeSpeech: { enabled: false }, meetingBridge: { observe() {}, forRequest: () => instructionStore }, recordings: { wake() {} }, createNativeImageAdapter: () => ({}),
+    resolveNativeInstructions: async ({ store, userId, spaceId }) => {
+      instructionReads++; assert.equal(store, instructionStore); assert.equal(userId, id(1)); assert.equal(spaceId, id(2));
+    },
     isNotion: host => host === 'app.notion.com', log() {}, localUploadPrefix: '/notion-switch-local-upload/', endpoints: new Set(['createAgentThread', 'sendEventToAgentThread']) };
   const route = vm.runInNewContext(source.slice(source.indexOf('async function route('), source.indexOf('\nfunction install(ses)')) + '\nroute', context);
   const call = (endpoint, input, user = id(1)) => route(new Request('https://app.notion.com/api/v3/' + endpoint, { method: 'POST', headers: { 'content-type': 'application/json', 'x-notion-active-user-header': user }, body: JSON.stringify(input) }), () => { forwarded++; return json({ remote: true }); });
   assert.equal((await call('createAgentThread', { type: 'personal_agent', threadId: id(3), spaceId: id(2), content: [{ type: 'text', text: '读取 https://example.com/article' }] })).status, 200);
-  await settle(mock.agent); assert.equal(mock.agent.status().failed, 0); assert.equal(reads, 1);
+  await settle(mock.agent); assert.equal(mock.agent.status().failed, 0); assert.equal(reads, 1); assert.equal(instructionReads, 1);
   assert.equal((await call('sendEventToAgentThread', { threadId: id(3), event: { type: 'user.message', text: '再读一次' } }, id(9))).status, 403);
-  assert.equal(reads, 1); assert.equal(forwarded, 0);
+  assert.equal(reads, 1); assert.equal(forwarded, 0); assert.equal(instructionReads, 1);
 });
 
 test('calendar and custom thread kinds keep network tools disabled on follow-up even if a message claims to be personal', async t => {

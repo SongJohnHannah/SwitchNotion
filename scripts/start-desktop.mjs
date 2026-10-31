@@ -10,6 +10,8 @@ import platformModule from '../src/platform/index.cjs';
 
 const platform = platformModule.createDesktopPlatform();
 platform.requireCapability('launchRuntime');
+const macRuntime = platform.id === 'darwin' ? createRequire(import.meta.url)('../src/platform/macos-runtime.cjs') : null;
+const macRuntimeHealthFetch = macRuntime?.macRuntimeHealthFetch;
 const control = path.join(stateRoot, 'control.json');
 fs.mkdirSync(stateRoot, { recursive: true });
 const releaseLaunch = launchLock(stateRoot); process.once('exit', releaseLaunch);
@@ -27,6 +29,11 @@ const directStart = process.argv[1] && path.resolve(process.argv[1]) === fileURL
 const prepared = prepare(directStart ? process.argv[2] : undefined, { force: process.env.NOTION_SWITCH_FORCE_UPDATE === '1' });
 console.log(JSON.stringify(prepared));
 function launch() {
+ if (macRuntime && process.env.NOTION_SWITCH_MAC_LAUNCHER) return macRuntime.launchMacApplication({
+  helper: process.env.NOTION_SWITCH_MAC_LAUNCHER, appRoot: platform.runtimeLayout(runtime).appRoot, root: stateRoot,
+  env: { ...process.env, NOTION_SWITCH_PROJECT: path.resolve(import.meta.dirname, '..'),
+   ...(['blocked', 'held'].includes(prepared.updateStatus) ? { NOTION_SWITCH_OPEN_SETTINGS: '1', NOTION_SWITCH_UPDATE_VIEW: '1' } : {}) }
+ });
  const stdout = fs.openSync(path.join(stateRoot, 'desktop-stdout.log'), 'a');
  const stderr = fs.openSync(path.join(stateRoot, 'desktop-stderr.log'), 'a');
  const child = platform.launchRuntime({ container: runtime, stateRoot,
@@ -40,7 +47,9 @@ let child = launch(), runtimeRestored = false;
 if (prepared.pendingValidation) {
   // macOS can take longer to restore tabs after a freshly signed bundle swap.
   const validationTimeout = platform.id === 'darwin' ? 45000 : undefined;
-  if (await waitForRuntime({ root: stateRoot, pid: child.pid, timeoutMs: validationTimeout })) acceptRuntime();
+  const checkStartup = pid => waitForRuntime({ root: stateRoot, pid, timeoutMs: validationTimeout,
+    ...(macRuntimeHealthFetch ? { fetchImpl: macRuntimeHealthFetch({ pid }) } : {}) });
+  if (await checkStartup(child.pid)) acceptRuntime();
   else {
     // Ask only this isolated process to quit. Never kill the original Notion,
     // or swap an executable directory while its process still owns files.
@@ -57,7 +66,7 @@ if (prepared.pendingValidation) {
     rollbackRuntime({ holdHash: prepared.sourceHash, reason: '新版本未通过本机启动检查，已自动恢复上一个版本。' });
     runtimeRestored = true;
     child = launch();
-    if (!await waitForRuntime({ root: stateRoot, pid: child.pid, timeoutMs: validationTimeout })) throw Error('上一个原型版本也未能启动，请打开配置或查看启动结果。');
+    if (!await checkStartup(child.pid)) throw Error('上一个原型版本也未能启动，请打开配置或查看启动结果。');
   }
 }
 const { ProviderRouter } = createRequire(import.meta.url)('../src/provider.cjs');
