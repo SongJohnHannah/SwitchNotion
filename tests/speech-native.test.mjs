@@ -43,9 +43,9 @@ test('native start returns its token and accepts a microphone connection while t
 
 test('native recording cannot start when an unknown client has no verified stop-and-drain adaptation', async t => {
   const f = fixture(t); f.service.lifecycleReady = false;
-  await assert.rejects(f.service.token(), /录音收尾适配/);
+  await assert.rejects(f.service.token(), /录音组件未就绪/);
   f.service.lifecycleReady = true; f.service.drainTransportReady = false;
-  await assert.rejects(f.service.token(), /录音收尾适配/);
+  await assert.rejects(f.service.token(), /录音组件未就绪/);
 });
 test('background model failure is explicit and releases the native recording rather than leaving a false running state', async t => {
   const f = fixture(t); let fail;

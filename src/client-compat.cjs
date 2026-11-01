@@ -5,6 +5,7 @@ const { adaptAutomatic } = require('./compat/automatic.cjs');
 const { adaptAutofill, isAutofillCandidate } = require('./compat/autofill.cjs');
 const { adaptInlineDocuments, isInlineDocumentCandidate } = require('./compat/inline-documents.cjs');
 const macClient = process.platform === 'darwin' ? require('./compat/macos-client.cjs') : null;
+const macSpeech = process.platform === 'darwin' ? require('./compat/macos-speech.cjs') : null;
 // This local provider uses the native chat controls independently of Notion credits.
 // Keep workspace restriction checks above this insertion, and all other features intact.
 // Both reviewed releases contain the same 811656 availability module.
@@ -22,6 +23,8 @@ const reviewedAssets = {
 const anchor = /let [A-Za-z_$][\w$]*=\(null==\(r=\(o=e\[u\]\)\.isOverrideAllowed\)\?void 0:r\.call\(o,n\.data\)\)\?\?!0/g;
 function adaptClient(source, asset, { localSpeechEnabled = false, audioEndpoint, inputMode = 'meeting', onAdaptation } = {}) {
   if (macClient?.isMacClientAsset(asset)) return macClient.adaptMacClient(source, asset, { localSpeechEnabled, audioEndpoint, inputMode, onAdaptation });
+  if (macSpeech?.isMacSpeechCandidate(source, asset) && !reviewedAssets[asset] && !compatibleModule(source, asset))
+    return macSpeech.adaptMacSpeech(source, asset, { localSpeechEnabled, audioEndpoint, inputMode, onAdaptation });
   if (isInlineDocumentCandidate(source, asset)) {
     try { return adaptInlineDocuments(source, asset, onAdaptation); }
     catch (error) { error.notionSwitchKind = 'attachments'; throw error; }
@@ -62,6 +65,7 @@ function adaptClient(source, asset, { localSpeechEnabled = false, audioEndpoint,
 }
 async function adaptClientAsync(source, asset, options = {}) {
   if (macClient?.isMacClientAsset(asset)) return adaptClient(source, asset, options);
+  if (macSpeech?.isMacSpeechCandidate(source, asset) && !reviewedAssets[asset] && !compatibleModule(source, asset)) return adaptClient(source, asset, options);
   if (isInlineDocumentCandidate(source, asset)) return adaptClient(source, asset, options);
   if (isAutofillCandidate(source, asset)) return adaptClient(source, asset, options);
   if (reviewedAssets[asset] || compatibleModule(source, asset)) return adaptClient(source, asset, options);

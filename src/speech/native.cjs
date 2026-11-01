@@ -2,6 +2,7 @@ const http = require('node:http');
 const { randomBytes, randomUUID } = require('node:crypto');
 const { upgrade } = require('./websocket.cjs');
 const { MeetingAudioSession } = require('../meeting-audio.cjs');
+const { verifiedClient } = require('./client-state.cjs');
 const allowedOrigin = origin => { try { const u = new URL(origin); return u.protocol === 'https:' && /^(?:(?:app|www)\.)?notion\.(?:com|so)$/.test(u.hostname) && !u.port; } catch { return false; } };
 class NativeSpeech {
   constructor({ speech, recordings, log = () => {}, originAllowed = allowedOrigin } = {}) {
@@ -15,9 +16,13 @@ class NativeSpeech {
   }
   get endpoint() { return this.port ? `http://127.0.0.1:${this.port}` : null; }
   get enabled() { return this.speech.enabled && !!this.speech.provider.runtime; }
-  async token({ userId } = {}) {
+  async token({ userId, client } = {}) {
     await this.ready;
-    if (!this.enabled || !this.transportReady || !this.lifecycleReady || !this.drainTransportReady) throw Error('本机离线语音或原生录音收尾适配尚未准备，请重新打开会议页面；本次录音没有连接云端。');
+    const pageReady = client != null ? verifiedClient(client, this.speech.inputMode || 'meeting') : this.transportReady && this.lifecycleReady && this.drainTransportReady;
+    if (!this.enabled || !pageReady) {
+      this.log({ type: 'offline-audio-start-rejected', reason: !this.enabled ? 'disabled' : client != null ? 'page-client' : 'legacy-adapter' });
+      throw Error('当前会议页的录音组件未就绪或录音来源已改变，请刷新会议页面后重试。');
+    }
     if (this.speech.recording) throw Error('本机录音测试正在进行，请先停止测试。');
     for (const [token, ticket] of this.tickets) if (ticket.expires < Date.now()) this.tickets.delete(token);
     if (this.tickets.size >= 64) throw Error('本机录音连接过多，请停止后重新打开速记。');
