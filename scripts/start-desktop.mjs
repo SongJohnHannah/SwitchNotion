@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { prepare, runtime, stateRoot } from './prepare-desktop.mjs';
-import { acceptRuntime, rollbackRuntime } from './runtime-update.mjs';
+import { acceptRuntime, rollbackRuntime, previousRuntime } from './runtime-update.mjs';
 import { waitForRuntime } from './runtime-health.mjs';
 import { launchLock } from './launch-lock.mjs';
 import platformModule from '../src/platform/index.cjs';
@@ -60,8 +60,7 @@ if (prepared.pendingValidation) {
     for (let n = 0; n < 25; n++) { try { process.kill(child.pid, 0); await new Promise(r => setTimeout(r, 200)); } catch { break; } }
     let running = false; try { process.kill(child.pid, 0); running = true; } catch {}
     if (running) throw Error('新原型启动未通过检查且尚未退出，已保留备份；请退出原型后重新启动，将自动恢复。');
-    const previousFile = path.join(stateRoot, 'runtime-previous.json');
-    const previous = fs.existsSync(previousFile) ? JSON.parse(fs.readFileSync(previousFile, 'utf8')) : null;
+    const previous = previousRuntime();
     if (!previous || previous.pendingValidation) throw Error('启动未通过本机检查，尚无经过验证的旧版本。请查看 macOS 系统提示及启动日志。');
     rollbackRuntime({ holdHash: prepared.sourceHash, reason: '新版本未通过本机启动检查，已自动恢复上一个版本。' });
     runtimeRestored = true;

@@ -105,6 +105,7 @@ function fixture(t) {
   const parent = path.resolve('.notion-switch'); fs.mkdirSync(parent, { recursive: true });
   const directory = fs.mkdtempSync(path.join(parent, 'test-mac-launch-')), root = path.join(directory, 'state'), project = path.join(directory, 'project');
   fs.mkdirSync(root); fs.mkdirSync(path.join(project, 'src'), { recursive: true }); fs.writeFileSync(path.join(project, 'src/desktop-hook.cjs'), '// isolated fixture');
+  fs.copyFileSync('src/macos-adapter-loader.cjs', path.join(project, 'src/macos-adapter-loader.cjs'));
   t.after(() => { assert.equal(path.dirname(directory), parent); fs.rmSync(directory, { recursive: true, force: true }); });
   const calls = []; let failSign = false;
   const execFileSync = (tool, args) => {
@@ -163,7 +164,7 @@ test('signature failure preserves the working Mac runtime and never changes the 
   const f = fixture(t), options = { ...f, source: f.source.appRoot }; prepareRuntime(options); acceptRuntime(options);
   const app = f.platform.runtimeLayout(path.join(f.root, 'runtime')), before = fs.readFileSync(app.archive);
   const next = f.install('7.40.21'); f.failSign();
-  assert.equal(prepareRuntime(options).updateStatus, 'blocked');
+  assert.equal(prepareRuntime({ ...options, force: true }).updateStatus, 'blocked');
   assert.deepEqual(fs.readFileSync(app.archive), before); assert.equal(sha256(fs.readFileSync(f.source.archive)), sha256(next));
 });
 
@@ -191,7 +192,7 @@ test('M1 updates and rollback preserve signed bundle metadata and local state ac
   const local = path.join(f.root, 'profile', 'fixture-session');
   fs.mkdirSync(path.dirname(local)); fs.writeFileSync(local, 'fixture local state');
   const next = f.install('7.40.21');
-  assert.equal(prepareRuntime(options).pendingValidation, true);
+  assert.equal(prepareRuntime({ ...options, force: true }).pendingValidation, true);
   assert.deepEqual(fs.readFileSync(previous.archive), original);
   assert.equal(fs.existsSync(previous.executable), true);
   const info = JSON.parse(fs.readFileSync(path.join(runtime.appRoot, 'Contents/Info.plist'), 'utf8'));

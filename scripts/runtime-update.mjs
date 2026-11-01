@@ -4,6 +4,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import platformModule from '../src/platform/index.cjs';
 import macRuntime from '../src/platform/macos-runtime.cjs';
+import macAdapter from '../src/macos-adapter-loader.cjs';
 import { inspectDesktop } from './desktop-compat.mjs';
 import { prependToEntry, assertSourceUnchanged } from './asar.mjs';
 
@@ -51,12 +52,34 @@ function adapterHash(sourceProject) {
   } }
   visit(path.join(sourceProject, 'src')); hash.update(fs.readFileSync(new URL('./desktop-compat.mjs', import.meta.url))); return hash.digest('hex');
 }
+function snapshotAdapter(root, sourceProject, hash, copy) {
+  const target = local(root, path.join('adapters', hash));
+  if (fs.existsSync(target)) {
+    try { if (macAdapter.adapterDigest(target) === hash) return; }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  const stage = 'adapter-staging-' + randomUUID(), temporary = local(root, stage);
+  try {
+    copy(path.join(sourceProject, 'src'), path.join(temporary, 'src'));
+    fs.copyFileSync(new URL('./desktop-compat.mjs', import.meta.url), path.join(temporary, 'desktop-compat.mjs'));
+    if (macAdapter.adapterDigest(temporary) !== hash) throw Error('接管组件复制校验失败。');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    // A damaged snapshot is repaired only while this runtime is stopped.
+    fs.rmSync(target, { recursive: true, force: true }); fs.renameSync(temporary, target);
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+}
+export function previousRuntime({ root = stateRoot } = {}) {
+  const current = readJson(local(root, 'prepared.json')), adapter = readJson(local(root, 'adapter-previous.json'));
+  if (current?.updateKind === 'adapter' && current.previousAdapterHash === adapter?.adapterHash &&
+      current.sourceHash === adapter?.sourceHash && current.macBootstrapHash === adapter?.macBootstrapHash) return adapter;
+  return readJson(local(root, 'runtime-previous.json'));
+}
 export function sourceDirectory(root = stateRoot, platform = createDesktopPlatform()) {
   const saved = readJson(local(root, 'prepared.json'));
   return platform.discoverInstallation(root)?.appRoot || saved?.source || path.join(root, 'not-installed', 'Notion');
 }
 export function updateStatus({ root = stateRoot, platform = createDesktopPlatform(), source = sourceDirectory(root, platform) } = {}) {
-  const prepared = readJson(local(root, 'prepared.json')), last = readJson(local(root, 'update-status.json')), previous = readJson(local(root, 'runtime-previous.json'));
+  const prepared = readJson(local(root, 'prepared.json')), last = readJson(local(root, 'update-status.json')), previous = previousRuntime({ root });
   let candidate, error;
   try {
     platform.requireCapability('prepareRuntime');
@@ -65,19 +88,28 @@ export function updateStatus({ root = stateRoot, platform = createDesktopPlatfor
   catch (e) { error = e.message; }
   const held = last?.heldHash && last.heldHash === candidate?.hash;
   return { platform: platform.id, capabilities: platform.capabilities, prototypeVersion: prepared?.version || '未准备', originalVersion: candidate?.version || '无法识别', available: !!candidate && candidate.hash !== prepared?.sourceHash, compatible: !!candidate, previousVersion: previous?.version, held: !!held,
-    message: error || (held ? '已保留上一个可用版本。需要重新尝试时点击“更新并重启”。' : candidate?.hash !== prepared?.sourceHash ? '检测到原版更新，下次完全退出并启动原型时自动同步。' : '当前已与本机原版 Notion 同步。'), lastResult: last?.message, checkedAt: new Date().toISOString() };
+    message: error || (held ? '已保留上一个可用版本。需要重新尝试时点击“更新并重启”。' : candidate?.hash !== prepared?.sourceHash ? platform.id === 'darwin' ? '检测到原版更新，已保留当前版本。点击“更新并重启”后升级；Mac 可能要求重新授权录音。' : '检测到原版更新，下次完全退出并启动原型时自动同步。' : '当前已与本机原版 Notion 同步。'), lastResult: last?.message, checkedAt: new Date().toISOString() };
 }
 export function rollbackRuntime({ root = stateRoot, platform = createDesktopPlatform(), holdHash, reason = '已恢复上一个原型版本。' } = {}) {
   platform.requireCapability('prepareRuntime');
-  const prior = readJson(local(root, 'runtime-previous.json'));
-  if (!prior || !fs.existsSync(local(root, 'runtime-previous'))) throw Error('尚无可恢复的上一个版本。');
   const rejected = readJson(local(root, 'prepared.json'));
+  const prior = previousRuntime({ root });
+  if (!prior) throw Error('尚无可恢复的上一个版本。');
+  if (rejected?.updateKind === 'adapter' && rejected.previousAdapterHash === prior.adapterHash && rejected.sourceHash === prior.sourceHash && rejected.macBootstrapHash === prior.macBootstrapHash) {
+    const directory = local(root, path.join('adapters', prior.adapterHash));
+    if (macAdapter.adapterDigest(directory) !== prior.adapterHash) throw Error('上一个接管组件完整性检查失败。');
+    writeJson(local(root, 'prepared.json'), { ...prior, updateKind: 'runtime', pendingValidation: false });
+    writeJson(local(root, 'update-status.json'), { status: 'restored', message: reason, heldAdapterHash: rejected.adapterHash, checkedAt: new Date().toISOString() });
+    fs.unlinkSync(local(root, 'adapter-previous.json')); return prior;
+  }
+  if (!fs.existsSync(local(root, 'runtime-previous'))) throw Error('尚无可恢复的上一个版本。');
   const discarded = 'runtime-discarded-' + randomUUID();
   if (fs.existsSync(local(root, 'runtime'))) move(root, 'runtime', discarded);
   try { move(root, 'runtime-previous', 'runtime'); }
   catch (error) { if (fs.existsSync(local(root, discarded))) move(root, discarded, 'runtime'); throw error; }
   writeJson(local(root, 'prepared.json'), { ...prior, pendingValidation: false });
-  writeJson(local(root, 'update-status.json'), { status: 'restored', message: reason, heldHash: holdHash || rejected?.sourceHash, checkedAt: new Date().toISOString() });
+  writeJson(local(root, 'update-status.json'), { status: 'restored', message: reason, heldHash: holdHash || rejected?.sourceHash,
+    ...(rejected?.macBootstrapHash ? { heldAdapterHash: rejected.adapterHash } : {}), checkedAt: new Date().toISOString() });
   fs.unlinkSync(local(root, 'runtime-previous.json')); remove(root, discarded, platform);
   return prior;
 }
@@ -98,7 +130,8 @@ export function prepareRuntime({ root = stateRoot, platform = createDesktopPlatf
   }
   const marker = local(root, 'prepared.json'); let previous = readJson(marker);
   if (previous?.platform && previous.platform !== platform.id) throw Error('运行目录属于其他操作系统，请使用此电脑上的独立运行目录。');
-  if (previous?.pendingValidation && fs.existsSync(local(root, 'runtime-previous')) && !readJson(local(root, 'runtime-previous.json'))?.pendingValidation) { rollbackRuntime({ root, platform, reason: '上次更新未完成启动验证，已自动恢复。' }); previous = readJson(marker); }
+  const validatedPrevious = previousRuntime({ root });
+  if (previous?.pendingValidation && validatedPrevious && !validatedPrevious.pendingValidation) { rollbackRuntime({ root, platform, reason: '上次更新未完成启动验证，已自动恢复。' }); previous = readJson(marker); }
   const sourceLayout = platform.installationLayout(path.resolve(source)), originalPath = sourceLayout.archive;
   const runtimeLayout = platform.runtimeLayout(local(root, 'runtime'));
   const canReuse = () => fs.existsSync(runtimeLayout.executable) && fs.existsSync(runtimeLayout.archive);
@@ -106,18 +139,44 @@ export function prepareRuntime({ root = stateRoot, platform = createDesktopPlatf
   if (!relative || !relative.startsWith('..') && !path.isAbsolute(relative)) throw Error('更新源不能位于原型资料目录中。');
   let stage, installed = false;
   try {
-    if (!platform.findInstallation(source, root)) throw Error('未找到完整的官方 Notion 安装，保留现有原型。');
-    const original = fs.readFileSync(originalPath), build = inspectDesktop(original, platform.compatibility), adapter = adapterHash(sourceProject);
-    const last = readJson(local(root, 'update-status.json'));
+    const adapter = adapterHash(sourceProject), last = readJson(local(root, 'update-status.json'));
+    const mac = platform.id === 'darwin', bootstrap = mac && createHash('sha256').update(fs.readFileSync(path.join(sourceProject, 'src/macos-adapter-loader.cjs'))).digest('hex');
+    const sameBootstrap = mac && previous?.macBootstrapHash === bootstrap && canReuse() && path.basename(runtimeLayout.appRoot) === 'SwitchNotion.app' &&
+      fs.existsSync(path.join(runtimeLayout.resources, 'notion-switch/macos-adapter-loader.cjs')) &&
+      createHash('sha256').update(fs.readFileSync(path.join(runtimeLayout.resources, 'notion-switch/macos-adapter-loader.cjs'))).digest('hex') === bootstrap;
+    let original, build, sourceError;
+    try {
+      if (!platform.findInstallation(source, root)) throw Error('未找到完整的官方 Notion 安装，保留现有原型。');
+      original = fs.readFileSync(originalPath); build = inspectDesktop(original, platform.compatibility);
+    } catch (error) {
+      // An incompatible official update must not prevent fixes to an already
+      // working, unchanged Mac bundle. Explicit upgrades still fail closed.
+      if (!sameBootstrap || force) throw error;
+      sourceError = error; build = { hash: previous.sourceHash, version: previous.version };
+    }
+    const deferred = mac && previous && (sourceError || previous.sourceHash !== build.hash) && !force && canReuse();
+    if (!force && mac && last?.heldAdapterHash === adapter && canReuse()) return { ...previous, updateStatus: 'held', message: last.message };
+    if (deferred && !sameBootstrap) return { ...previous, updateStatus: 'deferred', message: '已保留当前 Mac 客户端，确认更新后再升级。' };
+    if (sameBootstrap && (previous.sourceHash === build.hash || deferred)) {
+      snapshotAdapter(root, sourceProject, adapter, copy);
+      if (previous.adapterHash === adapter) return { ...previous, updateStatus: deferred ? 'deferred' : 'current' };
+      writeJson(local(root, 'adapter-previous.json'), previous);
+      const prepared = { ...previous, adapterHash: adapter, previousAdapterHash: previous.adapterHash, updateKind: 'adapter', preparedAt: new Date().toISOString(), pendingValidation: true };
+      writeJson(local(root, 'update-status.json'), { status: 'prepared', message: '已更新接管组件，正在验证启动；Mac 应用签名保持不变。', checkedAt: new Date().toISOString() });
+      writeJson(marker, prepared);
+      return { ...prepared, updateStatus: 'prepared', signaturePreserved: true };
+    }
     if (!force && last?.heldHash === build.hash && previous?.adapterHash === adapter && canReuse()) return { ...previous, updateStatus: 'held', message: last.message };
-    if (!force && previous?.sourceHash === build.hash && previous.adapterHash === adapter && canReuse()) return { ...previous, updateStatus: 'current' };
+    if (!force && !mac && previous?.sourceHash === build.hash && previous.adapterHash === adapter && canReuse()) return { ...previous, updateStatus: 'current' };
+    if (mac) snapshotAdapter(root, sourceProject, adapter, copy);
     stage = 'runtime-staging-' + randomUUID(); const target = local(root, stage);
     const staged = platform.stageInstallation({ source: sourceLayout, container: target, copy });
-    copy(path.join(sourceProject, 'src'), path.join(staged.resources, 'notion-switch'));
+    if (mac) { fs.mkdirSync(path.join(staged.resources, 'notion-switch'), { recursive: true }); fs.copyFileSync(path.join(sourceProject, 'src/macos-adapter-loader.cjs'), path.join(staged.resources, 'notion-switch/macos-adapter-loader.cjs')); }
+    else copy(path.join(sourceProject, 'src'), path.join(staged.resources, 'notion-switch'));
     // The official installer can rewrite normal Notion shortcuts and install
     // into the clone. Only our own updater may replace this isolated runtime.
     fs.rmSync(path.join(staged.resources, 'app-update.yml'), { force: true });
-    const prefix = 'require(require("node:path").join(process.resourcesPath,"notion-switch","desktop-hook.cjs"));\n';
+    const prefix = mac ? 'require(require("node:path").join(process.resourcesPath,"notion-switch","macos-adapter-loader.cjs")).loadMacAdapter();\n' : 'require(require("node:path").join(process.resourcesPath,"notion-switch","desktop-hook.cjs"));\n';
     fs.writeFileSync(staged.archive, prependToEntry(original, build.entry, prefix));
     platform.finalizeRuntime(staged);
     assertSourceUnchanged(originalPath, build.hash);
@@ -125,7 +184,7 @@ export function prepareRuntime({ root = stateRoot, platform = createDesktopPlatf
     if (fs.existsSync(local(root, 'runtime'))) { move(root, 'runtime', 'runtime-previous'); if (previous) writeJson(local(root, 'runtime-previous.json'), previous); }
     try { move(root, stage, 'runtime'); installed = true; }
     catch (error) { if (fs.existsSync(local(root, 'runtime-previous'))) move(root, 'runtime-previous', 'runtime'); throw error; }
-    const prepared = { platform: platform.id, version: build.version, source: sourceLayout.appRoot, sourceHash: build.hash, adapterHash: adapter, compatibility: build.compatibility, preparedAt: new Date().toISOString(), runtime: local(root, 'runtime'), pendingValidation: true };
+    const prepared = { platform: platform.id, version: build.version, source: sourceLayout.appRoot, sourceHash: build.hash, adapterHash: adapter, ...(mac ? { macBootstrapHash: bootstrap, updateKind: 'runtime' } : {}), compatibility: build.compatibility, preparedAt: new Date().toISOString(), runtime: local(root, 'runtime'), pendingValidation: true };
     writeJson(marker, prepared);
     writeJson(local(root, 'update-status.json'), { status: 'prepared', message: '已同步原版更新，正在验证启动。', checkedAt: new Date().toISOString() });
     return { ...prepared, updateStatus: 'prepared', sourceArchiveUnchanged: true };
