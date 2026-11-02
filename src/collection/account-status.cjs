@@ -29,7 +29,9 @@ async function inspectAccount(site) {
 
   const ownPath = node => {
     try {
-      const url = new URL(node.getAttribute('href'), location.href);
+      const href = node.getAttribute('href');
+      if (typeof href !== 'string' || !href.trim()) return '';
+      const url = new URL(href, location.href);
       return url.origin === location.origin && !url.username && !url.password ? url.pathname.replace(/\/$/, '') : '';
     } catch { return ''; }
   };
@@ -38,7 +40,7 @@ async function inspectAccount(site) {
     const profiles = [...document.querySelectorAll('a[data-testid="AppTabBar_Profile_Link"]')].filter(visible);
     for (const account of accounts) {
       const handle = /(?:^|\s)@([A-Za-z0-9_]{1,15})(?=\s|$)/.exec(account.innerText || '')?.[1];
-      if (handle && profiles.some(link => ownPath(link).toLowerCase() === '/' + handle.toLowerCase())) return verdict('valid', 'X 当前账号控件与个人主页一致，已确认登录。');
+      if (handle && !/^(?:undefined|null)$/i.test(handle) && profiles.some(link => ownPath(link).toLowerCase() === '/' + handle.toLowerCase())) return verdict('valid', 'X 当前账号控件与个人主页一致，已确认登录。');
     }
     return verdict('unknown', '未取得一致的当前账号信息，不能仅凭账号入口确认 X 已登录。');
   }

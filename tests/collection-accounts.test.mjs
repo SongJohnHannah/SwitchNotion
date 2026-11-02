@@ -113,6 +113,8 @@ test('TikTok and X need matching current account controls, rather than a generic
   assert.equal((await inspect('tiktok', { selectors: signedTikTok() })).state, 'valid');
   assert.equal((await inspect('x', { selectors: { ...signedX(), [xProfile]: [element({ href: '/someone_else' })] } })).state, 'unknown');
   assert.equal((await inspect('x', { selectors: { [xAccount]: [element({ text: 'Account menu' })] } })).state, 'unknown');
+  assert.equal((await inspect('x', { selectors: { [xAccount]: [element({ text: '@undefined' })], [xProfile]: [element({ href: '/undefined' })] } })).state, 'unknown');
+  assert.equal((await inspect('x', { selectors: { [xAccount]: [element({ text: '@null' })], [xProfile]: [element()] } })).state, 'unknown');
   assert.equal((await inspect('tiktok', { selectors: { [ttProfile]: [element({ href: '/@creator' })] } })).state, 'unknown');
   assert.equal((await inspect('tiktok', { selectors: { ...signedTikTok(), [ttAvatar]: [element({ href: '/@undefined', children: [visible] })], [ttProfile]: [element({ href: '/@undefined' })] } })).state, 'unknown');
   assert.equal((await inspect('x', { selectors: { ...signedX(), [xProfile]: [element({ href: 'https://evil.example/current_person' })] } })).state, 'unknown');
