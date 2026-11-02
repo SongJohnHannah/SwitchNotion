@@ -33,7 +33,9 @@ class CollectionService extends EventEmitter {
     this.binaries = binaries || new CollectionBinaries({ root });
     this.browser = browser || new CollectionBrowser({ root, getSettings: () => this.settings, binaries: this.binaries });
     this.media = media || new CollectionMedia({ root, browser: this.browser, binaries: this.binaries, speech, provider });
-    this.notion = notion || new CollectionNotion({ root });
+    this.notion = notion || (process.platform === 'darwin'
+      ? new (require('../compat/macos-collection-notion.cjs').MacCollectionNotion)({ root })
+      : new CollectionNotion({ root }));
     this.extractor = extraction || new CollectionExtraction({ provider });
     const jobsDirectory = path.join(this.directory, 'jobs');
     if (fs.existsSync(jobsDirectory)) for (const name of fs.readdirSync(jobsDirectory)) {

@@ -75,7 +75,13 @@ const currentAssets = {
   connection: '17048-b38a7b8f431620b1.js', recording: '89269-451ea294ba9323c0.js',
   attachments: '51103-1249b090dd731220.js', autofill: '57590-3242f968a3670cd0.js'
 };
-const currentRecordings = [currentAssets.recording, '89269-d6dd7560b2d4cf66.js', '89269-0cf389326d6293f8.js'];
+const rolloutAssets = {
+  connection: '17048-1137957f6d84ddda.js', recording: '89269-273e8b8f54972a92.js',
+  attachments: '51103-ac42935fe4417d27.js', autofill: '57590-160e036019c0fda3.js'
+};
+const meetingAssets = { connection: '17048-5a213f6060eb4398.js', recording: '89269-53f38642561a101b.js' };
+const allAssets = [...Object.entries(currentAssets), ...Object.entries(rolloutAssets), ...Object.entries(meetingAssets)];
+const currentRecordings = [currentAssets.recording, '89269-d6dd7560b2d4cf66.js', '89269-0cf389326d6293f8.js', rolloutAssets.recording, meetingAssets.recording];
 const cached = name => new URL('../research/.public-assets/' + name, import.meta.url);
 const fixtureMissing = name => !fs.existsSync(cached(name)) && 'Optional public macOS client fixture unavailable';
 function functionSource(source, moduleId, name) {
@@ -85,9 +91,15 @@ function functionSource(source, moduleId, name) {
   assert.ok(fn, 'Native function must exist: ' + name);
   return source.slice(fn.start, fn.end);
 }
+function moduleSource(source, moduleId) {
+  const ast = parse(source, { ecmaVersion: 2024 });
+  const module = ast.body[1].expression.arguments[0].elements[1].properties.find(node => node.key.value === moduleId);
+  assert.ok(module, 'Native module must exist: ' + moduleId);
+  return source.slice(module.start, module.end);
+}
 
-test('current Mac assets enter the production response adapter and changed bytes remain rejected', { skip: Object.values(currentAssets).some(name => fixtureMissing(name)) && 'Optional public macOS client fixtures unavailable' }, async () => {
-  for (const [kind, name] of Object.entries(currentAssets)) {
+test('current Mac assets enter the production response adapter and changed bytes remain rejected', { skip: allAssets.some(([, name]) => fixtureMissing(name)) && 'Optional public macOS client fixtures unavailable' }, async () => {
+  for (const [kind, name] of allAssets) {
     const source = fs.readFileSync(cached(name), 'utf8');
     const result = await adaptResponse(new Response(source), name, { ...options, prepare: () => {
       assert.ok(!['attachments', 'autofill'].includes(kind), 'File and field adapters must not prepare recording');
@@ -95,11 +107,14 @@ test('current Mac assets enter the production response adapter and changed bytes
     assert.deepEqual(result.kinds, [kind]); new vm.Script(await result.response.text());
     assert.throws(() => macClient.adaptMacClient(source + '\n', name, options), /Unreviewed/);
     if (kind === 'recording') assert.equal(macClient.adaptMacClient(source, name), source);
-    if (kind === 'connection') assert.equal(result.changed, false, 'Native watchdog and connection behavior stay intact');
+    if (kind === 'connection') {
+      assert.equal(result.changed, false, 'Native watchdog and connection behavior stay intact');
+      if (name === rolloutAssets.connection) assert.match(source, /openMossCaptureSupported:Y/, 'Preserve the caller-supplied capture capability');
+    }
   }
 });
 
-test('the Mac dispatch preserves the current upstream Windows compatibility path', { skip: Object.values(currentAssets).some(name => fixtureMissing(name)) && 'Optional public macOS client fixtures unavailable' }, () => {
+test('the Mac dispatch preserves the current upstream Windows compatibility path', { skip: allAssets.some(([, name]) => fixtureMissing(name)) && 'Optional public macOS client fixtures unavailable' }, () => {
   const require = createRequire(new URL('../src/client-compat.cjs', import.meta.url));
   const module = { exports: {} };
   const windowsRequire = id => {
@@ -107,7 +122,7 @@ test('the Mac dispatch preserves the current upstream Windows compatibility path
     return require(id);
   };
   vm.runInNewContext(fs.readFileSync(new URL('../src/client-compat.cjs', import.meta.url), 'utf8'), { require: windowsRequire, module, process: { platform: 'win32' } });
-  for (const name of new Set([...Object.values(currentAssets), ...currentRecordings])) {
+  for (const name of new Set([...allAssets.map(([, name]) => name), ...currentRecordings])) {
     if (fixtureMissing(name)) continue;
     const source = fs.readFileSync(cached(name), 'utf8');
     if (name === currentAssets.autofill) {
@@ -137,7 +152,9 @@ for (const recording of currentRecordings) test(`Mac ${recording} releases captu
     if (id === 392719) return { Rk: async value => String(value[0].length), c9: () => events.push('capture-stopped') };
     assert.fail('Stop must not import the obsolete transport: ' + id);
   };
-  const actions = vm.runInNewContext('(class {' + entry + '})', { i: requireNative, S: () => ({ Ay: state }), setTimeout, clearTimeout, Float32Array });
+  const storeAlias = /\b([A-Za-z_$][\w$]*)=\(\)=>i\(585823\)/.exec(module)?.[1];
+  assert.ok(storeAlias, 'Resolve the store alias from the reviewed module');
+  const actions = vm.runInNewContext('(class {' + entry + '})', { i: requireNative, [storeAlias]: () => ({ Ay: state }), setTimeout, clearTimeout, Float32Array });
   Object.assign(actions, {
     sessionOwnership: { getCurrentGeneration: () => 1, isCurrentGeneration: () => true },
     audioEncoderQueue: { afterFlush: () => new Promise(resolve => { release = resolve; }), enqueue: run => run() },
@@ -156,8 +173,30 @@ for (const recording of currentRecordings) test(`Mac ${recording} releases captu
   assert.match(source, /finishOpenMossSourceCapture/); assert.match(source, /this.deadlineAtMs=e.clock.now\(\)\+12e3/);
 });
 
-test('the current Mac attachment consumer uses its renamed converter for local documents and retains ordinary task subscriptions', { skip: fixtureMissing(currentAssets.attachments) }, async () => {
-  const source = macClient.adaptMacClient(fs.readFileSync(cached(currentAssets.attachments), 'utf8'), currentAssets.attachments);
+test('October 30 meeting assets retain the new handshake, recorder and capture-source settings', { skip: Object.values(meetingAssets).some(fixtureMissing) && 'Optional public macOS meeting fixtures unavailable' }, async () => {
+  const connection = fs.readFileSync(cached(meetingAssets.connection), 'utf8');
+  const recording = fs.readFileSync(cached(meetingAssets.recording), 'utf8');
+  const transport = await adaptResponse(new Response(connection), meetingAssets.connection, options);
+  assert.deepEqual(transport.kinds, ['connection']);
+  assert.equal(await transport.response.text(), connection, 'Keep the native OpenMoss bootstrap and watchdog');
+  assert.match(connection, /openMossCaptureSupported:G/);
+  assert.match(connection, /markPacketWritten/);
+  assert.match(connection, /watchdog_ms:3e4/);
+  const result = await adaptResponse(new Response(recording), meetingAssets.recording, options);
+  assert.deepEqual(result.kinds, ['recording']);
+  const patched = await result.response.text();
+  assert.match(patched, /new\(i\(193733\)\)\.AudioRecorder/);
+  assert.match(patched, /openMossCaptureSupported:H\.shouldRequestOpenMossCapture\(\)/);
+  assert.match(patched, /identityDiagnostics/);
+  assert.match(patched, /includeSystemAudio:!0/);
+  assert.match(macClient.adaptMacClient(recording, meetingAssets.recording, { ...options, inputMode: 'microphone' }), /includeSystemAudio:!1/);
+  assert.equal(moduleSource(patched, 392719), moduleSource(recording, 392719), 'The encoder and capture permissions remain intact');
+});
+
+for (const name of [currentAssets.attachments, rolloutAssets.attachments]) test(`Mac ${name} uses its converter for local documents and retains ordinary task subscriptions`, { skip: fixtureMissing(name) }, async () => {
+  const original = fs.readFileSync(cached(name), 'utf8');
+  const source = macClient.adaptMacClient(original, name);
+  assert.equal(moduleSource(source, 743423), moduleSource(original, 743423), 'Ordinary uploads retain the rollout import');
   let subscriptions = 0, received;
   const origin = 'https://app.notion.com', url = origin + '/notion-switch-inline-document/synthetic-file';
   const value = { contentType: 'application/pdf', fileSizeBytes: 927, numPages: 1 };
@@ -180,8 +219,10 @@ test('the current Mac attachment consumer uses its renamed converter for local d
   assert.equal(received.headers, undefined); assert.equal(subscriptions, 1);
 });
 
-test('both current Mac Autofill view branches preserve the originating query and progress without pending writes or hosted tasks', { skip: fixtureMissing(currentAssets.autofill) }, async () => {
-  const source = macClient.adaptMacClient(fs.readFileSync(cached(currentAssets.autofill), 'utf8'), currentAssets.autofill);
+for (const name of [currentAssets.autofill, rolloutAssets.autofill]) test(`Mac ${name} preserves both Autofill view branches without pending writes or hosted tasks`, { skip: fixtureMissing(name) }, async () => {
+  const original = fs.readFileSync(cached(name), 'utf8');
+  const source = macClient.adaptMacClient(original, name);
+  assert.equal(moduleSource(source, 982302), moduleSource(original, 982302), 'The instruction fallback stays unchanged');
   for (const lite of [false, true]) {
     const calls = [], updates = [], initialized = [], completed = [], notifications = [], jobId = 'addf11ed-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const marker = { version: 1, jobId, initial: { value: { groupId: jobId, totalBlocks: 1, workflowAutomationRunIds: ['synthetic-run'] } } };

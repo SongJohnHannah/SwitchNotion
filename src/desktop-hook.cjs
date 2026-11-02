@@ -233,7 +233,8 @@ async function route(request, passthrough, ses) {
     }
   }
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && endpoint === 'getAudioProcessorAuthToken' && settings.speech.enabled) {
-    try { return json(await nativeSpeech.token({ userId: uuid(request.headers.get('x-notion-active-user-header')) })); }
+    if (settings.isLoginSyncing()) return json({ message: '应用正在准备更新或同步登录，请等待重新打开后再录音。' }, 409);
+    try { return json(await nativeSpeech.token({ userId: uuid(request.headers.get('x-notion-active-user-header')), client: request.headers.get('x-notion-switch-speech-client') })); }
     catch (error) { return json({ message: error.message, status: 503 }, 503); }
   }
   if (isNotion(url.hostname) && url.pathname.includes('/api/') && settings.speech.enabled && ['runMeetingNotesAgent', 'runInferenceTranscript'].includes(endpoint)) {

@@ -1,6 +1,45 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const { execFileSync } = require('node:child_process');
+
+function launchMacApplication({ helper, appRoot, root, env, exec = execFileSync } = {}) {
+  if (![helper, appRoot, root].every(value => typeof value === 'string' && path.isAbsolute(value)) || !env || typeof env !== 'object') throw Error('Mac 应用启动参数无效。');
+  // Environment values can contain API credentials. Send them through a pipe,
+  // never as command-line arguments or a persistent launch file.
+  const input = JSON.stringify({ environment: { ...env, NOTION_SWITCH_ROOT: root },
+    arguments: ['--enable-logging=file', '--log-file=' + path.join(root, 'desktop-launchservices.log')] });
+  const output = exec(helper, ['--launch-runtime', appRoot], { input, encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe'], timeout: 20000, maxBuffer: 65536 }).trim();
+  const pid = /^\d+$/.test(output) ? Number(output) : NaN;
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw Error('Mac 系统未返回可核对的应用进程。');
+  return { pid };
+}
+
+function macRuntimeHealthFetch({ pid, fetchImpl = fetch, now = Date.now } = {}) {
+  let attempts = 0, lastActivation = 0;
+  return async (url, options) => {
+    const response = await fetchImpl(url, options);
+    let target, status;
+    try {
+      target = new URL(url);
+      if (!response.ok || target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || !target.port ||
+          target.pathname !== '/status' || target.search || target.hash || target.username || target.password) return response;
+      status = await response.clone().json();
+    } catch { return response; }
+    if (!Number.isSafeInteger(pid) || pid <= 0 || status.pid !== pid || status.appReady !== true || !Array.isArray(status.windows) || status.windows.length ||
+        attempts >= 3 || attempts && now() - lastActivation < 5000) return response;
+    attempts++; lastActivation = now();
+    // A Mac app launched from another app may be ready without receiving its
+    // normal activate event. Ask that same authenticated instance to open its
+    // own window; leave the status body untouched for the real health check.
+    try {
+      await fetchImpl(target.origin + '/notion/open', { method: 'POST', headers: options?.headers,
+        redirect: 'error', signal: AbortSignal.timeout(1000) });
+    } catch {}
+    return response;
+  };
+}
 
 function removeMacRuntimeDirectory(target, { fsImpl = fs, wait = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
   // Finder can recreate .DS_Store between recursive removal and rmdir.
@@ -84,4 +123,4 @@ function createMacRuntime({ execFileSync, fsImpl = fs }) {
     }
   };
 }
-module.exports = { createMacRuntime, validateBundleLinks, headerHash, supportsArm64, removeMacRuntimeDirectory };
+module.exports = { createMacRuntime, validateBundleLinks, headerHash, supportsArm64, removeMacRuntimeDirectory, macRuntimeHealthFetch, launchMacApplication };

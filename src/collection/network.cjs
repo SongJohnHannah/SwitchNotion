@@ -8,10 +8,17 @@ const { pipeline } = require('node:stream/promises');
 const { Transform } = require('node:stream');
 const { publicUrl } = require('./model.cjs');
 const defaultLookup = process.platform === 'darwin' ? require('../compat/macos-public-dns.cjs').macPublicLookup : dns.lookup;
+function proxyEndpoint(value) {
+  let url; try { url = new URL(value); } catch { throw Error('代理地址无效。'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw Error('代理只支持不含账号密码的 HTTP 或 HTTPS 地址。');
+  // Chrome's --proxy-server takes scheme://host:port, not a URL with a path.
+  // URL.href adds a trailing slash that Chrome rejects with ERR_NO_SUPPORTED_PROXIES.
+  return url.origin;
+}
 function effectiveProxy(explicit = '') {
-  if (explicit) return explicit;
+  if (explicit) return proxyEndpoint(explicit);
   for (const name of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']) {
-    try { const value = new URL(process.env[name]); if (['http:', 'https:'].includes(value.protocol)) return value.href; } catch {}
+    try { return proxyEndpoint(process.env[name]); } catch {}
   }
   return '';
 }

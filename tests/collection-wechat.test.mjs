@@ -19,7 +19,7 @@ function fixture() {
 test('sharing resolver preserves signed URLs and original text without Windows-specific dependencies', async () => {
   const f = fixture(), document = await f.channel.resolve(SOURCE);
   assert.equal(document.url, SOURCE); assert.equal(document.author, '测试作者'); assert.equal(document.incomplete, false);
-  assert.deepEqual(document.nodes.map(node => node.kind), ['paragraph', 'paragraph', 'image', 'video']);
+  assert.deepEqual(document.nodes.map(node => node.kind), ['paragraph', 'paragraph', 'video']);
   const video = document.nodes.at(-1); assert.equal(video.url, f.signed); assert.equal(video.duration, 48.25); assert.equal(video.expectedAudio, true); assert.equal(video.platform, 'wechat'); assert.match(video.contentId, /^[a-f\d]{64}$/);
   assert.deepEqual(f.calls[0].body, { type: 'video_channel_url', url: SOURCE, scene: 1 });
   assert.deepEqual(f.calls[1].body, { baseReq: { generalToken: 'fixture' }, exportId: 'fixture-id' });
@@ -27,7 +27,7 @@ test('sharing resolver preserves signed URLs and original text without Windows-s
 });
 test('cached sharing results are cloned and expire before a stale signed URL is reused', async () => {
   const f = fixture(), first = await f.channel.resolve(SOURCE); first.nodes.length = 0;
-  const second = await f.channel.resolve(SOURCE); assert.equal(second.nodes.length, 4); assert.equal(f.calls.length, 2);
+  const second = await f.channel.resolve(SOURCE); assert.equal(second.nodes.length, 3); assert.equal(f.calls.length, 2);
   f.expire(); await f.channel.resolve(SOURCE); assert.equal(f.calls.length, 4);
 });
 test('a real HTTP 201 detail response with errCode zero is a successful video, not a login failure', async () => {

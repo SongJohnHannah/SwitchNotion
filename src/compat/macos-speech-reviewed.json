@@ -1,0 +1,9 @@
+{
+  "review": "2026-11-01: preserve call-detection telemetry, capture permissions, session ownership and finite drain deadlines; patch only the reviewed module bodies.",
+  "modules": {
+    "328616": { "kind": "audio", "hash": "2c512d87d65969684f713de5002eb8ade82f8cdba60db1a702f5293e0d88eca8" },
+    "697264": { "kind": "connection", "hash": "858cb7eee1d5334707f03c0eb506b5e246d83c1d13df44d2bb8d6161d6cc308a" },
+    "372201": { "kind": "recording", "hash": "0823edf98547597da297adf94ba4c003ffea892639c0a6286f3f00e59ca2e625" }
+  },
+  "encoder": { "id": "392719", "hash": "2ea9587a084365c5ed8e352153db3af19c841105de782c33ec83a863f8a5c89f" }
+}

@@ -8,7 +8,66 @@ import { ensureMacInstallation } from '../scripts/launch-macos.mjs';
 import { prepareRuntime, acceptRuntime, rollbackRuntime, updateStatus } from '../scripts/runtime-update.mjs';
 import { inspectDesktop } from '../scripts/desktop-compat.mjs';
 import { readArchive, sha256 } from '../scripts/asar.mjs';
+import { waitForRuntime } from '../scripts/runtime-health.mjs';
 const { createDesktopPlatform } = platformModule;
+
+test('Mac GUI startup uses the native application helper, keeps credentials off argv and returns the real application PID', () => {
+  const env = { NOTION_SWITCH_PROJECT: '/fixture/project', DEEPSEEK_API_KEY: 'synthetic-launch-key' };
+  const result = runtimeModule.launchMacApplication({ helper: '/fixture/SwitchNotion', appRoot: '/fixture/runtime/SwitchNotion.app', root: '/fixture/state', env,
+    exec: (helper, args, options) => {
+      assert.equal(helper, '/fixture/SwitchNotion'); assert.deepEqual(args, ['--launch-runtime', '/fixture/runtime/SwitchNotion.app']);
+      assert.ok(!args.join(' ').includes(env.DEEPSEEK_API_KEY));
+      const input = JSON.parse(options.input);
+      assert.equal(input.environment.DEEPSEEK_API_KEY, env.DEEPSEEK_API_KEY);
+      assert.equal(input.environment.NOTION_SWITCH_ROOT, '/fixture/state');
+      assert.ok(input.arguments.some(value => value.startsWith('--log-file=')));
+      assert.deepEqual(options.stdio, ['pipe', 'pipe', 'pipe']); return '456\n';
+    } });
+  assert.equal(result.pid, 456);
+  for (const output of ['', '0', 'not a pid', '456\n789']) assert.throws(() => runtimeModule.launchMacApplication({ helper: '/fixture/helper', appRoot: '/fixture/runtime.app', root: '/fixture/state', env, exec: () => output }), /进程/);
+});
+
+test('Mac startup activates the authenticated windowless process and still requires a later real window', async t => {
+  fs.mkdirSync(path.resolve('.notion-switch'), { recursive: true });
+  const root = fs.mkdtempSync(path.resolve('.notion-switch/test-mac-activation-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const pid = 123, token = 'a'.repeat(64), headers = { authorization: 'Bearer ' + token };
+  fs.writeFileSync(path.join(root, 'control.json'), JSON.stringify({ pid, port: 32123, token }));
+  let windows = [], activations = 0, probes = 0;
+  const fetchImpl = runtimeModule.macRuntimeHealthFetch({ pid, fetchImpl: async (url, options) => {
+    assert.deepEqual(options.headers, headers);
+    if (url.endsWith('/notion/open')) {
+      activations++; assert.equal(options.method, 'POST'); assert.equal(options.redirect, 'error');
+      windows = [{ visible: true }]; return Response.json({ opened: true });
+    }
+    probes++; return Response.json({ pid, appReady: true, windows: structuredClone(windows) });
+  } });
+  const before = await fetchImpl('http://127.0.0.1:32123/status', { headers });
+  assert.deepEqual((await before.json()).windows, [], 'Activation must not fabricate readiness in the status response');
+  assert.equal(await waitForRuntime({ root, pid, fetchImpl, alive: () => true, timeoutMs: 1000 }), true);
+  assert.equal(activations, 1); assert.equal(probes, 2);
+});
+
+test('Mac window activation rejects mismatched or unready processes and bounds unavailable-window retries', async () => {
+  for (const status of [{ pid: 124, appReady: true, windows: [] }, { pid: 123, appReady: false, windows: [] },
+    { pid: 123, appReady: true }, { pid: 123, appReady: true, windows: [{ visible: true }] }]) {
+    let requests = 0;
+    const fetchImpl = runtimeModule.macRuntimeHealthFetch({ pid: 123, fetchImpl: async () => { requests++; return Response.json(status); } });
+    await fetchImpl('http://127.0.0.1:32123/status'); assert.equal(requests, 1);
+  }
+  let tick = 0, activations = 0;
+  const status = { pid: 123, appReady: true, windows: [] };
+  const fetchImpl = runtimeModule.macRuntimeHealthFetch({ pid: 123, now: () => tick, fetchImpl: async url => {
+    if (url.endsWith('/notion/open')) { activations++; throw Error('not ready'); }
+    return Response.json(status);
+  } });
+  for (const url of ['https://127.0.0.1:32123/status', 'http://localhost:32123/status', 'http://127.0.0.1:32123/status?other=1']) await fetchImpl(url);
+  assert.equal(activations, 0);
+  for (let i = 0; i < 5; i++) await fetchImpl('http://127.0.0.1:32123/status');
+  assert.equal(activations, 1);
+  for (let i = 0; i < 5; i++) { tick += 5000; assert.deepEqual(await (await fetchImpl('http://127.0.0.1:32123/status')).json(), status); }
+  assert.equal(activations, 3);
+});
 
 test('Mac cleanup tolerates a recreated Finder file, preserves neighboring state and bounds persistent failures', t => {
   fs.mkdirSync(path.resolve('.notion-switch'), { recursive: true });
@@ -46,6 +105,7 @@ function fixture(t) {
   const parent = path.resolve('.notion-switch'); fs.mkdirSync(parent, { recursive: true });
   const directory = fs.mkdtempSync(path.join(parent, 'test-mac-launch-')), root = path.join(directory, 'state'), project = path.join(directory, 'project');
   fs.mkdirSync(root); fs.mkdirSync(path.join(project, 'src'), { recursive: true }); fs.writeFileSync(path.join(project, 'src/desktop-hook.cjs'), '// isolated fixture');
+  fs.copyFileSync('src/macos-adapter-loader.cjs', path.join(project, 'src/macos-adapter-loader.cjs'));
   t.after(() => { assert.equal(path.dirname(directory), parent); fs.rmSync(directory, { recursive: true, force: true }); });
   const calls = []; let failSign = false;
   const execFileSync = (tool, args) => {
@@ -104,7 +164,7 @@ test('signature failure preserves the working Mac runtime and never changes the 
   const f = fixture(t), options = { ...f, source: f.source.appRoot }; prepareRuntime(options); acceptRuntime(options);
   const app = f.platform.runtimeLayout(path.join(f.root, 'runtime')), before = fs.readFileSync(app.archive);
   const next = f.install('7.40.21'); f.failSign();
-  assert.equal(prepareRuntime(options).updateStatus, 'blocked');
+  assert.equal(prepareRuntime({ ...options, force: true }).updateStatus, 'blocked');
   assert.deepEqual(fs.readFileSync(app.archive), before); assert.equal(sha256(fs.readFileSync(f.source.archive)), sha256(next));
 });
 
@@ -132,7 +192,7 @@ test('M1 updates and rollback preserve signed bundle metadata and local state ac
   const local = path.join(f.root, 'profile', 'fixture-session');
   fs.mkdirSync(path.dirname(local)); fs.writeFileSync(local, 'fixture local state');
   const next = f.install('7.40.21');
-  assert.equal(prepareRuntime(options).pendingValidation, true);
+  assert.equal(prepareRuntime({ ...options, force: true }).pendingValidation, true);
   assert.deepEqual(fs.readFileSync(previous.archive), original);
   assert.equal(fs.existsSync(previous.executable), true);
   const info = JSON.parse(fs.readFileSync(path.join(runtime.appRoot, 'Contents/Info.plist'), 'utf8'));

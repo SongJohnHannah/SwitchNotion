@@ -41,6 +41,8 @@ try {
   const video=await read(), v=video.nodes.find(n=>n.platform==='xiaohongshu');
   assert.equal(v.url,'https://sns-video-qc.xhscdn.com/high.mp4?sign=c%2Fd&t=2'); assert.equal(v.duration,57); assert.equal(v.expectedAudio,true); assert.equal(v.direct,true);
   assert.equal(video.nodes.some(n=>n.url===cdn('cover')),false,'Video cover must not be duplicated as article content');
+  assert.equal(video.nodes.filter(n=>n.kind==='video').length,1,'Only the source video should be collected');
+  assert.equal(video.nodes.some(n=>n.kind==='image'||n.kind==='audio'),false,'A video note must not collect unrelated inline media');
   wall='<div class="login-container">请重新登录</div>';
   const login=await read();assert.equal(login.requiresLogin,true);assert.equal(login.incomplete,true);
   wall='';missing=true;

@@ -1,7 +1,7 @@
 'use strict';
 const api = window.notionSwitch;
 const $ = id => document.getElementById(id);
-let state, editing, removing, toastTimer, busy = false, speechRecorder, speechPoll, speechDirty = false, memoryScopes = [], transcriptPending = false, ocrPending = false;
+let state, editing, removing, toastTimer, clientUpdatePoll, busy = false, speechRecorder, speechPoll, speechDirty = false, memoryScopes = [], transcriptPending = false, ocrPending = false;
 const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4500); }
 function result(id, text, error = false) { const node = $(id); node.textContent = text; node.classList.toggle('error', error); node.hidden = !text; }
@@ -294,14 +294,31 @@ $('confirm-login').addEventListener('click', () => operation($('login-dialog'), 
 }));
 $('deepseek-form').addEventListener('submit', event => { event.preventDefault(); operation($('deepseek-form'), async () => { result('provider-result', '正在检测并保存…'); const r = await api.saveDeepseek({ apiKey: $('deepseek-key').value, model: $('deepseek-model').value, thinking: $('deepseek-thinking').checked ? 'enabled' : 'disabled', reasoningEffort: $('deepseek-effort').value, multiAgent: $('multi-agent').checked ? 'enabled' : 'disabled' }); result('provider-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) { clearKey('deepseek-key'); await load(); toast(r.result.message); } }); });
 async function checkUpdates() {
+  clearTimeout(clientUpdatePoll);
   const r = await api.updateStatus(); if (!r.ok) { result('updates-result', r.error, true); return; }
-  const info = r.result; $('updates-title').textContent = info.available ? '检测到本机 Notion 更新' : '每次启动自动检查';
+  const info = r.result; $('updates-title').textContent = info.available ? '检测到原版 Notion 更新' : '原版 Notion 客户端';
+  const client = info.client;
+  $('client-code-version').textContent = client?.revision ? '当前代码版本 ' + client.revision + (client.needsRestart ? ' · 有本地更新待接入' : '') : '当前安装的代码版本暂不可用';
+  $('client-code-help').textContent = (client?.message || '点击更新会下载最新代码，完成后自动重启。') +
+    (client?.supported ? ' 更新前请确认页面编辑已同步，并结束录音或 AI 任务。' : '');
+  $('update-switch-notion').disabled = client?.supported === false;
+  $('update-switch-notion').dataset.unavailable = String(client?.supported === false);
+  if (client?.last) result('client-updates-result', client.last.message, ['blocked', 'restored'].includes(client.last.status));
+  if (['checking', 'downloaded', 'applying'].includes(client?.last?.status) && Date.now() - Date.parse(client.last.checkedAt) < 120000) {
+    clientUpdatePoll = setTimeout(() => { if (!busy && !$('updates-view').hidden) void checkUpdates(); }, 2000);
+  }
   $('updates-versions').textContent = '本机原版 ' + info.originalVersion + ' · 当前原型 ' + info.prototypeVersion;
   const automatic = info.automaticCompatibility;
   $('updates-web').textContent = automatic ? '网页自动适配已开启 · 本次已检查 ' + automatic.checked + ' 个脚本 · 自动适配 ' + automatic.adapted + ' 个 · 不兼容 ' + automatic.blocked + ' 个' : '网页模块加载时自动检查。';
   $('updates-message').textContent = info.message; $('rollback-update').hidden = !info.previousVersion;
   result('updates-result', info.lastResult || '', !info.compatible || !info.clientCompatible);
 }
+$('update-switch-notion').addEventListener('click', () => operation($('client-updates-card'), async () => {
+  const button = $('update-switch-notion'); button.textContent = '正在更新…';
+  result('client-updates-result', '正在检查并下载最新代码，请稍候…');
+  try { const r = await api.updateSwitchNotion(); result('client-updates-result', r.ok ? r.result.message : r.error, !r.ok); }
+  finally { button.textContent = '更新 Switch Notion'; }
+}));
 $('check-updates').addEventListener('click', () => operation($('updates-card'), checkUpdates));
 $('apply-update').addEventListener('click', () => operation($('updates-card'), async () => { const r = await api.updateNotion(); result('updates-result', r.ok ? r.result.message : r.error, !r.ok); }));
 $('rollback-update').addEventListener('click', () => operation($('updates-card'), async () => { const r = await api.rollbackNotion(); result('updates-result', r.ok ? r.result.message : r.error, !r.ok); }));

@@ -7,7 +7,9 @@ import platformModule from '../src/platform/index.cjs';
 platformModule.createDesktopPlatform().requireCapability('prepareRuntime');
 
 const mode = process.argv[2], parentPid = Number(process.argv[3]);
-if (!['update', 'rollback'].includes(mode) || !Number.isSafeInteger(parentPid) || parentPid <= 0 || parentPid === process.pid || !process.connected) throw Error('Invalid update helper invocation');
+if (!['update', 'rollback', 'client'].includes(mode) || !Number.isSafeInteger(parentPid) || parentPid <= 0 || parentPid === process.pid || !process.connected) throw Error('Invalid update helper invocation');
+const plan = mode === 'client' ? { before: process.argv[4], after: process.argv[5] } : null;
+if (plan && ![plan.before, plan.after].every(value => /^[a-f\d]{40}$/.test(value || ''))) throw Error('Invalid client update revisions');
 process.send({ ready: true });
 const alive = () => { try { process.kill(parentPid, 0); return true; } catch { return false; } };
 const until = Date.now() + 30000;
@@ -15,6 +17,11 @@ while (alive() && Date.now() < until) await sleep(250);
 if (alive()) {
   fs.writeFileSync(path.join(stateRoot, 'update-status.json'), JSON.stringify({ status: 'blocked', message: '原型尚未完全退出，更新未应用。请退出原型后重新启动。', checkedAt: new Date().toISOString() }));
   process.exit(1);
+}
+if (mode === 'client') {
+  const { applyClientUpdate } = await import('./client-update-helper.mjs');
+  const applied = await applyClientUpdate({ root: stateRoot, project: path.resolve(import.meta.dirname, '..'), plan });
+  process.exit(applied ? 0 : 1);
 }
 if (mode === 'rollback') rollbackRuntime();
 process.env.NOTION_SWITCH_FORCE_UPDATE = mode === 'update' ? '1' : '0';

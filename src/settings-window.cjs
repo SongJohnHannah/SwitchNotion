@@ -55,6 +55,9 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
     await app.whenReady();
     let main = BrowserWindow.getAllWindows().find(w => !isSettings(w.webContents));
     if (!main) {
+      // On Mac, emitting the JS event alone does not make a background app
+      // active. Focus the native application before asking it for a window.
+      if (platform.id === 'darwin') app.focus({ steal: true });
       app.emit('activate', {}, false);
       await new Promise(resolve => setTimeout(resolve, 300));
       main = BrowserWindow.getAllWindows().find(w => !isSettings(w.webContents));

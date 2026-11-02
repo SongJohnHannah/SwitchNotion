@@ -5,10 +5,56 @@ async function inspectAccount(site) {
   const domain = domains[site], host = location.hostname;
   const verdict = (state, message, retry = state === 'unknown') => ({ state, message, retry });
   if (!domain || !(host === domain || host.endsWith('.' + domain))) return verdict('unknown', '网页跳转到了其他网站，未能确认登录。');
-  const visible = node => !!node && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden';
+  const visible = node => {
+    if (!node || node.closest('[hidden], [aria-hidden="true"], [inert]')) return false;
+    for (let current = node; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || Number(style.opacity) === 0) return false;
+    }
+    return [...node.getClientRects()].some(rect => rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth);
+  };
   const visibleMatch = selector => [...document.querySelectorAll(selector)].some(visible);
   if (/验证码|安全验证|安全校验|captcha|security check|verify you are human/i.test(document.title) || visibleMatch('iframe[src*="captcha"], iframe[src*="verifycenter"], [data-testid="ocfArkoseFrame"]') || /\/account\/access/.test(location.pathname)) return verdict('unknown', '网站要求安全验证，请在收集浏览器中处理后重试。', false);
   if (/\/(?:login|signin|i\/flow\/login)(?:\/|$)/.test(location.pathname)) return verdict('missing', '网站显示登录页，请登录后重新检测。');
+  const loginSelectors = {
+    douyin: 'header [data-e2e="login-button"], [data-e2e="navigation"] [data-e2e="login-button"]',
+    xiaohongshu: '.side-bar .login-btn, .sidebar .login-btn',
+    tiktok: '[data-e2e="top-login-button"], [data-e2e="nav-login-button"], button[data-e2e="login-button"]',
+    youtube: 'ytd-masthead a[href*="accounts.google.com/ServiceLogin"], ytd-masthead ytd-button-renderer a[href*="accounts.google.com"]',
+    x: 'a[data-testid="loginButton"], a[href="/i/flow/login"], a[href="/login"], [data-testid="LoginForm_Login_Button"]'
+  };
+  // Guest navigation may still contain profile/account placeholders. A visible
+  // login prompt takes precedence over those controls and stale page state.
+  if (loginSelectors[site] && visibleMatch(loginSelectors[site])) return verdict('missing', '网站显示登录入口，当前会话尚未登录。');
+
+  const ownPath = node => {
+    try {
+      const href = node.getAttribute('href');
+      if (typeof href !== 'string' || !href.trim()) return '';
+      const url = new URL(href, location.href);
+      return url.origin === location.origin && !url.username && !url.password ? url.pathname.replace(/\/$/, '') : '';
+    } catch { return ''; }
+  };
+  if (site === 'x') {
+    const accounts = [...document.querySelectorAll('[data-testid="SideNav_AccountSwitcher_Button"]')].filter(visible);
+    const profiles = [...document.querySelectorAll('a[data-testid="AppTabBar_Profile_Link"]')].filter(visible);
+    for (const account of accounts) {
+      const handle = /(?:^|\s)@([A-Za-z0-9_]{1,15})(?=\s|$)/.exec(account.innerText || '')?.[1];
+      if (handle && !/^(?:undefined|null)$/i.test(handle) && profiles.some(link => ownPath(link).toLowerCase() === '/' + handle.toLowerCase())) return verdict('valid', 'X 当前账号控件与个人主页一致，已确认登录。');
+    }
+    return verdict('unknown', '未取得一致的当前账号信息，不能仅凭账号入口确认 X 已登录。');
+  }
+  if (site === 'tiktok') {
+    const avatars = [...document.querySelectorAll('[data-e2e="profile-icon"] a[href^="/@"]')].filter(visible);
+    const profiles = [...document.querySelectorAll('a[data-e2e="nav-profile"][href^="/@"]')].filter(visible);
+    for (const avatar of avatars) {
+      const profile = ownPath(avatar), handle = /^\/@([^/\s]+)$/.exec(profile)?.[1];
+      if (handle && !/^(?:undefined|null)$/i.test(handle) && [...avatar.querySelectorAll('img')].some(visible) &&
+          profiles.some(link => ownPath(link) === profile)) return verdict('valid', 'TikTok 当前账号头像与个人主页一致，已确认登录。');
+    }
+    if (document.readyState === 'complete' && !(document.body?.innerText || '').trim() && !document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__')?.textContent?.trim()) return verdict('unknown', 'TikTok 页面没有加载出账号信息，请在收集浏览器中打开后重试。');
+    return verdict('unknown', '未取得一致的当前账号信息，不能仅凭个人主页入口确认 TikTok 已登录。');
+  }
 
   if (site === 'douyin') {
     const source = document.getElementById('RENDER_DATA')?.textContent;
@@ -47,20 +93,9 @@ async function inspectAccount(site) {
   const accountSelectors = {
     douyin: 'header a[href="/user/self"], [data-e2e="navigation"] a[href="/user/self"]',
     xiaohongshu: '.side-bar a[href^="/user/profile/"], .sidebar a[href^="/user/profile/"]',
-    tiktok: '[data-e2e="profile-icon"] a[href^="/@"], a[data-e2e="nav-profile"][href^="/@"]',
     youtube: 'ytd-masthead button#avatar-btn img, ytm-mobile-topbar-renderer button[aria-label="Account"] img',
-    x: '[data-testid="SideNav_AccountSwitcher_Button"]'
   };
   if (accountSelectors[site] && visibleMatch(accountSelectors[site])) return verdict('valid', '已在最新网页中确认当前账号入口；具体内容权限在收集时检查。');
-  const loginSelectors = {
-    douyin: 'header [data-e2e="login-button"], [data-e2e="navigation"] [data-e2e="login-button"]',
-    xiaohongshu: '.side-bar .login-btn, .sidebar .login-btn',
-    tiktok: '[data-e2e="top-login-button"], [data-e2e="nav-login-button"]',
-    youtube: 'ytd-masthead a[href*="accounts.google.com/ServiceLogin"], ytd-masthead ytd-button-renderer a[href*="accounts.google.com"]',
-    x: 'a[data-testid="loginButton"], a[href="/i/flow/login"]'
-  };
-  if (loginSelectors[site] && visibleMatch(loginSelectors[site])) return verdict('missing', '网站显示登录入口，尚未确认有效账号。');
-  if (site === 'tiktok' && document.readyState === 'complete' && !(document.body?.innerText || '').trim() && !document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__')?.textContent?.trim()) return verdict('unknown', 'TikTok 页面没有加载出账号信息，请在收集浏览器中打开后重试。');
   return verdict('unknown', '未找到明确的当前账号状态，可直接收集，按实际访问结果检查。');
 }
 module.exports = { inspectAccount };

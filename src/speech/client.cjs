@@ -57,12 +57,13 @@ function replaceOnce(source, target, replacement) {
   if (source.split(target).length !== 2) throw Error('Unsupported native recording lifecycle');
   return source.replace(target, replacement);
 }
-function adaptRecordingClient(source, asset, { inputMode = 'meeting' } = {}) {
+function adaptRecordingClient(source, asset, { inputMode = 'meeting', gateModuleId = 218744, transportModuleId = 241978 } = {}) {
   if (!['microphone', 'meeting'].includes(inputMode)) throw Error('Invalid local recording input mode');
   if (asset.startsWith('17048-')) {
     return source;
   }
-  source = replaceOnce(source, 'transcriptionDrainEnabled:i(218744).default.checkGate({gateName:"meeting_notes_transcription_drain_enabled"})', 'transcriptionDrainEnabled:!0');
+  if (![218744, 211589].includes(gateModuleId) || ![241978, 697264].includes(transportModuleId)) throw Error('Unsupported native recording imports');
+  source = replaceOnce(source, 'transcriptionDrainEnabled:i(' + gateModuleId + ').default.checkGate({gateName:"meeting_notes_transcription_drain_enabled"})', 'transcriptionDrainEnabled:!0');
   for (const entry of ['static async startDictation(e){', 'static async getDictationAudioRecorder(e){']) {
     source = replaceOnce(source, entry, entry + 'e={...e,includeSystemAudio:' + (inputMode === 'meeting' ? '!0' : '!1') + '};');
   }
@@ -71,7 +72,7 @@ function adaptRecordingClient(source, asset, { inputMode = 'meeting' } = {}) {
   const stores = [...source.matchAll(/\b([A-Za-z_$][\w$]*)=\(\)=>i\(585823\)/g)];
   if (stores.length !== 1) throw Error('Unsupported native recording store');
   const entry = 'static stopDictation(e){';
-  const wrapper = entry + 'return (' + stopWithAudioFlush.toString() + ')(this,e,{state:' + stores[0][1] + '().Ay,transport:i(241978),send:i(216735).$g,encode:i(392719).Rk,captureStopped:()=>i(392719).c9({isCapturingAudio:!1}),language:()=>"auto"})}static stopDictationAfterLocalFlush(e){';
+  const wrapper = entry + 'return (' + stopWithAudioFlush.toString() + ')(this,e,{state:' + stores[0][1] + '().Ay,transport:i(' + transportModuleId + '),send:i(216735).$g,encode:i(392719).Rk,captureStopped:()=>i(392719).c9({isCapturingAudio:!1}),language:()=>"auto"})}static stopDictationAfterLocalFlush(e){';
   return replaceOnce(source, entry, wrapper);
 }
 module.exports = { adaptRecordingClient, stopWithAudioFlush };

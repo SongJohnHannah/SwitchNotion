@@ -79,3 +79,13 @@ Windows 验证：实际本地页面在隔离 Edge 渲染，预览五字段、选
 - 必须继续：页面/Home 的 Build with AI 独立预览/布局入口、其余字段类型、暂停/恢复语义、真实服务端查询/事务，以及 Windows/Mac 原生控件验收。
 
 整体待办仍见 [AI 对接检查](AI-INTEGRATION-AUDIT.md) 与 [Windows 验收清单](WINDOWS-VALIDATION-CHECKLIST.md)。
+
+## 2026-10-28 桌面功能测试
+
+本轮按用户要求测试 `/database` 中的 AI 建库入口，并运行六个现有建库专项测试文件。自动测试共 48 项：42 通过、6 跳过、0 失败；六项跳过均因本机缺少对应的已审核官方前端样本，涉及预览操作消费者、补丁消费者、两版确认函数、视图规格编译器及分组查询对照。通过项覆盖方案校验、六种视图、预览零提交、确认后提交与读回、拒绝、停止、历史恢复和防重复确认；使用合成模型与内存事务，不能证明真实桌面建库成功。
+
+原版 Notion 的实际窗口中，新建独立测试页后输入 `/database`，可打开 `New database` 面板。输入合成需求：五个字段（标题、状态、日期、优先级、复选框），表格、按状态分组的看板和按日期展示的日历，不添加示例行。面板显示 `You've run out of free AI responses. Upgrade Notion AI.`，填写完整需求后 `Submit AI message` 仍禁用。因此没有发出本次建库生成请求，也没有进入字段生成、布局预览和确认创建阶段。该额度提示来自原版客户端，不是 Switch Notion 的 DeepSeek 错误。
+
+项目的 Switch Notion 已通过现有启动入口启动；只读状态确认 `appReady=true`、窗口可见、`mode=deepseek`、建库服务可用且 `upstreamGenerationRequests=0`。但桌面自动化按运行路径和 bundle ID 连接其窗口均持续超时，未能在该实例点击实际建库入口。因此本轮没有取得 Switch Notion 对此入口的端到端验收结果，也没有证明其可以消除原生额度限制。页面/Home 独立向导的适配待办保持未完成。
+
+本轮保留了一张明确命名的测试页及其中的空白数据库视图入口，没有生成所要求的字段、布局或样本记录。页面位置、完整测试输入和结构化结果仅保存在本机忽略目录 `.notion-switch/mac-arm64/database-build-ui-test-2026-10-28.json`，不把私人工作区标识写入项目文档。

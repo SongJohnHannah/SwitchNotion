@@ -18,6 +18,21 @@ const sites = Object.freeze([
 ]);
 let kitModule;
 const mediaKit = () => kitModule ||= import(pathToFileURL(path.join(__dirname, 'media-kit/index.mjs')).href);
+async function scrollPage() {
+  // Bilibili's video page appends recommendations indefinitely; the video and
+  // its description are already available once the page is ready.
+  if (/(^|\.)bilibili\.com$/i.test(location.hostname) && /^\/video\/(?:BV|av)/i.test(location.pathname)) return;
+  let last = 0;
+  for (let i = 0; i < 120; i++) {
+    window.scrollBy(0, innerHeight * .85);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const height = document.body.scrollHeight;
+    if (scrollY + innerHeight >= height - 20 && height === last) break;
+    last = height;
+  }
+  window.scrollTo(0, 0);
+  await new Promise(resolve => setTimeout(resolve, 800));
+}
 function cdpCommand(wsUrl, method, params = {}, { signal, timeout = 30000 } = {}) {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted(); const socket = new WebSocket(wsUrl);
@@ -116,6 +131,8 @@ class CollectionBrowser {
   async verifyAccount(site, signal) {
     const { m } = await this.ensure(signal), tab = await this.tab(site.url, signal);
     const until = Date.now() + 12000;
+    const requireStableAccount = site.id === 'tiktok' || site.id === 'x';
+    let confirmations = 0;
     let latest = { state: 'unknown', message: '未找到明确的当前账号状态，可在收集时继续检查。' };
     try {
       // Authenticated page data arrives before video/ad resources finish. Do
@@ -124,15 +141,22 @@ class CollectionBrowser {
         signal?.throwIfAborted();
         try {
           latest = await this.readAccountStatus(tab, site, signal);
-          if (latest.state !== 'unknown' || latest.retry === false) break;
+          if (latest.state === 'valid' && requireStableAccount) {
+            if (++confirmations >= 2) break;
+          } else {
+            confirmations = 0;
+            if (latest.state !== 'unknown' || latest.retry === false) break;
+          }
         } catch (error) {
           signal?.throwIfAborted();
+          confirmations = 0;
           // Navigation can replace the execution context during a probe.
           if (!error.cdpCode) latest = { state: 'unknown', message: '网页状态读取未完成，可在收集时继续检查。' };
         }
         if (Date.now() >= until) break;
         await new Promise(resolve => setTimeout(resolve, 400));
       } while (Date.now() < until);
+      if (requireStableAccount && latest.state === 'valid' && confirmations < 2) latest = { state: 'unknown', message: '账号页面仍在变化，尚未确认稳定的登录状态，请重新检测。' };
       return { state: latest.state, message: latest.message, checkedAt: new Date().toISOString() };
     } finally { await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); }
   }
@@ -174,7 +198,7 @@ class CollectionBrowser {
       };
       await this.waitReady(tab, signal);
       await evaluate(`(async()=>{for(const el of document.querySelectorAll('[data-testid="tweet-text-show-more-link"]')){el.click();await new Promise(r=>setTimeout(r,500));}})()`);
-      await evaluate(`(async()=>{let last=0;for(let i=0;i<120;i++){window.scrollBy(0,innerHeight*.85);await new Promise(r=>setTimeout(r,150));const h=document.body.scrollHeight;if(scrollY+innerHeight>=h-20&&h===last)break;last=h;}window.scrollTo(0,0);await new Promise(r=>setTimeout(r,800));})()`);
+      await evaluate('(' + scrollPage.toString() + ')()');
       const doc = normalizeDocument(await evaluate('(/(^|\\.)xiaohongshu\\.com$/i.test(location.hostname)?(' + extractXiaohongshuPage.toString() + '):(' + extractPage.toString() + '))()'));
       await assertPublicUrl(doc.url);
       if (/(^|\.)xiaohongshu\.com$/i.test(new URL(doc.url).hostname)) {
@@ -210,4 +234,4 @@ class CollectionBrowser {
     } finally { await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); }
   }
 }
-module.exports = { CollectionBrowser, cdpCommand, mediaKit, sites };
+module.exports = { CollectionBrowser, cdpCommand, mediaKit, sites, scrollPage };
