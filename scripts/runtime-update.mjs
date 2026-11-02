@@ -126,6 +126,7 @@ export function prepareRuntime({ root = stateRoot, platform = createDesktopPlatf
   const control = readJson(local(root, 'control.json'));
   if (Number.isSafeInteger(control?.pid) && control.pid > 0) {
     let running = true; try { process.kill(control.pid, 0); } catch (error) { if (error.code === 'ESRCH') running = false; }
+    if (running && platform.processMatchesExecutable?.(control.pid, platform.runtimeLayout(local(root, 'runtime')).executable) === false) running = false;
     if (running) throw Error('原型尚未退出，未替换运行文件。请退出原型后重新启动。');
   }
   const marker = local(root, 'prepared.json'); let previous = readJson(marker);

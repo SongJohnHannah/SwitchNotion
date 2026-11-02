@@ -58,6 +58,31 @@ test('macOS discovery uses app bundles without Windows commands or Windows archi
   assert.doesNotThrow(() => platform.configureAppIdentity({}));
 });
 
+test('Windows process identity distinguishes reused PIDs and preserves uncertainty for inaccessible Notion processes', () => {
+  const executable = path.resolve('.notion-switch/runtime/Notion.exe');
+  let result, failure, calls = 0;
+  const platform = createDesktopPlatform({ id: 'win32', execFileSync: (command, args, options) => {
+    calls++; assert.equal(command, 'powershell.exe'); assert.equal(options.windowsHide, true);
+    assert.ok(args.at(-1).includes('ProcessId = 5572'));
+    if (failure) throw failure;
+    return JSON.stringify(result);
+  } });
+  result = { Name: 'MacmDNSResponder.exe', ExecutablePath: null };
+  assert.equal(platform.processMatchesExecutable(5572, executable), false);
+  result = { Name: 'Notion.exe', ExecutablePath: executable.toUpperCase() };
+  assert.equal(platform.processMatchesExecutable(5572, executable), true);
+  result = { Name: 'Notion.exe', ExecutablePath: path.resolve('other/Notion.exe') };
+  assert.equal(platform.processMatchesExecutable(5572, executable), false);
+  result = { Name: 'Notion.exe', ExecutablePath: null };
+  assert.equal(platform.processMatchesExecutable(5572, executable), null);
+  result = null; assert.equal(platform.processMatchesExecutable(5572, executable), false);
+  failure = Error('process inspection denied');
+  assert.equal(platform.processMatchesExecutable(5572, executable), null);
+  const before = calls;
+  assert.equal(platform.processMatchesExecutable('5572; exit', executable), null);
+  assert.equal(calls, before);
+});
+
 test('unsupported Mac preparation, rollback, launch and login do not copy, mutate or start helpers', async t => {
   const root = fixture(t), platform = createDesktopPlatform({ id: 'darwin', arch: 'x64', home: root });
   const missing = path.join(root, 'must-not-create'); let called = false;

@@ -13,6 +13,19 @@ function registryLocations(execFileSync) {
     return Array.isArray(found) ? found : [];
   } catch { return []; }
 }
+function processMatchesExecutable(pid, executable, execFileSync) {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || typeof executable !== 'string' || !path.isAbsolute(executable)) return null;
+  // A saved PID may now belong to an unrelated (even protected) process.
+  // Only a proven mismatch can bypass the updater's live-process guard.
+  const script = `$processInfo=Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}' -ErrorAction Stop | Select-Object Name,ExecutablePath; ConvertTo-Json -InputObject $processInfo -Compress`;
+  try {
+    const info = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 5000, encoding: 'utf8', maxBuffer: 32768, stdio: ['ignore', 'pipe', 'pipe'] }));
+    if (info === null) return false;
+    if (typeof info.ExecutablePath === 'string' && path.isAbsolute(info.ExecutablePath)) return path.resolve(info.ExecutablePath).toLowerCase() === path.resolve(executable).toLowerCase();
+    if (typeof info.Name === 'string' && info.Name && info.Name.toLowerCase() !== path.basename(executable).toLowerCase()) return false;
+  } catch {}
+  return null;
+}
 function windows({ env, home, execFileSync, registry }) {
   const layout = directory => {
     const appRoot = path.resolve(directory), resources = path.join(appRoot, 'resources');
@@ -23,6 +36,7 @@ function windows({ env, home, execFileSync, registry }) {
     compatibility: { enabled: true, reviewedBuilds, versionPattern: /^7\.\d+\.\d+$/, electronPattern: /^44\./ },
     installationLayout: candidate => layout(/\.exe$/i.test(candidate) ? path.dirname(candidate) : candidate),
     runtimeLayout: layout,
+    processMatchesExecutable: (pid, executable) => processMatchesExecutable(pid, executable, execFileSync),
     candidates: () => [
       path.join(env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Programs', 'Notion'),
       path.join(home, 'AppData', 'Local', 'Programs', 'Notion'),

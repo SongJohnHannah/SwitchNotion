@@ -48,6 +48,8 @@ export interface DesktopPlatform {
   /** Launches only the isolated container, never modifies the official app. */
   launchRuntime(input: { container: string; stateRoot: string; env?: NodeJS.ProcessEnv; stdio?: SpawnOptions['stdio']; spawnImpl?: typeof spawn }): ChildProcess;
   isNodeExecutable(executable: unknown): boolean;
+  /** False only for a proven mismatch or exited PID; null means unknown. */
+  processMatchesExecutable(pid: number, executable: string): boolean | null;
   samePath(left: string, right: string): boolean;
   configureAppIdentity(app: { setAppUserModelId?: (id: string) => void }): void;
 }

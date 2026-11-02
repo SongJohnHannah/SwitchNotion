@@ -68,6 +68,7 @@ function createDesktopPlatform({ id = process.platform, arch = process.arch, env
     isNodeExecutable(executable) {
       return typeof executable === 'string' && path.isAbsolute(executable) && adapter.nodeName.test(path.basename(executable)) && isFile(executable);
     },
+    processMatchesExecutable(pid, executable) { return adapter.processMatchesExecutable?.(pid, executable) ?? null; },
     samePath(left, right) { return id === 'win32' ? path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase() : path.resolve(left) === path.resolve(right); },
     configureAppIdentity: adapter.configureAppIdentity
   });

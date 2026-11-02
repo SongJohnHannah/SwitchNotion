@@ -82,9 +82,22 @@ test('changed hook boundaries, Electron major versions and path traversal are re
   assert.throws(() => inspectDesktop(make({ main: '../outside.js' })), /启动入口/);
 });
 test('live prototypes and concurrent launchers are never overwritten', t => {
-  const f = fixture(t); build(f.source, '7.40.20'); fs.writeFileSync(path.join(f.root, 'control.json'), JSON.stringify({ pid: process.pid }));
+  const f = fixture(t), platform = f.platform;
+  // This test runner stands in for the live runtime, so identify its actual
+  // executable rather than treating any process with this PID as Notion.
+  f.platform = { ...platform, runtimeLayout: root => ({ ...platform.runtimeLayout(root), executable: process.execPath }) };
+  build(f.source, '7.40.20'); fs.writeFileSync(path.join(f.root, 'control.json'), JSON.stringify({ pid: process.pid }));
   assert.throws(() => prepareRuntime(f), /尚未退出/); assert.equal(fs.existsSync(path.join(f.root, 'runtime')), false);
   const release = launchLock(f.root); assert.throws(() => launchLock(f.root), /正在准备启动/); release(); launchLock(f.root)();
+});
+
+test('a stale control PID reused by an unrelated process does not prevent Windows startup', { skip: process.platform !== 'win32' }, t => {
+  const f = fixture(t); build(f.source, '7.40.20');
+  // The Node test runner is alive, but is not this isolated Notion executable.
+  fs.writeFileSync(path.join(f.root, 'control.json'), JSON.stringify({ pid: process.pid }));
+  const prepared = prepareRuntime(f);
+  assert.equal(prepared.updateStatus, 'prepared');
+  assert.equal(fs.existsSync(path.join(f.root, 'runtime/Notion.exe')), true);
 });
 
 test('an untracked Windows runtime process blocks the swap with recovery guidance and updates resume after it exits', { skip: process.platform !== 'win32' }, async t => {
