@@ -23,4 +23,6 @@ Windows 与 Mac 共用三个模块：`meeting-summary.cjs`（生成、队列和�
 
 失败流先发送原生 `summarize-transcript-error`，再发送终止 `error`，让会议回调显示失败提示并清除准备状态。只发送通用 `error` 会被原生流读取器提前消费，导致会议界面收不到失败通知。成功重试会清除本机状态中的上次错误。`tests/meeting-summary-feedback.test.mjs` 覆盖新旧接口、失败与取消，并在本机有已审核客户端资源时执行实际原生读取器和界面回调。
 
+另一台机器出现“有转录、有音频但无摘要”时，在出问题的机器上保持 Switch Notion 运行，执行 `npm run check:meeting`。也可单独复制 `scripts/check-meeting-summary.mjs` 到该机器的项目根目录，执行 `node check-meeting-summary.mjs`。脚本只读取设置、固定的本机状态接口及事件日志末尾，不录音、不调用模型、不修改页面；输出不含密钥、账号/工作区/会议 ID、路径或正文。Mac 分别检查源码的 `.notion-switch/mac-arm64/` 和分发应用的 Application Support 资料，不使用 Windows 的资料推断 Mac 状态；多个资料目录同时存在时分别报告，以 `live` 判断哪个服务正在运行。支持 `--root` 指定绝对资料目录。现有日志仅记录摘要成功、失败或主动跳过；没有结果事件不能证明原生端没有发出请求。摘要使用当前账号原生会话，与侧栏工具的工作区 API 连接列表无关。
+
 Windows 已验证新旧请求适配、实际 DeepSeek 生成、真实服务器写回与读回、界面“摘要”标签显示。取消、并发重复请求、重启恢复、源内容变化、只读权限和不确定写入由自动测试覆盖。真实麦克风暂停触发的整段交互仍需结合录音场景验收。
