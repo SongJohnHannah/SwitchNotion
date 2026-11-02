@@ -53,6 +53,33 @@ test('a relocated Mac app keeps update helpers in its payload while state lives 
   assert.equal(f.calls[0].options.cwd, payload);
   assert.equal(f.calls[0].exe, node);
 });
+test('Switch Notion code updates use their own action and fixed revisions without requiring an official Notion update', async t => {
+  const before = 'a'.repeat(40), after = 'b'.repeat(40);
+  const f = fixture(t, { load: async () => { throw Error('official Notion update must not be required'); }, clientUpdates: {
+    prepare: async () => ({ before, after, available: true }), save() {}
+  } });
+  assert.equal((await f.service.request('update.client')).ok, true); assert.equal(f.restarted(), true);
+  assert.deepEqual(f.calls[0].args.slice(1), ['client', String(process.pid), before, after]);
+  assert.equal(f.calls[0].options.env.NOTION_SWITCH_ROOT, f.service.root);
+});
+test('current code, download failures, active recordings and tasks started during downloading never restart the app', async t => {
+  const current = fixture(t, { clientUpdates: { prepare: async () => ({ available: false }), save() {} } });
+  assert.equal((await current.service.request('update.client')).ok, true); assert.equal(current.restarted(), false); assert.equal(current.service.updating, false);
+  const failed = fixture(t, { clientUpdates: { prepare: async () => { throw Error('网络未连接'); }, save() {} } });
+  assert.equal((await failed.service.request('update.client')).ok, false); assert.equal(failed.restarted(), false); assert.equal(failed.service.updating, false);
+  let busy = true;
+  const recording = fixture(t, { isBusy: () => busy, clientUpdates: { prepare: async () => { busy = true; return { available: true }; }, save() {} } });
+  assert.equal((await recording.service.request('update.client')).ok, false);
+  busy = false; assert.equal((await recording.service.request('update.client')).ok, false); assert.equal(recording.calls.length, 0);
+  assert.equal((await recording.service.request('update.client', { repository: 'arbitrary' })).ok, false);
+});
+test('already downloaded code is still connected and restarted when the running adapter is older', async t => {
+  const head = 'a'.repeat(40);
+  const f = fixture(t, { clientUpdates: { prepare: async () => ({ before: head, after: head, available: false }), save() {} } });
+  f.service.needsClientRestart = async () => true;
+  const result = await f.service.request('update.client'); assert.equal(result.ok, true);
+  assert.equal(f.restarted(), true); assert.equal(f.calls[0].args[1], 'client');
+});
 
 test('an update helper started from the runtime releases that directory for the Windows swap', { skip: process.platform !== 'win32' }, async t => {
   let worker;

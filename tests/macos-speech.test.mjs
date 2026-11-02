@@ -60,7 +60,8 @@ test('the production token route retains the page proof after an unrelated scrip
   t.after(() => service.close());
   service.transportReady = service.lifecycleReady = service.drainTransportReady = true;
   const source = fs.readFileSync(new URL('../src/desktop-hook.cjs', import.meta.url), 'utf8');
-  const context = { Request, Response, Headers, URL, uuid, nativeSpeech: service, settings: { speech: { enabled: true } },
+  let updating = false;
+  const context = { Request, Response, Headers, URL, uuid, nativeSpeech: service, settings: { speech: { enabled: true }, isLoginSyncing: () => updating },
     meetingBridge: { observe() {} }, recordings: { wake() {} }, log() {}, isNotion: host => host === 'app.notion.com',
     localUploadPrefix: '/notion-switch-local-upload/', compatibility: { unsupportedAssets: [] },
     json: (value, status = 200) => Response.json(value, { status }), adaptResponse: async () => { throw Error('unrelated changed module'); } };
@@ -72,6 +73,8 @@ test('the production token route retains the page proof after an unrelated scrip
   assert.equal(accepted.status, 200); assert.equal(typeof (await accepted.json()).accessToken, 'string');
   assert.equal((await call({ 'x-notion-switch-speech-client': '{}' })).status, 503);
   assert.equal((await call({})).status, 503);
+  updating = true;
+  assert.equal((await call({ 'x-notion-switch-speech-client': JSON.stringify(client('meeting')) })).status, 409, 'An update must not start a new recording just before quitting');
 });
 
 for (const [kind, name] of Object.entries(assets)) test(`current Mac ${kind} adapts through the real response route`, { skip }, async () => {

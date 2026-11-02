@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('notionSwitch', Object.freeze({
   loginStatus: () => request('login.status'),
   syncLogin: () => request('login.sync'),
   updateStatus: () => request('update.status'),
+  updateSwitchNotion: () => request('update.client'),
   updateNotion: () => request('update.apply'),
   rollbackNotion: () => request('update.rollback'),
   speechStatus: () => request('speech.status'),

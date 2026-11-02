@@ -44,7 +44,7 @@ function copyTree(source, target) {
     return !path.basename(entry).startsWith('Uninstall');
   } });
 }
-function adapterHash(sourceProject) {
+export function adapterHash(sourceProject) {
   const hash = createHash('sha256');
   function visit(dir) { for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     const file = path.join(dir, entry.name); if (entry.isSymbolicLink()) throw Error('接管组件目录含链接。');
@@ -88,7 +88,7 @@ export function updateStatus({ root = stateRoot, platform = createDesktopPlatfor
   catch (e) { error = e.message; }
   const held = last?.heldHash && last.heldHash === candidate?.hash;
   return { platform: platform.id, capabilities: platform.capabilities, prototypeVersion: prepared?.version || '未准备', originalVersion: candidate?.version || '无法识别', available: !!candidate && candidate.hash !== prepared?.sourceHash, compatible: !!candidate, previousVersion: previous?.version, held: !!held,
-    message: error || (held ? '已保留上一个可用版本。需要重新尝试时点击“更新并重启”。' : candidate?.hash !== prepared?.sourceHash ? platform.id === 'darwin' ? '检测到原版更新，已保留当前版本。点击“更新并重启”后升级；Mac 可能要求重新授权录音。' : '检测到原版更新，下次完全退出并启动原型时自动同步。' : '当前已与本机原版 Notion 同步。'), lastResult: last?.message, checkedAt: new Date().toISOString() };
+    message: error || (held ? '已保留上一个可用版本。需要重新尝试时点击“同步原版 Notion 并重启”。' : candidate?.hash !== prepared?.sourceHash ? platform.id === 'darwin' ? '检测到原版更新，已保留当前版本。点击“同步原版 Notion 并重启”后升级；Mac 可能要求重新授权录音。' : '检测到原版更新，下次完全退出并启动原型时自动同步。' : '当前已与本机原版 Notion 同步。'), lastResult: last?.message, checkedAt: new Date().toISOString() };
 }
 export function rollbackRuntime({ root = stateRoot, platform = createDesktopPlatform(), holdHash, reason = '已恢复上一个原型版本。' } = {}) {
   platform.requireCapability('prepareRuntime');
