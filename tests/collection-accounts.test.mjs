@@ -9,13 +9,25 @@ const { CollectionBrowser } = require('../src/collection/browser.cjs');
 function inspect(site, { url, title = '', selectors = {}, state, response, fetchError, renderData, ytLoggedIn, ready = 'complete' } = {}) {
   const domains = { douyin: 'www.douyin.com', bilibili: 'www.bilibili.com', xiaohongshu: 'www.xiaohongshu.com', youtube: 'www.youtube.com', tiktok: 'www.tiktok.com', x: 'x.com' };
   const location = new URL(url || 'https://' + domains[site] + '/');
-  const context = { location, AbortSignal, window: { __INITIAL_STATE__: state, ytcfg: { get: () => ytLoggedIn } },
-    document: { title, readyState: ready, querySelectorAll: selector => selectors[selector] || [], getElementById: id => id === 'RENDER_DATA' && renderData ? { textContent: encodeURIComponent(JSON.stringify(renderData)) } : null }, getComputedStyle: () => ({ visibility: 'visible' }),
+  const context = { location, AbortSignal, URL, window: { __INITIAL_STATE__: state, ytcfg: { get: () => ytLoggedIn } },
+    document: { title, readyState: ready, querySelectorAll: selector => selectors[selector] || [], getElementById: id => id === 'RENDER_DATA' && renderData ? { textContent: encodeURIComponent(JSON.stringify(renderData)) } : null },
+    innerWidth: 1280, innerHeight: 800, getComputedStyle: node => ({ visibility: 'visible', opacity: '1', ...node.style }),
     fetch: async (url, options) => { assert.equal(url, 'https://api.bilibili.com/x/web-interface/nav'); assert.equal(options.credentials, 'include'); assert.equal(options.cache, 'no-store'); if (fetchError) throw Error('offline'); return { ok: response?.ok !== false, json: async () => response?.data }; }
   };
   return vm.runInNewContext('(' + inspectAccount.toString() + ')(' + JSON.stringify(site) + ')', context);
 }
-const visible = { getClientRects: () => [{ width: 32, height: 32 }] };
+const element = ({ href, text = '', style = {}, hidden = false, rect = {}, children = [], parent } = {}) => ({
+  innerText: text, style, parentElement: parent, closest: () => hidden ? {} : null,
+  getClientRects: () => [{ width: 32, height: 32, top: 0, left: 0, bottom: 32, right: 32, ...rect }],
+  getAttribute: name => name === 'href' ? href : null, querySelectorAll: selector => selector === 'img' ? children : []
+});
+const visible = element();
+const xAccount = '[data-testid="SideNav_AccountSwitcher_Button"]', xProfile = 'a[data-testid="AppTabBar_Profile_Link"]';
+const xLogin = 'a[data-testid="loginButton"], a[href="/i/flow/login"], a[href="/login"], [data-testid="LoginForm_Login_Button"]';
+const ttAvatar = '[data-e2e="profile-icon"] a[href^="/@"]', ttProfile = 'a[data-e2e="nav-profile"][href^="/@"]';
+const ttLogin = '[data-e2e="top-login-button"], [data-e2e="nav-login-button"], button[data-e2e="login-button"]';
+const signedX = () => ({ [xAccount]: [element({ text: 'Synthetic User\n@current_person' })], [xProfile]: [element({ href: '/current_person' })] });
+const signedTikTok = () => ({ [ttAvatar]: [element({ href: '/@current.person', children: [visible] })], [ttProfile]: [element({ href: '/@current.person' })] });
 
 test('Douyin recognizes its own server-provided logged-in account state even when profile links are hidden', async () => {
   const verdict = await inspect('douyin', { renderData: { app: { user: { isLogin: true, info: { uid: 'synthetic-current-user' } } } } });
@@ -55,7 +67,7 @@ test('verification retries changing page contexts and keeps an authenticated res
   browser.tab = async () => ({ tabId: 'owned-retry-tab' }); browser.getSettings = () => ({ browserPort: 19333 });
   browser.readAccountStatus = async () => { if (++calls === 1) throw Object.assign(Error('Context replaced'), { cdpCode: -32000 }); return { state: 'valid', message: 'hydrated account confirmed' }; };
   const result = await browser.verifyAccount({ id: 'x', url: 'https://x.com/' }, AbortSignal.timeout(2000));
-  assert.equal(result.state, 'valid'); assert.equal(calls, 2); assert.deepEqual(closed, ['owned-retry-tab']);
+  assert.equal(result.state, 'valid'); assert.equal(calls, 3); assert.deepEqual(closed, ['owned-retry-tab']);
 });
 
 test('verification stops at a security challenge and closes only its own probe tab', async () => {
@@ -84,12 +96,42 @@ test('Xiaohongshu uses current-account state and never treats recommendation aut
 
 test('account controls are read only and redirects, challenges and hidden controls cannot turn the indicator green', async () => {
   const selector = '[data-testid="SideNav_AccountSwitcher_Button"]';
-  assert.equal((await inspect('x', { selectors: { [selector]: [visible] } })).state, 'valid');
-  assert.equal((await inspect('x', { selectors: { [selector]: [{ getClientRects: () => [] }] } })).state, 'unknown');
+  assert.equal((await inspect('x', { selectors: { [selector]: [visible] } })).state, 'unknown');
+  assert.equal((await inspect('x', { selectors: { [selector]: [{ ...visible, getClientRects: () => [] }] } })).state, 'unknown');
   assert.equal((await inspect('x', { url: 'https://x.com/i/flow/login' })).state, 'missing');
   assert.equal((await inspect('x', { url: 'https://x.com/account/access', selectors: { [selector]: [visible] } })).state, 'unknown');
   assert.equal((await inspect('x', { title: '安全验证', selectors: { [selector]: [visible] } })).state, 'unknown');
   assert.equal((await inspect('x', { url: 'https://x.com.evil.example/', selectors: { [selector]: [visible] } })).state, 'unknown');
+});
+test('visible TikTok and X login prompts override even matching cached account controls', async () => {
+  assert.equal((await inspect('x', { selectors: { ...signedX(), [xLogin]: [visible] } })).state, 'missing');
+  assert.equal((await inspect('tiktok', { selectors: { ...signedTikTok(), [ttLogin]: [visible] } })).state, 'missing');
+  assert.equal((await inspect('x', { selectors: { ...signedX(), [xLogin]: [element({ hidden: true })] } })).state, 'valid');
+});
+test('TikTok and X need matching current account controls, rather than a generic profile link or guest placeholder', async () => {
+  assert.equal((await inspect('x', { selectors: signedX() })).state, 'valid');
+  assert.equal((await inspect('tiktok', { selectors: signedTikTok() })).state, 'valid');
+  assert.equal((await inspect('x', { selectors: { ...signedX(), [xProfile]: [element({ href: '/someone_else' })] } })).state, 'unknown');
+  assert.equal((await inspect('x', { selectors: { [xAccount]: [element({ text: 'Account menu' })] } })).state, 'unknown');
+  assert.equal((await inspect('tiktok', { selectors: { [ttProfile]: [element({ href: '/@creator' })] } })).state, 'unknown');
+  assert.equal((await inspect('tiktok', { selectors: { ...signedTikTok(), [ttAvatar]: [element({ href: '/@undefined', children: [visible] })], [ttProfile]: [element({ href: '/@undefined' })] } })).state, 'unknown');
+  assert.equal((await inspect('x', { selectors: { ...signedX(), [xProfile]: [element({ href: 'https://evil.example/current_person' })] } })).state, 'unknown');
+  assert.equal(JSON.stringify(await inspect('x', { selectors: signedX() })).includes('current_person'), false);
+});
+test('transparent, hidden-parent and offscreen account controls cannot confirm a login', async () => {
+  for (const options of [{ style: { opacity: '0' } }, { parent: element({ style: { display: 'none' } }) }, { rect: { left: -120, right: -88 } }, { hidden: true }]) {
+    const selectors = { ...signedX(), [xAccount]: [element({ text: '@current_person', ...options })] };
+    assert.equal((await inspect('x', { selectors })).state, 'unknown');
+  }
+});
+test('a transient account control that becomes a login prompt never produces a valid result', async () => {
+  for (const id of ['x', 'tiktok']) {
+    const browser = new CollectionBrowser({}); let calls = 0;
+    browser.ensure = async () => ({ m: { cdpCloseTab: async () => {} } }); browser.tab = async () => ({ tabId: 'owned' }); browser.getSettings = () => ({ browserPort: 19333 });
+    browser.readAccountStatus = async () => ++calls === 1 ? { state: 'valid', message: 'temporary page state' } : { state: 'missing', message: 'login prompt appeared' };
+    assert.equal((await browser.verifyAccount({ id, url: id === 'x' ? 'https://x.com/' : 'https://www.tiktok.com/' }, AbortSignal.timeout(2000))).state, 'missing');
+    assert.equal(calls, 2);
+  }
 });
 
 test('opening the account panel starts no browser and makes no login-validity claim', async () => {

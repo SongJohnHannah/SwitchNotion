@@ -131,6 +131,8 @@ class CollectionBrowser {
   async verifyAccount(site, signal) {
     const { m } = await this.ensure(signal), tab = await this.tab(site.url, signal);
     const until = Date.now() + 12000;
+    const requireStableAccount = site.id === 'tiktok' || site.id === 'x';
+    let confirmations = 0;
     let latest = { state: 'unknown', message: '未找到明确的当前账号状态，可在收集时继续检查。' };
     try {
       // Authenticated page data arrives before video/ad resources finish. Do
@@ -139,15 +141,22 @@ class CollectionBrowser {
         signal?.throwIfAborted();
         try {
           latest = await this.readAccountStatus(tab, site, signal);
-          if (latest.state !== 'unknown' || latest.retry === false) break;
+          if (latest.state === 'valid' && requireStableAccount) {
+            if (++confirmations >= 2) break;
+          } else {
+            confirmations = 0;
+            if (latest.state !== 'unknown' || latest.retry === false) break;
+          }
         } catch (error) {
           signal?.throwIfAborted();
+          confirmations = 0;
           // Navigation can replace the execution context during a probe.
           if (!error.cdpCode) latest = { state: 'unknown', message: '网页状态读取未完成，可在收集时继续检查。' };
         }
         if (Date.now() >= until) break;
         await new Promise(resolve => setTimeout(resolve, 400));
       } while (Date.now() < until);
+      if (requireStableAccount && latest.state === 'valid' && confirmations < 2) latest = { state: 'unknown', message: '账号页面仍在变化，尚未确认稳定的登录状态，请重新检测。' };
       return { state: latest.state, message: latest.message, checkedAt: new Date().toISOString() };
     } finally { await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); }
   }

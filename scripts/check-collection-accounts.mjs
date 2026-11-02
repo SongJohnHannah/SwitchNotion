@@ -85,7 +85,17 @@ try {
   const probe = await browser.newPage(); let html = '', login = true;
   await probe.route('https://x.com/**', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: html }));
   html = '<header><button data-testid="SideNav_AccountSwitcher_Button">Account</button></header>';
-  await probe.goto('https://x.com/'); assert.equal((await probe.evaluate(inspectAccount, 'x')).state, 'valid');
+  await probe.goto('https://x.com/'); assert.equal((await probe.evaluate(inspectAccount, 'x')).state, 'unknown');
+  html = '<header><button data-testid="SideNav_AccountSwitcher_Button">@fixture_user</button><a data-testid="AppTabBar_Profile_Link" href="/fixture_user">Profile</a></header>';
+  await probe.reload(); assert.equal((await probe.evaluate(inspectAccount, 'x')).state, 'valid');
+  html += '<a data-testid="loginButton" href="/i/flow/login">Log in</a>';
+  await probe.reload(); assert.equal((await probe.evaluate(inspectAccount, 'x')).state, 'missing');
+  await probe.route('https://www.tiktok.com/**', route => route.fulfill({ contentType: 'text/html', body: html }));
+  html = '<div data-e2e="profile-icon"><a href="/@fixture"><img width="32" height="32" alt="account"></a></div><a data-e2e="nav-profile" href="/@fixture">Profile</a><button data-e2e="top-login-button">Log in</button>';
+  await probe.goto('https://www.tiktok.com/'); assert.equal((await probe.evaluate(inspectAccount, 'tiktok')).state, 'missing');
+  html = html.replace('<button data-e2e="top-login-button">Log in</button>', '');
+  await probe.reload(); assert.equal((await probe.evaluate(inspectAccount, 'tiktok')).state, 'valid');
+  await probe.goto('https://x.com/');
   html = '<article><img alt="author avatar"><a href="/someone">Other user</a></article>';
   await probe.reload(); assert.equal((await probe.evaluate(inspectAccount, 'x')).state, 'unknown');
   html = '<title>安全验证</title><header><button data-testid="SideNav_AccountSwitcher_Button">Account</button></header>';
