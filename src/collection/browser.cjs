@@ -18,6 +18,21 @@ const sites = Object.freeze([
 ]);
 let kitModule;
 const mediaKit = () => kitModule ||= import(pathToFileURL(path.join(__dirname, 'media-kit/index.mjs')).href);
+async function scrollPage() {
+  // Bilibili's video page appends recommendations indefinitely; the video and
+  // its description are already available once the page is ready.
+  if (/(^|\.)bilibili\.com$/i.test(location.hostname) && /^\/video\/(?:BV|av)/i.test(location.pathname)) return;
+  let last = 0;
+  for (let i = 0; i < 120; i++) {
+    window.scrollBy(0, innerHeight * .85);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const height = document.body.scrollHeight;
+    if (scrollY + innerHeight >= height - 20 && height === last) break;
+    last = height;
+  }
+  window.scrollTo(0, 0);
+  await new Promise(resolve => setTimeout(resolve, 800));
+}
 function cdpCommand(wsUrl, method, params = {}, { signal, timeout = 30000 } = {}) {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted(); const socket = new WebSocket(wsUrl);
@@ -174,7 +189,7 @@ class CollectionBrowser {
       };
       await this.waitReady(tab, signal);
       await evaluate(`(async()=>{for(const el of document.querySelectorAll('[data-testid="tweet-text-show-more-link"]')){el.click();await new Promise(r=>setTimeout(r,500));}})()`);
-      await evaluate(`(async()=>{let last=0;for(let i=0;i<120;i++){window.scrollBy(0,innerHeight*.85);await new Promise(r=>setTimeout(r,150));const h=document.body.scrollHeight;if(scrollY+innerHeight>=h-20&&h===last)break;last=h;}window.scrollTo(0,0);await new Promise(r=>setTimeout(r,800));})()`);
+      await evaluate('(' + scrollPage.toString() + ')()');
       const doc = normalizeDocument(await evaluate('(/(^|\\.)xiaohongshu\\.com$/i.test(location.hostname)?(' + extractXiaohongshuPage.toString() + '):(' + extractPage.toString() + '))()'));
       await assertPublicUrl(doc.url);
       if (/(^|\.)xiaohongshu\.com$/i.test(new URL(doc.url).hostname)) {
@@ -210,4 +225,4 @@ class CollectionBrowser {
     } finally { await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); }
   }
 }
-module.exports = { CollectionBrowser, cdpCommand, mediaKit, sites };
+module.exports = { CollectionBrowser, cdpCommand, mediaKit, sites, scrollPage };

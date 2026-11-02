@@ -49,8 +49,6 @@ class WechatChannel {
     if (!videoUrl) throw failure('此微信分享没有返回可下载的视频文件，未将预览或二维码页当作原视频。');
     const description = String(info.description || parsed.desc || '').trim();
     const nodes = description.split(/\n+/).filter(Boolean).map(text => ({ kind: 'paragraph', text }));
-    const cover = info.coverUrl || parsed.cover_url;
-    if (cover) nodes.push({ kind: 'image', url: httpsUrl(cover), caption: '视频封面' });
     const contentId = hash(String(data.data.sceneInfo?.dynamicExportId || exportId));
     nodes.push({ kind: 'video', url: httpsUrl(videoUrl), platform: 'wechat', direct: true, contentId,
       ...(Number.isFinite(response.media?.duration) && response.media.duration > 0 ? { duration: response.media.duration } : {}),

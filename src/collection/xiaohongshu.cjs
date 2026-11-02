@@ -93,7 +93,7 @@ function extractXiaohongshuPage() {
   const mediaAnchor = root.querySelector('.media-container,.note-slider');
   if (mediaNodes.length && !mediaAnchor) warnings.push('小红书媒体排版尚未确认，请重新读取原文。');
   const anchors = [{ el: mediaAnchor, items: mediaNodes },
-    { el: title, items: note.title ? [{ kind: 'heading', level: 1, text: note.title }] : [] }, { el: desc, items: textNodes }];
+    { el: title, items: note.title ? [{ kind: 'heading', level: 1, text: note.title }] : [] }, { el: desc, items: note.type === 'video' ? textNodes.filter(node => !['image', 'video', 'audio'].includes(node.kind)) : textNodes }];
   anchors.sort((a, b) => a.el && b.el ? a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1 : a.el ? -1 : b.el ? 1 : 0);
   for (const anchor of anchors) nodes.push(...anchor.items);
   if (original && !textNodes.length) warnings.push('小红书正文尚未完整读取。');

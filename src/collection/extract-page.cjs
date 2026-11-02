@@ -5,12 +5,13 @@ function extractPage() {
   const noise = 'nav,footer,aside,script,style,noscript,button,form,[role="navigation"],[role="banner"],[aria-hidden="true"],.advertisement,.ads,.recommend-list,#comments,#secondary,.reply-list,.recommend-panel';
   const host = location.hostname;
   const isX = /(^|\.)(x|twitter)\.com$/.test(host);
-  const platform = /douyin\.com$/.test(host) ? 'douyin' : /bilibili\.com$/.test(host) ? 'bilibili' : /youtu(?:be\.com|\.be)$/.test(host) ? 'youtube' : /tiktok\.com$/.test(host) ? 'tiktok' : '';
+  const platform = /(^|\.)douyin\.com$/.test(host) ? 'douyin' : /(^|\.)bilibili\.com$/.test(host) ? 'bilibili' : /(^|\.)(?:youtube\.com|youtu\.be)$/.test(host) ? 'youtube' : /(^|\.)tiktok\.com$/.test(host) ? 'tiktok' : '';
   const candidates = [...document.querySelectorAll(isX ? '[data-testid="twitterArticleRichTextView"],article' : 'article,[role="article"],.article-content,.post-content,.entry-content,#js_content,main,[role="main"]')].filter(visible);
   const score = el => (el.innerText || '').length - [...el.querySelectorAll('nav,aside')].reduce((n, e) => n + (e.innerText || '').length, 0);
   const articles = candidates.filter(el => el.matches('article,[role="article"],.article-content,.post-content,.entry-content,#js_content'));
   let root = (articles.length ? articles : candidates).sort((a, b) => score(b) - score(a))[0] || document.body;
-  if (platform) root = document.querySelector(platform === 'youtube' ? '#primary' : platform === 'bilibili' ? '.left-container,.video-container-v1,main' : '[data-e2e="video-detail"],main') || root;
+  if (platform === 'bilibili') root = document.querySelector('.left-container') || document.querySelector('.video-container-v1') || document.querySelector('main') || root;
+  else if (platform) root = document.querySelector(platform === 'youtube' ? '#primary' : '[data-e2e="video-detail"],main') || root;
   if (isX) {
     const article = document.querySelector('[data-testid="twitterArticleRichTextView"]');
     const status = location.pathname.match(/\/status\/(\d+)/)?.[1];
@@ -76,17 +77,22 @@ function extractPage() {
     for (const child of el.childNodes) walk(child);
   }
   walk(root);
-  const videoPage = /\/video\/\d+|\/watch\?|youtu\.be\/|\/video\/BV|\/video\/av|\/shorts\//.test(location.href);
-  if (platform && videoPage && !nodes.some(n => n.kind === 'video')) nodes.unshift({ kind: 'video', url: location.href, platform });
-  if (platform === 'douyin' && /\/video\/\d+/.test(location.pathname)) {
+  const videoPage = platform === 'bilibili' ? /^\/video\/(?:BV|av)/i.test(location.pathname) :
+    platform === 'douyin' || platform === 'tiktok' ? /\/video\/\d+/.test(location.pathname) :
+    platform === 'youtube' ? location.pathname === '/watch' && !!new URL(location.href).searchParams.get('v') || /^\/shorts\//.test(location.pathname) || /(^|\.)youtu\.be$/.test(host) : false;
+  const xVideo = isX && /\/status\/\d+/.test(location.pathname) && !document.querySelector('[data-testid="twitterArticleRichTextView"]') && !!root.querySelector('video');
+  const declaredVideo = /^(?:video|video\.[a-z]+)$/i.test(document.querySelector('meta[property="og:type"]')?.content || '') && !document.querySelector('[data-testid="twitterArticleRichTextView"]');
+  if (videoPage || xVideo || declaredVideo) {
     const video = [...root.querySelectorAll('video')].find(visible);
     nodes.length = 0;
-    if (video) media(video); else nodes.push({ kind: 'video', url: location.href, platform });
-    const description = root.querySelector('[data-e2e="video-desc"],[data-e2e="video-description"]');
-    if (description) walk(description);
-    if (!nodes.some(node => node.text)) {
-      const caption = root.querySelector('h1')?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.querySelector('h1')?.innerText || document.querySelector('meta[name="description"]')?.content || '';
-      if (caption) nodes.push({ kind: 'paragraph', text: caption });
+    if (video && platform) media(video); else nodes.push({ kind: 'video', url: location.href, ...(platform ? { platform } : {}) });
+    const selector = platform === 'bilibili' ? '.desc-info-text,.basic-desc-info' : platform === 'youtube' ? '#description-inline-text,#description-inline-expander' :
+      platform === 'douyin' ? '[data-e2e="video-desc"],[data-e2e="video-description"]' : platform === 'tiktok' ? '[data-e2e="browse-video-desc"],[data-e2e="video-desc"]' : '[data-testid="tweetText"]';
+    const description = root.querySelector(selector);
+    if (description) textNode(description, 'paragraph');
+    else {
+      const caption = document.querySelector('meta[property="og:description"]')?.content || document.querySelector('meta[name="description"]')?.content || '';
+      if (caption.trim()) nodes.push({ kind: 'paragraph', text: caption.trim() });
     }
   }
   const body = document.body.innerText || '';

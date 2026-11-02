@@ -6,6 +6,7 @@ import os from 'node:os';
 import vm from 'node:vm';
 import { randomUUID, createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { MacCollectionNotion } from '../src/compat/macos-collection-notion.cjs';
 
 function fixture() {
@@ -102,7 +103,7 @@ test('the collection service loads the compatibility class on Mac only and retai
     const load = id => {
       if (id === '../compat/macos-collection-notion.cjs') { assert.equal(platform, 'darwin'); macImports++; return { MacCollectionNotion: MacNotion }; }
       if (id === './notion.cjs') return { CollectionNotion: WindowsNotion };
-      return require(new URL('../src/collection/' + id, import.meta.url).pathname);
+      return require(fileURLToPath(new URL('../src/collection/' + id, import.meta.url)));
     };
     const loader = id => id.startsWith('.') ? load(id) : require(id);
     vm.runInNewContext(source, { require: loader, module, process: { platform }, structuredClone, AbortController, AbortSignal });
