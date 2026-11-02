@@ -242,13 +242,16 @@ async function checkCollection() {
   const response = await api.collectionState();
   if (!response.ok) { result('collection-result', response.error, true); return; }
   const settings = response.result.settings;
-  $('collection-transcribe').checked = settings.transcribe; $('collection-vision').checked = settings.vision;
+  $('collection-transcribe').checked = settings.transcribe; $('collection-vision').checked = settings.vision && settings.visionEngine !== 'local';
+  $('collection-vision-local').checked = settings.vision && settings.visionEngine === 'local';
   $('collection-compress').checked = settings.compress; $('collection-local').checked = settings.keepLocal; $('collection-quality').value = settings.quality;
   $('collection-destination').textContent = settings.destination ? '默认保存到：' + settings.destination.workspaceName + ' / ' + settings.destination.label : '尚未设置默认位置，请在收集窗口中搜索并选择。';
 }
 $('open-collection').addEventListener('click', async () => { const response = await api.openCollection(); if (!response.ok) toast(response.error); });
+for (const [id, other] of [['collection-vision', 'collection-vision-local'], ['collection-vision-local', 'collection-vision']]) $(id).addEventListener('change', () => { if ($(id).checked) $(other).checked = false; });
 $('collection-form').addEventListener('submit', event => { event.preventDefault(); operation($('collection-form'), async () => {
-  const response = await api.saveCollection({ transcribe: $('collection-transcribe').checked, vision: $('collection-vision').checked, compress: $('collection-compress').checked,
+  const response = await api.saveCollection({ transcribe: $('collection-transcribe').checked, vision: $('collection-vision').checked || $('collection-vision-local').checked,
+    visionEngine: $('collection-vision-local').checked ? 'local' : 'deepseek', compress: $('collection-compress').checked,
     keepLocal: $('collection-local').checked, quality: $('collection-quality').value });
   result('collection-result', response.ok ? response.result.message : response.error, !response.ok);
 }); });

@@ -47,5 +47,9 @@ try {
     const analysis = await media.vision({ path: image, kind: 'image' }, { signal });
     assert.ok(analysis.text.length > 5); result.vision = { passed: true, characters: analysis.text.length, model: 'deepseek-flash' };
   }
+  if (process.argv.includes('--local-vision')) {
+    const analysis = await media.vision(asset, { signal: AbortSignal.timeout(900000), engine: 'local' });
+    assert.ok(analysis.text.length > 5); assert.equal(analysis.engine, 'local'); result.localVision = { passed: true, characters: analysis.text.length, model: 'qwen3.8-27b-vl:latest' };
+  }
   fs.writeFileSync(path.join(directory, 'result.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));
 } finally { speech.provider.close(); }

@@ -4,7 +4,7 @@ const { randomUUID, createHash } = require('node:crypto');
 const { promptSettings } = require('./prompts.cjs');
 const kinds = new Set(['paragraph', 'heading', 'quote', 'list', 'code', 'divider', 'image', 'video', 'audio', 'link']);
 const mediaKinds = new Set(['image', 'video', 'audio']);
-const defaults = Object.freeze({ shortcut: 'CommandOrControl+Shift+J', transcribe: true, vision: true,
+const defaults = Object.freeze({ shortcut: 'CommandOrControl+Shift+J', transcribe: true, vision: true, visionEngine: 'deepseek',
   compress: true, quality: '720p', keepLocal: true, keepHistory: false, extraction: Object.freeze(promptSettings()), types: ['text', 'image', 'video', 'audio'],
   browserPort: 19333, browserExecutable: '', browserProfile: '', proxy: '', outputDirectory: '', destination: null, favorites: [] });
 const hash = value => createHash('sha256').update(String(value)).digest('hex');
@@ -35,6 +35,7 @@ function preferences(input = {}, base = defaults) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !Object.hasOwn(defaults, k))) throw Error('收集设置包含未知选项。');
   const result = { ...base, ...input };
   for (const key of ['transcribe', 'vision', 'compress', 'keepLocal', 'keepHistory']) if (typeof result[key] !== 'boolean') throw Error('收集开关无效。');
+  if (!['deepseek', 'local'].includes(result.visionEngine)) throw Error('请选择有效的画面识别方式。');
   result.extraction = promptSettings(input.extraction, base.extraction || defaults.extraction);
   if (!['720p', '1080p', 'original'].includes(result.quality)) throw Error('请选择有效的画质。');
   if (!Array.isArray(result.types) || !result.types.length || result.types.some(t => !['text', 'image', 'video', 'audio'].includes(t))) throw Error('请至少选择一种内容类型。');

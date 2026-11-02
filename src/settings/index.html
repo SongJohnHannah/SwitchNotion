@@ -67,7 +67,8 @@
         <form id="collection-form" class="provider-card">
           <h2>默认处理选项</h2><p class="field-help">每次收集可以临时修改；已开始的任务保留提交时的选项。</p>
           <label class="check-label"><input id="collection-transcribe" type="checkbox" checked> 视频和音频生成本地逐字稿</label>
-          <label class="check-label"><input id="collection-vision" type="checkbox" checked> 默认开启 DeepSeek 图片与视频画面识别</label><p class="field-help">复用本机配置的 DeepSeek Key，使用 Flash 图片能力。图片或视频关键帧会发送给 DeepSeek，识别结果单独保存。</p>
+          <label class="check-label"><input id="collection-vision" type="checkbox" checked> 默认开启 DeepSeek 图片与视频画面识别</label>
+          <label class="check-label"><input id="collection-vision-local" type="checkbox"> 改用本机千问识别视频（与 DeepSeek 二选一）</label><p class="field-help">两种方式只能选一种。DeepSeek 复用本机 Key，图片或视频关键帧会发送给 DeepSeek；本机千问通过 Ollama 的 qwen3.8-27b-vl（IQ3_S）模型只在本地分析视频关键帧，图片不做画面识别。识别结果单独保存。</p>
           <label class="check-label"><input id="collection-compress" type="checkbox" checked> 压缩视频，保留完整时长</label>
           <label class="check-label"><input id="collection-local" type="checkbox"> 同时保留本地原始副本</label>
           <label for="collection-quality">压缩画质</label><select id="collection-quality"><option value="720p">清晰优先 · 720p</option><option value="1080p">更清晰 · 1080p</option><option value="original">保留原始分辨率</option></select>

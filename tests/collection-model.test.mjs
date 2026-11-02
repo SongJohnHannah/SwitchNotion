@@ -9,7 +9,9 @@ test('mixed selection preserves source order and global defaults do not change w
     { kind: 'paragraph', text: 'before' }, { kind: 'image', url: '/original.png' }, { kind: 'paragraph', text: 'between' },
     { kind: 'video', url: 'https://example.com/full.mp4' }, { kind: 'audio', url: 'https://example.com/audio.mp3' }] });
   const defaults = preferences(), one = preferences({ vision: false, types: ['text', 'video'] }, defaults);
-  assert.equal(defaults.vision, true); assert.equal(one.vision, false);
+  assert.equal(defaults.vision, true); assert.equal(defaults.visionEngine, 'deepseek'); assert.equal(one.vision, false);
+  assert.equal(preferences({ visionEngine: 'local' }).visionEngine, 'local');
+  assert.throws(() => preferences({ visionEngine: 'other' }), /画面识别/);
   assert.deepEqual(selectedNodes(doc, one).map(n => n.kind), ['paragraph', 'paragraph', 'video']);
   assert.deepEqual(selectedNodes(doc, defaults, [doc.nodes[3].id, doc.nodes[0].id]).map(n => n.kind), ['paragraph', 'video']);
   assert.equal(doc.nodes[1].url, 'https://example.com/original.png');

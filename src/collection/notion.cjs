@@ -54,7 +54,7 @@ function renderDocument(document, nodes, resources, analyses = {}, warnings = []
   if (appendix.length) result.push({ object: 'block', type: 'divider', divider: {} }, ...textBlocks({ kind: 'heading', text: '逐字稿与识别结果', level: 1 }));
   for (const node of appendix) {
     const item = analyses[node.id]; result.push(...textBlocks({ kind: 'heading', text: `素材 ${nodes.indexOf(node) + 1}${node.caption ? ' · ' + node.caption : ''}`, level: 2 }));
-    for (const [key, title] of [['transcript', '语音逐字稿'], ['vision', 'DeepSeek 图片与画面分析']]) if (item[key]) {
+    for (const [key, title] of [['transcript', '语音逐字稿'], ['vision', item.vision?.engine === 'local' ? '本地千问视频分析' : 'DeepSeek 图片与画面分析']]) if (item[key]) {
       result.push(...textBlocks({ kind: 'heading', text: title, level: 3 }), ...textBlocks({ kind: 'paragraph', text: item[key].text || item[key].note || '没有识别结果。' }));
       if (item[key].text && item[key].note) result.push(paragraph(item[key].note));
     }
@@ -339,7 +339,7 @@ class CollectionNotion {
       }
       const supplementary = [paragraph('补全的逐字稿与识别结果（此前未完成项以本次记录为准）')];
       for (const node of nodes) { const item = job.analyses[node.id]; if (!item) continue;
-        for (const [key, title] of [['transcript', '逐字稿'], ['vision', 'DeepSeek 识别']]) if ((item[key]?.text || item[key]?.note) && job.savedAnalysisItems?.[node.id + ':' + key] !== hash(JSON.stringify(item[key]))) supplementary.push(...textBlocks({ kind: 'heading', level: 3, text: `素材 ${nodes.indexOf(node) + 1} · ${title}` }), ...textBlocks({ kind: 'paragraph', text: item[key].text || item[key].note }));
+        for (const [key, title] of [['transcript', '逐字稿'], ['vision', item.vision?.engine === 'local' ? '本地千问识别' : 'DeepSeek 识别']]) if ((item[key]?.text || item[key]?.note) && job.savedAnalysisItems?.[node.id + ':' + key] !== hash(JSON.stringify(item[key]))) supplementary.push(...textBlocks({ kind: 'heading', level: 3, text: `素材 ${nodes.indexOf(node) + 1} · ${title}` }), ...textBlocks({ kind: 'paragraph', text: item[key].text || item[key].note }));
       }
       job.analysisBatches ||= {};
       const groups = batches(supplementary), done = job.analysisBatches[analysisFingerprint] ||= [];

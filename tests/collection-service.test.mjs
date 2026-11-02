@@ -186,6 +186,13 @@ test('vision failure retains originals and transcripts and can retry recognition
   const downloads = f.calls.filter(x => x.startsWith('download:')).length; fail = false; f.service.retry(job.id); await idle(f.service);
   assert.equal(job.status, 'completed'); assert.equal(job.page.id, page); assert.equal(f.calls.filter(x => x.startsWith('download:')).length, downloads);
 });
+test('local Qwen engine only analyzes video keyframes and labels the appendix accordingly', async t => {
+  const seen = [];
+  const f = fixture(t, { media: { vision: async (asset, options) => { seen.push({ kind: asset.kind, engine: options.engine }); return { text: '本地识别', engine: 'local' }; } } });
+  await f.service.create({ input: 'https://example.com/article', options: { visionEngine: 'local' } }); await idle(f.service);
+  assert.deepEqual(seen, [{ kind: 'video', engine: 'local' }]);
+  assert.match(JSON.stringify(f.saved[0]), /本地千问视频分析/);
+});
 test('cancel stops remaining stages, persisted interrupted work reloads and malformed requests expose no credentials', async t => {
   const f = fixture(t, { media: { acquire: async (_node, _directory, { signal }) => { await sleep(10000, null, { signal }); } } });
   const result = await f.service.create({ input: 'https://example.com/article' }); await sleep(30); f.service.cancel(result.jobs[0].id); await idle(f.service);

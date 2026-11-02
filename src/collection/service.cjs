@@ -15,7 +15,7 @@ const { templates } = require('./prompts.cjs');
 const { prepareLocalOutput, writeLocalOutput } = require('./local-output.cjs');
 const activeStates = new Set(['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving']);
 const deletableStates = new Set(['failed', 'partial', 'cancelled', 'interrupted', 'needs_login', 'awaiting_selection']);
-const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.compress, options.quality, options.keepLocal, options.extraction]));
+const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.visionEngine, options.compress, options.quality, options.keepLocal, options.extraction]));
 const safeError = error => {
   const text = String(error?.message || '操作未完成，请检查连接后重试。');
   if (/(?:sk-|ntn_|secret_)[\w-]{8}|Bearer\s|Cookie\s*[:=]/i.test(text)) return '连接或处理失败，请在配置中检查后重试。';
@@ -144,9 +144,9 @@ class CollectionService extends EventEmitter {
           try { analysis.transcript = await this.media.transcript(resource.asset, { signal, progress }); }
           catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
         }
-        if (job.options.vision && ['image', 'video'].includes(node.kind) && !analysis.vision) {
+        if (job.options.vision && (job.options.visionEngine === 'local' ? node.kind === 'video' : ['image', 'video'].includes(node.kind)) && !analysis.vision) {
           job.status = 'processing'; save();
-          try { analysis.vision = await this.media.vision(resource.asset, { signal, progress }); }
+          try { analysis.vision = await this.media.vision(resource.asset, { signal, progress, engine: job.options.visionEngine }); }
           catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
         }
         if (!resource.parts) { resource.parts = await this.media.prepareUpload(resource.asset, job.options, limit, { signal, progress }); save(); }

@@ -16,10 +16,12 @@ function setPanel(name, focus = false) {
   if (expanded && name === 'destination') void loadWorkspaces().catch(() => {});
 }
 function readOptions() {
-  return { transcribe: $('transcribe').checked, vision: $('vision').checked, compress: $('compress').checked, keepLocal: $('keepLocal').checked,
+  return { transcribe: $('transcribe').checked, vision: $('vision').checked || $('vision-local').checked,
+    visionEngine: $('vision-local').checked ? 'local' : 'deepseek', compress: $('compress').checked, keepLocal: $('keepLocal').checked,
     quality: $('quality').value, types: [...$('type-options').querySelectorAll('input:checked')].map(i => i.value), destination: chosen, extraction: state.settings.extraction };
 }
-function showOptions(options) { for (const id of ['transcribe', 'vision', 'compress', 'keepLocal']) $(id).checked = options[id]; $('quality').value = options.quality;
+function showOptions(options) { $('vision').checked = options.vision && options.visionEngine !== 'local'; $('vision-local').checked = options.vision && options.visionEngine === 'local';
+  for (const id of ['transcribe', 'compress', 'keepLocal']) $(id).checked = options[id]; $('quality').value = options.quality;
   for (const input of $('type-options').querySelectorAll('input')) input.checked = options.types.includes(input.value); }
 async function refresh() {
   const first = !state; state = await request('state');
@@ -244,6 +246,7 @@ $('prompt-form').addEventListener('submit', async event => {
   finally { $('prompt-save').disabled = false; }
 });
 $('keep-history').addEventListener('change', () => void request('configure', { settings: { keepHistory: $('keep-history').checked } }).then(refresh).catch(() => {}));
+for (const [id, other] of [['vision', 'vision-local'], ['vision-local', 'vision']]) $(id).addEventListener('change', () => { if ($(id).checked) $(other).checked = false; });
 $('last-result').addEventListener('click', () => state.latestCompletion && void request('open-page', { id: state.latestCompletion.id }).catch(() => {}));
 $('connections').addEventListener('click', () => api.request('settings'));
 $('refresh-workspaces').addEventListener('click', () => { delete $('workspace').dataset.loaded; void loadWorkspaces().catch(() => {}); });

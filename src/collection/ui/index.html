@@ -44,13 +44,14 @@
         <div class="options-grid">
           <label class="option-card"><span><strong>生成语音逐字稿</strong><small>在本机将音视频转为文字</small></span><input id="transcribe" type="checkbox" checked></label>
           <label class="option-card"><span><strong>图片与画面识别</strong><small>使用 DeepSeek 分析图片及视频关键帧</small></span><input id="vision" type="checkbox" checked></label>
+          <label class="option-card"><span><strong>本地千问识别视频</strong><small>使用本机千问 3.8 27B VL（IQ3_S）分析视频关键帧，画面不上传</small></span><input id="vision-local" type="checkbox"></label>
           <label class="option-card"><span><strong>压缩视频</strong><small>减小文件体积，保留完整时长</small></span><input id="compress" type="checkbox" checked></label>
           <label class="option-card"><span><strong>保留本地副本</strong><small>同时保留原始文件和处理结果</small></span><input id="keepLocal" type="checkbox"></label>
         </div>
         <div class="setting-group"><h3>画质与内容</h3><div class="options-grid">
           <label>压缩画质<select id="quality"><option value="720p">清晰优先 · 720p</option><option value="1080p">更清晰 · 1080p</option><option value="original">保留原始分辨率</option></select></label>
           <div><span class="label">收集类型</span><div id="type-options" class="type-options"><label><input type="checkbox" value="text" checked>正文</label><label><input type="checkbox" value="image" checked>图片</label><label><input type="checkbox" value="video" checked>视频</label><label><input type="checkbox" value="audio" checked>音频</label></div></div>
-        </div><p class="hint">识别图片与画面时会发送到已配置的 DeepSeek 模型，分析单独保存，原文保持原样。</p></div>
+        </div><p class="hint">DeepSeek 会发送图片与画面到已配置的模型；本地千问只在本机分析视频关键帧，图片不做画面识别。两种方式只能选一种。</p></div>
         <div class="setting-group"><h3>本地保存</h3><p id="local-directory" class="path-hint"></p><div class="action-row"><button id="choose-directory" class="secondary">选择保存目录</button><button id="open-downloads" class="secondary">打开下载文件夹 ↗</button></div></div>
         <div class="panel-footer"><span class="hint">想让以后都按这些选项处理？</span><button id="save-defaults" class="primary">保存为默认选项</button></div>
       </section>

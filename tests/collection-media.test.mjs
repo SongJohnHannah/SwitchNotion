@@ -1,7 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {createRequire} from 'node:module';
 const require = createRequire(import.meta.url), {CollectionMedia} = require('../src/collection/media.cjs'), {createSpeechPlatform} = require('../src/speech/platform.cjs');
+test('local Qwen vision sends ordered video frames to the loopback Ollama API', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'notion-switch-vision-')); const first = path.join(directory, '0.jpg'), second = path.join(directory, '1.jpg');
+  fs.writeFileSync(first, 'first-frame'); fs.writeFileSync(second, 'second-frame'); let request;
+  const media = new CollectionMedia({fetchImpl:async (url, options) => { request = {url, body:JSON.parse(options.body)}; return {ok:true, json:async () => ({message:{content:'第一张和第二张的画面分析'}})}; }});
+  try {
+    assert.equal(await media.localVision([{frame:first, time:0}, {frame:second, time:30}]), '第一张和第二张的画面分析');
+    assert.equal(request.url, 'http://127.0.0.1:11434/api/chat'); assert.equal(request.body.model, 'qwen3.8-27b-vl:latest');
+    assert.equal(request.body.stream, false); assert.equal(request.body.messages[0].images.length, 2);
+    assert.deepEqual(request.body.messages[0].images, [Buffer.from('first-frame').toString('base64'), Buffer.from('second-frame').toString('base64')]);
+    assert.match(request.body.messages[0].content, /视频时间 30\.0 秒/);
+    const thinking = new CollectionMedia({fetchImpl:async () => ({ok:true, json:async () => ({message:{content:'', thinking:'思考后的画面描述'}})})});
+    assert.equal(await thinking.localVision([{frame:first, time:0}]), '思考后的画面描述');
+  } finally { fs.rmSync(directory, {recursive:true, force:true}); }
+});
 test('repeated GPU worker exits fall back to local CPU without changing the audio or model', async () => {
   const wav = Buffer.from('bounded-wave'), calls = [], backend = {};
   const media = new CollectionMedia({root:'/fixture',speech:{status:()=>({device:'cuda'}),transcribeWav:async options=>{calls.push(['gpu',options.wav]);throw Error('离线转写进程已退出。')}}});
