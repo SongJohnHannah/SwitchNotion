@@ -72,10 +72,30 @@ test('changes made after downloading prevent apply and changes made after applyi
 });
 test('failed startup restores the previous code and restarts it; success records that new code was actually loaded', async t => {
   const f = fixture(t); f.publish(); const plan = await f.client.prepare(), attempts = [];
-  assert.equal(await applyClientUpdate({ project: f.project, root: f.root, plan, client: f.client, start: async checking => { attempts.push(checking); if (checking) throw Error('fixture startup failure'); } }), false);
+  assert.equal(await applyClientUpdate({ project: f.project, root: f.root, plan, client: f.client, runTests: async () => ({ ok: true }), start: async checking => { attempts.push(checking); if (checking) throw Error('fixture startup failure'); } }), false);
   assert.deepEqual(attempts, [true, false]); assert.equal(f.git(f.project, ['rev-parse', 'HEAD']), f.before); assert.equal(f.client.last().status, 'restored');
-  assert.equal(await applyClientUpdate({ project: f.project, root: f.root, plan, client: f.client, start: async checking => { assert.equal(checking, true); assert.equal(f.git(f.project, ['rev-parse', 'HEAD']), plan.after); } }), true);
+  assert.equal(await applyClientUpdate({ project: f.project, root: f.root, plan, client: f.client, runTests: async () => ({ ok: true }), start: async checking => { assert.equal(checking, true); assert.equal(f.git(f.project, ['rev-parse', 'HEAD']), plan.after); } }), true);
   assert.equal(f.client.last().status, 'applied');
+});
+test('updates run the project test suite after merging and report progress', async t => {
+  const f = fixture(t); f.publish(); const plan = await f.client.prepare(), events = [];
+  assert.equal(f.client.last().status, 'downloaded'); assert.equal(f.client.last().progress, 30);
+  const ok = await applyClientUpdate({ project: f.project, root: f.root, plan, client: f.client,
+    runTests: async ({ project }) => { events.push(['tests', f.git(project, ['rev-parse', 'HEAD'])]); return { ok: true }; },
+    start: async checking => { events.push(['start', checking]); } });
+  assert.equal(ok, true);
+  assert.deepEqual(events, [['tests', plan.after], ['start', true]]);
+  assert.equal(f.client.last().status, 'applied'); assert.equal(f.client.last().progress, 100);
+});
+test('a failing test suite restores the previous code and relaunches it', async t => {
+  const f = fixture(t); f.publish(); const plan = await f.client.prepare(), attempts = [];
+  const ok = await applyClientUpdate({ project: f.project, root: f.root, plan, client: f.client,
+    runTests: async () => ({ ok: false }), start: async checking => { attempts.push(checking); } });
+  assert.equal(ok, false);
+  assert.deepEqual(attempts, [false], 'New code must never start when tests fail');
+  assert.equal(f.git(f.project, ['rev-parse', 'HEAD']), f.before);
+  assert.equal(f.client.last().status, 'restored');
+  assert.match(f.client.last().message, /测试未通过/);
 });
 test('missing Git metadata gives an unavailable status without crashing other settings', async t => {
   const f = fixture(t), client = new ClientUpdate({ root: f.root, projectDirectory: f.root });

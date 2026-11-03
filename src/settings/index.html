@@ -91,7 +91,7 @@
           <p id="speech-description" class="field-help">点击“检测并准备”；缺少组件时自动下载到本地。首次模型约 1.5 GB，Windows GPU 还需额外运行库。</p>
           <p class="field-help">Windows 使用 NVIDIA GPU；M1 等 Apple Silicon Mac 使用 CPU。Mac 已验证原生会议的开始、停止和收尾，长会议仍需单独验收。语音按短片段识别；DeepSeek 总结需要联网。</p>
           <label class="check-label"><input id="speech-enabled" type="checkbox"> 启用原生速记的离线转写</label><p id="speech-native-state" class="field-help">正在检查原生界面适配状态…</p>
-          <label class="check-label"><input id="speech-system-audio" type="checkbox" checked> 转写系统播放声音</label><p class="field-help">默认开启：同时转写麦克风和电脑播放的声音。视频、网页和提示音中的讲话也会被转写，保留系统音频标注；关闭后只录麦克风。更改后请刷新 Notion 页面。</p>
+          <label for="speech-input-mode">录音来源</label><select id="speech-input-mode"><option value="microphone">录音</option><option value="system">系统声音</option><option value="meeting" selected>录音加系统声音</option></select><p class="field-help">默认同时转写麦克风和电脑播放的声音；视频、网页和提示音中的讲话也会被转写，并保留来源标注。只选系统声音时不转写麦克风。更改后请刷新 Notion 页面。</p>
             <label class="check-label"><input id="speech-summary" type="checkbox" checked> 停止录音后用 DeepSeek 自动生成摘要</label><p class="field-help">开启后会将转录文字和手写笔记发送给 DeepSeek，摘要需要联网；原始音频在本机转写。关闭后只转录，不自动生成摘要。</p>
             <label class="check-label"><input id="speech-attach-audio" type="checkbox" checked> 停止后将会议录音保存到当前页面</label><p class="field-help">默认开启：将会议音频上传到这场会议所在的 Notion 页面，生成可播放的 MP3 音频块。长会议按约 8 分钟分段保存。关闭后新会议不另存或上传录音，待处理上传也会暂停；转写和摘要设置独立生效。上传确认成功后清理临时音频，失败时保留待重试。</p>
             <p id="speech-audio-state" class="field-help"></p><button id="retry-meeting-audio" class="button secondary" hidden>重试保存会议录音</button>
@@ -109,7 +109,7 @@
           <p id="login-sync-help">首次使用或登录失效时，可以从这台电脑已登录的原版 Notion 同步。只复制 Notion 的登录信息；工作区 API Key 用于页面授权，需要单独添加。</p>
           <p id="login-interactive-help" hidden>请在 SwitchNotion 的 Notion 窗口中登录。工作区 API Key 用于页面授权，需要单独添加。</p>
           <p id="login-mac-help" hidden>退出原版 Notion 后，可以同步本机登录。启动时如出现钥匙串访问提示，请按系统提示确认。工作区 API Key 需单独添加。</p>
-          <div class="form-actions"><button id="check-login" class="button secondary">检查登录状态</button><button id="sync-login" class="button primary">从本机 Notion 同步登录</button><button id="open-login-notion" class="button primary" hidden>打开 Notion 登录</button><button id="update-switch-notion-login" class="button secondary">更新 Switch Notion</button></div>
+          <div class="form-actions"><button id="check-login" class="button secondary">检查登录状态</button><button id="sync-login" class="button primary">从本机 Notion 同步登录</button><button id="open-login-notion" class="button primary" hidden>打开 Notion 登录</button></div>
           <div id="login-result" class="inline-result" role="status" hidden></div>
           <label class="check-label"><input id="notion-bypass-vpn" type="checkbox"> 跳过 VPN：Notion 域名直连</label>
           <p class="field-help">开启后启动 Notion 时只对 notion.so、notion.com、notion.site 绕过系统代理，其他网站仍走 VPN；需要重新启动 Notion 生效。如果 VPN 使用 TUN 或全局路由接管，还需要在 VPN 客户端里把这些域名设为直连。</p>
@@ -124,7 +124,8 @@
         <div class="page-heading"><div><span class="eyebrow">UPDATES</span><h1>版本与更新</h1><p>更新 Switch Notion，获取最新功能和修复。</p></div></div>
         <div id="client-updates-card" class="provider-card">
           <h2>Switch Notion 程序更新</h2><p id="client-code-version" class="dialog-description">正在读取当前代码版本…</p>
-          <p id="client-code-help" class="field-help">点击后检查并下载最新代码，完成后自动重启。请先确认页面编辑已同步，并结束录音或 AI 任务。</p>
+          <p id="client-code-help" class="field-help">点击后检查并下载最新代码，运行全量测试，完成后自动重启。测试需要几分钟，请先确认页面编辑已同步，并结束录音或 AI 任务。</p>
+          <progress id="client-update-progress" max="100" value="0" aria-label="更新进度" hidden></progress>
           <div class="form-actions"><button id="update-switch-notion" class="button primary">更新 Switch Notion</button></div>
           <div id="client-updates-result" class="inline-result" role="status" hidden></div>
         </div>

@@ -58,14 +58,14 @@ function replaceOnce(source, target, replacement) {
   return source.replace(target, replacement);
 }
 function adaptRecordingClient(source, asset, { inputMode = 'meeting', gateModuleId = 218744, transportModuleId = 241978 } = {}) {
-  if (!['microphone', 'meeting'].includes(inputMode)) throw Error('Invalid local recording input mode');
+  if (!['microphone', 'system', 'meeting'].includes(inputMode)) throw Error('Invalid local recording input mode');
   if (asset.startsWith('17048-')) {
     return source;
   }
   if (![218744, 211589].includes(gateModuleId) || ![241978, 697264].includes(transportModuleId)) throw Error('Unsupported native recording imports');
   source = replaceOnce(source, 'transcriptionDrainEnabled:i(' + gateModuleId + ').default.checkGate({gateName:"meeting_notes_transcription_drain_enabled"})', 'transcriptionDrainEnabled:!0');
   for (const entry of ['static async startDictation(e){', 'static async getDictationAudioRecorder(e){']) {
-    source = replaceOnce(source, entry, entry + 'e={...e,includeSystemAudio:' + (inputMode === 'meeting' ? '!0' : '!1') + '};');
+    source = replaceOnce(source, entry, entry + 'e={...e,includeSystemAudio:' + (inputMode !== 'microphone' ? '!0' : '!1') + '};');
   }
   // The reviewed October 27 module only renames bindings. Resolve the store
   // alias by its exact module import rather than assuming the old name "y".

@@ -5,7 +5,7 @@ const FRAME_LIMIT = 16000 * 4 * 2;
 const QUEUE_LIMIT = 16000 * 4 * 600;
 class MeetingAudioSession {
   constructor({ root, provider, emit, inputMode = 'meeting', authorize = async () => {}, recordingFactory, onActivity = () => {}, onTranscript = () => {} }) {
-    if (!['microphone', 'meeting'].includes(inputMode)) throw Error('录音来源设置无效。');
+    if (!['microphone', 'system', 'meeting'].includes(inputMode)) throw Error('录音来源设置无效。');
     this.inputMode = inputMode;
     this.root = root; this.provider = provider; this.emit = emit; this.authorize = authorize; this.recordingFactory = recordingFactory; this.onActivity = onActivity; this.onTranscript = onTranscript;
     this.id = randomUUID(); this.context = null; this.sources = new Map(); this.seen = new Map(); this.jobs = Promise.resolve(); this.queuedBytes = 0; this.closed = false; this.failure = null; this.abort = new AbortController(); this.drained = false;
@@ -47,7 +47,7 @@ class MeetingAudioSession {
       if (!bytes.length || bytes.length > FRAME_LIMIT || bytes.length % 4 || bytes.toString('base64') !== input.base64Audio) throw Error('音频帧格式无效。');
       for (let i = 0; i < bytes.length; i += 4) { const n = bytes.readFloatLE(i); if (!Number.isFinite(n) || Math.abs(n) > 1.01) throw Error('音频采样格式无效。'); }
       const source = input.audioSource || 'microphone'; if (!['microphone', 'system_audio'].includes(source)) throw Error('音频来源无效。');
-      if (this.inputMode === 'microphone' && source === 'system_audio') return {};
+      if ((this.inputMode === 'microphone' && source === 'system_audio') || (this.inputMode === 'system' && source === 'microphone')) return {};
       const buffered = [...this.sources.values()].reduce((sum, state) => sum + state.segmenter.bytes, 0);
       if (this.queuedBytes + buffered + bytes.length > QUEUE_LIMIT) throw Error('转写积压超过十分钟，请停止录音并等待处理完成；已接收的音频会继续转写。');
       const state = this.sources.get(source) || { segmenter: new PcmSegmenter(), offset: 0, context: '' };

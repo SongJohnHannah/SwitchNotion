@@ -66,7 +66,7 @@ function patchModule(module, id, options) {
   if (record.kind === 'provider') replace(node('replace'), JSON.stringify('DeepSeek 官方 API'));
   if (record.kind === 'audio' && options.localSpeechEnabled) replace(node('replace'), JSON.stringify(endpoint(options.audioEndpoint)) + '+"?"+' + sourceOf(node('replace').expressions[1]));
   if (record.kind === 'recording' && options.localSpeechEnabled) {
-    if (!['meeting', 'microphone'].includes(options.inputMode || 'meeting')) throw Error('Invalid recording input mode');
+    if (!['meeting', 'microphone', 'system'].includes(options.inputMode || 'meeting')) throw Error('Invalid recording input mode');
     const include = options.inputMode !== 'microphone', request = node('require').name;
     if (!request) throw Error('Missing native import binding');
     for (const key of ['start', 'recorder']) {

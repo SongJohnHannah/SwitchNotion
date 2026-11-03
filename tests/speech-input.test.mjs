@@ -43,7 +43,14 @@ test('meeting mode continues to keep microphone and system audio in separate tra
   assert.deepEqual(f.events.filter(event => event.transcription?.status === 'complete').map(event => event.audioSource), ['microphone', 'system_audio']);
 });
 
-test('system audio is enabled by default, can be turned off in settings, and survives reopening', async t => {
+test('system-only mode transcribes playback and never the microphone', async t => {
+  const f = await fixture('system'); t.after(() => f.session.close());
+  for (const audioSource of ['microphone', 'system_audio']) await f.send('audioData', { blockId, spaceId, audioSource, base64Audio: pcm.toString('base64') });
+  await f.send('drainTranscription');
+  assert.deepEqual(f.events.filter(event => event.transcription?.status === 'complete').map(event => event.audioSource), ['system_audio']);
+});
+
+test('recording source defaults to microphone plus system audio and persists all three options', async t => {
   const parent = path.resolve('.notion-switch'); fs.mkdirSync(parent, { recursive: true });
   const root = fs.mkdtempSync(path.join(parent, 'test-speech-input-'));
   t.after(() => { assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
@@ -53,6 +60,8 @@ test('system audio is enabled by default, can be turned off in settings, and sur
   assert.equal((await service.request('speech.save', { enabled: true, inputMode: 'microphone' })).ok, true);
   assert.equal(service.native.lifecycleReady, false, 'Capture must be reloaded before claiming microphone-only mode');
   assert.equal(new settings.SpeechSettings({ root, provider }).status().inputMode, 'microphone');
+  assert.equal((await service.request('speech.save', { enabled: true, inputMode: 'system' })).ok, true);
+  assert.equal(new settings.SpeechSettings({ root, provider }).status().inputMode, 'system');
   assert.equal((await service.request('speech.save', { enabled: true, inputMode: 'meeting' })).ok, true);
   assert.equal(new settings.SpeechSettings({ root, provider }).status().inputMode, 'meeting');
   const saved = fs.readFileSync(service.file, 'utf8');
@@ -79,8 +88,10 @@ test('verified native capture disables system audio before mixing when the confi
   };
   const personal = compatibility.adaptClient(original, name, { localSpeechEnabled: true, inputMode: 'microphone' });
   const meeting = compatibility.adaptClient(original, name, { localSpeechEnabled: true, inputMode: 'meeting' });
+  const system = compatibility.adaptClient(original, name, { localSpeechEnabled: true, inputMode: 'system' });
   assert.equal(await capture(original), false);
   assert.equal(await capture(meeting), true);
+  assert.equal(await capture(system), true);
   assert.equal(await capture(personal), false, 'Disable computer playback at the actual recorder boundary, not only after a mixed frame arrives');
-  new vm.Script(personal); new vm.Script(meeting);
+  new vm.Script(personal); new vm.Script(meeting); new vm.Script(system);
 });

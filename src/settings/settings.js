@@ -290,12 +290,6 @@ async function checkLogin() {
   result('login-result', r.result.lastSync?.message || '检查仅确认本机登录信息是否存在；是否仍有效，以 Notion 窗口为准。', !!r.result.lastSync && r.result.lastSync.status !== 'applied');
 }
 $('check-login').addEventListener('click', () => operation($('login-card'), checkLogin));
-$('update-switch-notion-login').addEventListener('click', () => operation($('login-card'), async () => {
-  const button = $('update-switch-notion-login'); button.textContent = '正在更新…';
-  result('login-result', '正在检查并下载最新代码，请稍候…');
-  try { const r = await api.updateSwitchNotion(); result('login-result', r.ok ? r.result.message : r.error, !r.ok); }
-  finally { button.textContent = '更新 Switch Notion'; }
-}));
 $('save-accelerator').addEventListener('click', () => operation($('login-card'), async () => {
   const response = await api.saveAccelerator({ bypassVpn: $('notion-bypass-vpn').checked ? 'enabled' : 'disabled', autoIp: $('notion-auto-ip').checked ? 'enabled' : 'disabled' });
   result('accelerator-result', response.ok ? response.result.message : response.error, !response.ok);
@@ -316,12 +310,16 @@ async function checkUpdates() {
   const info = r.result; $('updates-title').textContent = info.available ? '检测到原版 Notion 更新' : '原版 Notion 客户端';
   const client = info.client;
   $('client-code-version').textContent = client?.revision ? '当前代码版本 ' + client.revision + (client.needsRestart ? ' · 有本地更新待接入' : '') : '当前安装的代码版本暂不可用';
-  $('client-code-help').textContent = (client?.message || '点击更新会下载最新代码，完成后自动重启。') +
-    (client?.supported ? ' 更新前请确认页面编辑已同步，并结束录音或 AI 任务。' : '');
+  $('client-code-help').textContent = (client?.message || '点击更新会下载最新代码并运行测试，完成后自动重启。') +
+    (client?.supported ? ' 测试期间会占用几分钟，请先确认页面编辑已同步，并结束录音或 AI 任务。' : '');
+  const lastUpdate = client?.last, updatePercent = Number(lastUpdate?.progress);
+  const updateActive = ['checking', 'downloaded', 'applying', 'testing'].includes(lastUpdate?.status);
+  $('client-update-progress').hidden = !updateActive;
+  if (updateActive) $('client-update-progress').value = Number.isFinite(updatePercent) ? Math.max(0, Math.min(100, updatePercent)) : 0;
   $('update-switch-notion').disabled = client?.supported === false;
   $('update-switch-notion').dataset.unavailable = String(client?.supported === false);
   if (client?.last) result('client-updates-result', client.last.message, ['blocked', 'restored'].includes(client.last.status));
-  if (['checking', 'downloaded', 'applying'].includes(client?.last?.status) && Date.now() - Date.parse(client.last.checkedAt) < 120000) {
+  if (['checking', 'downloaded', 'applying', 'testing'].includes(client?.last?.status) && Date.now() - Date.parse(client.last.checkedAt) < 120000) {
     clientUpdatePoll = setTimeout(() => { if (!busy && !$('updates-view').hidden) void checkUpdates(); }, 2000);
   }
   $('updates-versions').textContent = '本机原版 ' + info.originalVersion + ' · 当前原型 ' + info.prototypeVersion;
@@ -346,7 +344,7 @@ async function checkSpeech() {
   const s = response.result;
   $('speech-backend').textContent = `${s.engineName} · ${s.modelName} · ${s.hardwareLabel} · ${s.computeType}`;
   $('speech-status').textContent = !s.supported ? '系统暂不支持' : s.ready ? '离线引擎就绪' : s.configured ? '已配置' : '尚未准备';
-  if (!speechDirty) { $('speech-enabled').checked = s.enabled; $('speech-model').value = s.model || 'medium'; $('speech-summary').checked = s.autoSummary !== false; $('speech-system-audio').checked = s.inputMode !== 'microphone'; $('speech-attach-audio').checked = s.autoAttachAudio !== false; }
+  if (!speechDirty) { $('speech-enabled').checked = s.enabled; $('speech-model').value = s.model || 'medium'; $('speech-summary').checked = s.autoSummary !== false; $('speech-input-mode').value = ['microphone', 'system', 'meeting'].includes(s.inputMode) ? s.inputMode : 'meeting'; $('speech-attach-audio').checked = s.autoAttachAudio !== false; }
   const imports = s.audioImports;
   $('speech-audio-state').textContent = imports ? (imports.capturing ? '正在为会议保留待保存的音频。' : imports.active ? '正在后台保存会议音频，不影响录音收尾。' : '会议音频已保存 ' + imports.saved + ' 场 · 待处理 ' + imports.pending + ' 场') + (imports.lastError ? ' ' + imports.lastError : '') : '';
   $('retry-meeting-audio').hidden = !imports?.failed;
@@ -383,8 +381,8 @@ speechRecorder = new window.SpeechRecorder(api, value => {
 $('test-speech').addEventListener('click', () => { if (speechRecorder.state === 'recording') speechRecorder.stop(); else if (speechRecorder.state === 'idle' && !busy) void speechRecorder.start(); });
 window.addEventListener('pagehide', () => { clearInterval(speechPoll); speechRecorder.clearPlayback(); void speechRecorder.cancel(); });
 $('release-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.releaseSpeech(); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); await checkSpeech(); }));
-for (const id of ['speech-model', 'speech-enabled', 'speech-summary', 'speech-system-audio', 'speech-attach-audio']) $(id).addEventListener('change', () => { speechDirty = true; });
-$('save-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.saveSpeech({ enabled: $('speech-enabled').checked, model: $('speech-model').value, autoSummary: $('speech-summary').checked, autoAttachAudio: $('speech-attach-audio').checked, inputMode: $('speech-system-audio').checked ? 'meeting' : 'microphone' }); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) speechDirty = false; await checkSpeech(); }));
+for (const id of ['speech-model', 'speech-enabled', 'speech-summary', 'speech-input-mode', 'speech-attach-audio']) $(id).addEventListener('change', () => { speechDirty = true; });
+$('save-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.saveSpeech({ enabled: $('speech-enabled').checked, model: $('speech-model').value, autoSummary: $('speech-summary').checked, autoAttachAudio: $('speech-attach-audio').checked, inputMode: $('speech-input-mode').value }); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) speechDirty = false; await checkSpeech(); }));
 $('retry-meeting-audio').addEventListener('click', () => operation($('speech-card'), async () => { result('speech-result', '正在重试保存会议录音…'); const r = await api.retryMeetingAudio(); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); await checkSpeech(); }));
 async function checkTranscript(response) {
   const r = response || await api.transcriptState(); if (!r.ok) { toast(r.error); return; }

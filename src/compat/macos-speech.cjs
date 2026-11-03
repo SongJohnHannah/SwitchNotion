@@ -47,7 +47,7 @@ function adaptMacSpeech(source, asset, options = {}) {
     return source;
   }
   const inputMode = options.inputMode || 'meeting';
-  if (!['meeting', 'microphone'].includes(inputMode)) throw Error('Invalid Mac speech input mode');
+  if (!['meeting', 'microphone', 'system'].includes(inputMode)) throw Error('Invalid Mac speech input mode');
   const changes = targets.map(module => {
     const record = reviewed[module.id]; let output = module.source;
     if (record.kind === 'audio') {

@@ -3,7 +3,7 @@ const roles = ['audio', 'connection', 'recording'];
 function verifiedClient(value, inputMode) {
   if (typeof value !== 'string' || value.length > 512) return false;
   let client; try { client = JSON.parse(value); } catch { return false; }
-  return client?.version === 1 && ['meeting', 'microphone'].includes(inputMode) && client.inputMode === inputMode &&
+  return client?.version === 1 && ['meeting', 'microphone', 'system'].includes(inputMode) && client.inputMode === inputMode &&
     Object.keys(client).length === 5 && roles.every(kind => Object.values(modules).some(record => record.kind === kind && record.hash === client[kind]));
 }
 

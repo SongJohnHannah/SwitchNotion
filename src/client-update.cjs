@@ -21,8 +21,8 @@ class ClientUpdate {
       });
     }));
   }
-  save(status, message, plan = {}) {
-    const value = { status, message, checkedAt: new Date().toISOString(), ...(revision(plan.before) ? { before: plan.before } : {}), ...(revision(plan.after) ? { after: plan.after } : {}) };
+  save(status, message, plan = {}, progress = null) {
+    const value = { status, message, checkedAt: new Date().toISOString(), ...(revision(plan.before) ? { before: plan.before } : {}), ...(revision(plan.after) ? { after: plan.after } : {}), ...(Number.isFinite(progress) ? { progress } : {}) };
     fs.writeFileSync(this.file + '.tmp', JSON.stringify(value, null, 2), { mode: 0o600 }); fs.renameSync(this.file + '.tmp', this.file);
   }
   last() { try { return JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch { return null; } }
@@ -42,12 +42,12 @@ class ClientUpdate {
     const last = this.last();
     try {
       const { head } = await this.inspect();
-      return { supported: true, revision: head.slice(0, 7), message: '点击更新会下载最新代码，完成后自动重启。', last };
+      return { supported: true, revision: head.slice(0, 7), message: '点击更新会下载最新代码并运行测试，完成后自动重启。', last };
     } catch (error) { return { supported: false, message: error.message, last }; }
   }
   async prepare() {
     const { head: before, remote } = await this.inspect({ clean: true });
-    this.save('checking', '正在检查 Switch Notion 更新…');
+    this.save('checking', '正在检查 Switch Notion 更新…', {}, 10);
     const remotes = [remote];
     if (remote.startsWith('https://')) remotes.push('git@github.com:' + repository + '.git');
     let fetched = false;
@@ -57,14 +57,14 @@ class ClientUpdate {
     if (!fetched) throw Error('无法下载 Switch Notion 更新，请检查网络和 GitHub 登录后重试；当前代码未更改。');
     const after = await this.run(['rev-parse', '--verify', 'refs/remotes/origin/main']);
     if (!revision(after)) throw Error('远程代码版本无效，未应用更新。');
-    if (before === after) { this.save('current', 'Switch Notion 已是最新代码。', { before, after }); return { before, after, available: false }; }
+    if (before === after) { this.save('current', 'Switch Notion 已是最新代码。', { before, after }, 100); return { before, after, available: false }; }
     try { await this.run(['merge-base', '--is-ancestor', before, after]); }
     catch { throw Error('本地和远程代码已有分歧，无法直接更新；本地提交已保留。'); }
     for (const file of required) {
       try { await this.run(['cat-file', '-e', after + ':' + file]); }
       catch { throw Error('下载的更新缺少必要启动文件，未应用更新。'); }
     }
-    this.save('downloaded', '更新已下载，等待重启应用。', { before, after });
+    this.save('downloaded', '更新已下载，等待重启应用。', { before, after }, 30);
     return { before, after, available: true };
   }
   async apply(plan) {
@@ -72,7 +72,7 @@ class ClientUpdate {
     const current = await this.inspect({ clean: true });
     if (current.head !== plan.before) throw Error('下载期间本地代码发生变化，已取消更新。');
     await this.run(['merge-base', '--is-ancestor', plan.before, plan.after]);
-    this.save('applying', '正在应用代码并重启 Switch Notion…', plan);
+    this.save('applying', '正在应用代码并重启 Switch Notion…', plan, 45);
     await this.run(['merge', '--ff-only', '--no-edit', plan.after]);
     if ((await this.inspect()).head !== plan.after) throw Error('代码更新未完成。');
   }

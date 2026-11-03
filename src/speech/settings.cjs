@@ -12,7 +12,7 @@ class SpeechSettings {
     this.enabled = saved.enabled === true;
     this.autoSummary = saved.autoSummary !== false;
     this.autoAttachAudio = saved.autoAttachAudio !== false;
-    this.inputMode = saved.inputMode === 'microphone' ? 'microphone' : 'meeting';
+    this.inputMode = ['microphone', 'system', 'meeting'].includes(saved.inputMode) ? saved.inputMode : 'meeting';
     const model = Object.hasOwn(models, saved.model) ? saved.model : 'medium';
     this.provider = provider || new SpeechProvider({ root, runtime: saved.runtime, model });
     this.progress = null; this.capture = new RecordingTest({ provider: this.provider, isBusy });
@@ -74,7 +74,7 @@ class SpeechSettings {
         if (input.autoSummary !== undefined && typeof input.autoSummary !== 'boolean') throw Error('请选择是否自动生成会议摘要。');
         if (input.autoAttachAudio !== undefined && typeof input.autoAttachAudio !== 'boolean') throw Error('请选择是否将会议录音保存到当前页面。');
         const inputMode = input.inputMode ?? this.inputMode;
-        if (!['microphone', 'meeting'].includes(inputMode)) throw Error('请选择有效的录音来源。');
+        if (!['microphone', 'system', 'meeting'].includes(inputMode)) throw Error('请选择有效的录音来源。');
         const model = input.model ?? this.provider.status().model ?? 'medium';
         if (!Object.hasOwn(models, model)) throw Error('请选择有效的离线语音模型。');
         if (this.provider.leases) throw Error('请先停止录音，再更改离线转写设置。');
