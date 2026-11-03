@@ -15,11 +15,11 @@
     <div class="brand"><span class="brand-icon">N<span>↗</span></span><div>NotionSwitch<small>让 Notion 用上你的 AI</small></div></div>
     <div class="nav-label">连接管理</div>
     <nav aria-label="配置导航">
-      <button class="nav-item active" data-view="workspaces"><span class="nav-icon">▦</span>Notion 工作区<span id="nav-count" class="nav-count">0</span></button>
-      <button class="nav-item" data-view="deepseek"><span class="nav-icon">✧</span>DeepSeek</button>
-      <button class="nav-item" data-view="speech"><span class="nav-icon">◉</span>离线语音</button>
+      <button class="nav-item active" data-view="workspaces"><span class="nav-icon">▦</span>工作区连接<span id="nav-count" class="nav-count">0</span></button>
+      <button class="nav-item" data-view="deepseek"><span class="nav-icon">✧</span>AI 与联网搜索</button>
+      <button class="nav-item" data-view="speech"><span class="nav-icon">◉</span>语音与识别</button>
       <button class="nav-item" data-view="collection"><span class="nav-icon">↓</span>内容收集</button>
-      <button class="nav-item" data-view="login"><span class="nav-icon">↔</span>Notion 登录</button>
+      <button class="nav-item" data-view="login"><span class="nav-icon">↔</span>登录与网络</button>
       <button class="nav-item" data-view="updates"><span class="nav-icon">↻</span>版本与更新</button>
     </nav>
     <div class="sidebar-bottom"><span class="local-dot"></span>本机配置<span class="version">v0.2</span></div>
@@ -103,14 +103,21 @@
         </div>
       </section>
       <section id="login-view" hidden>
-        <div class="page-heading"><div><span class="eyebrow">LOCAL LOGIN</span><h1>Notion 登录状态</h1><p>登录信息保存在本机，平时一键启动会自动沿用。</p></div></div>
+        <div class="page-heading"><div><span class="eyebrow">LOCAL LOGIN</span><h1>登录与网络</h1><p>登录信息保存在本机；这里也可以让 Notion 域名直连或自动选择最快 IP。</p></div></div>
         <div id="login-card" class="provider-card">
           <h2 id="login-title">正在检查本机登录信息…</h2><p id="login-description" class="dialog-description"></p>
           <p id="login-sync-help">首次使用或登录失效时，可以从这台电脑已登录的原版 Notion 同步。只复制 Notion 的登录信息；工作区 API Key 用于页面授权，需要单独添加。</p>
           <p id="login-interactive-help" hidden>请在 SwitchNotion 的 Notion 窗口中登录。工作区 API Key 用于页面授权，需要单独添加。</p>
           <p id="login-mac-help" hidden>退出原版 Notion 后，可以同步本机登录。启动时如出现钥匙串访问提示，请按系统提示确认。工作区 API Key 需单独添加。</p>
-          <div class="form-actions"><button id="check-login" class="button secondary">检查登录状态</button><button id="sync-login" class="button primary">从本机 Notion 同步登录</button><button id="open-login-notion" class="button primary" hidden>打开 Notion 登录</button></div>
+          <div class="form-actions"><button id="check-login" class="button secondary">检查登录状态</button><button id="sync-login" class="button primary">从本机 Notion 同步登录</button><button id="open-login-notion" class="button primary" hidden>打开 Notion 登录</button><button id="update-switch-notion-login" class="button secondary">更新 Switch Notion</button></div>
           <div id="login-result" class="inline-result" role="status" hidden></div>
+          <label class="check-label"><input id="notion-bypass-vpn" type="checkbox"> 跳过 VPN：Notion 域名直连</label>
+          <p class="field-help">开启后启动 Notion 时只对 notion.so、notion.com、notion.site 绕过系统代理，其他网站仍走 VPN；需要重新启动 Notion 生效。如果 VPN 使用 TUN 或全局路由接管，还需要在 VPN 客户端里把这些域名设为直连。</p>
+          <label class="check-label"><input id="notion-auto-ip" type="checkbox"> 智能加速：自动测速选择最快的 Notion IP</label>
+          <p class="field-help">启用和每次启动时解析 Notion 官方 IP，逐个测试 TLS 握手并固定最快的一个；只作用于 Notion 域名并直连，不修改系统 hosts，IP 失效会自动重新选择。</p>
+          <p id="notion-auto-ip-state" class="field-help"></p>
+          <div class="form-actions"><button id="save-accelerator" class="button secondary">保存网络设置</button></div>
+          <div id="accelerator-result" class="inline-result" role="status" hidden></div>
         </div>
       </section>
       <section id="updates-view" hidden>

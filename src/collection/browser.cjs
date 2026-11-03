@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { extractPage } = require('./extract-page.cjs');
 const { extractXiaohongshuPage } = require('./xiaohongshu.cjs');
-const { assertPublicUrl, effectiveProxy } = require('./network.cjs');
+const { assertPublicUrl, resolveProxy } = require('./network.cjs');
 const { normalizeDocument, hash } = require('./model.cjs');
 const { WechatChannel, isWechatShare } = require('./wechat-channel.cjs');
 const { inspectAccount } = require('./account-status.cjs');
@@ -76,7 +76,7 @@ class CollectionBrowser {
     signal?.throwIfAborted(); const m = await mediaKit(), settings = this.getSettings();
     process.env.MEDIAKIT_BIN_DIR = this.binaries.directory;
     const config = { browserBaseUrl: this.endpoint, chromeUserDataDir: settings.browserProfile || path.join(this.root, 'collection', 'browser'),
-      chromeExecutablePath: settings.browserExecutable || undefined, proxyUrl: effectiveProxy(settings.proxy) || undefined };
+      chromeExecutablePath: settings.browserExecutable || undefined, proxyUrl: await resolveProxy(settings.proxy) || undefined };
     const ready = await m.ensureChromeRunning(settings.browserPort, config);
     signal?.throwIfAborted(); if (!ready) throw Error('收集浏览器未就绪，请安装 Chrome、Edge 或 Brave，或在设置中选择浏览器。');
     return { m, config };

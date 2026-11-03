@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import net from 'node:net';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 
@@ -40,4 +41,14 @@ test('invalid explicit proxies report a configuration error instead of being sil
   for (const value of ['socks5://127.0.0.1:1080', 'http://user:password@proxy.example:8080', 'http://proxy.example/path']) {
     assert.throws(() => effectiveProxy(value), /代理/);
   }
+});
+
+test('an inherited proxy that is not listening is skipped so collection falls back to direct', async () => {
+  const server = net.createServer(socket => socket.destroy());
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const proxy = 'http://127.0.0.1:' + server.address().port;
+  assert.equal(await network({ HTTPS_PROXY: proxy }).resolveProxy(), proxy);
+  await new Promise(resolve => server.close(resolve));
+  assert.equal(await network({ HTTPS_PROXY: proxy }).resolveProxy(), '');
+  assert.equal(await network({ HTTPS_PROXY: proxy }).resolveProxy(proxy), proxy);
 });

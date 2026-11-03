@@ -49,6 +49,11 @@ function launch() {
  fs.closeSync(stdout); fs.closeSync(stderr);
  child.on('error', () => {}); child.unref(); return child;
 }
+const accelerator = createRequire(import.meta.url)('../src/notion-accelerator.cjs');
+if (accelerator.read(stateRoot).autoIp) {
+  // 每次启动都重新测速，避免固定到已经失效的 IP。
+  try { await createRequire(import.meta.url)('../src/notion-ip-probe.cjs').refresh(stateRoot); } catch {}
+}
 let child = launch(), runtimeRestored = false;
 const validationTimeout = platform.id === 'darwin' ? 45000 : undefined;
 const checkStartup = pid => waitForRuntime({ root: stateRoot, pid, timeoutMs: validationTimeout,

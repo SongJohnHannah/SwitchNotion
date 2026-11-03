@@ -22,6 +22,23 @@ function effectiveProxy(explicit = '') {
   }
   return '';
 }
+function proxyListening(proxy, timeoutMs = 600) {
+  const url = new URL(proxy), port = Number(url.port) || (url.protocol === 'https:' ? 443 : 80);
+  return new Promise(resolve => {
+    let settled = false;
+    const socket = net.connect({ host: url.hostname.replace(/^\[|\]$/g, ''), port });
+    const finish = value => { if (settled) return; settled = true; socket.destroy(); resolve(value); };
+    socket.setTimeout(timeoutMs, () => finish(false));
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+  });
+}
+// 环境变量里的代理常常指向已关闭的本地客户端；显式配置的代理仍然原样使用。
+async function resolveProxy(explicit = '') {
+  const proxy = effectiveProxy(explicit);
+  if (!proxy || explicit) return proxy;
+  return await proxyListening(proxy) ? proxy : '';
+}
 function privateAddress(ip) {
   const v = ip.toLowerCase().replace(/^\[|\]$/g, '');
   if (v.includes(':')) {
@@ -41,7 +58,7 @@ async function assertPublicUrl(value, lookup = defaultLookup) {
 }
 async function openResponse(value, { signal, headers = {}, proxy = '', lookup, redirects = 0 } = {}) {
   signal?.throwIfAborted();
-  proxy = effectiveProxy(proxy);
+  if (!redirects) proxy = await resolveProxy(proxy);
   const { url, addresses } = await assertPublicUrl(value, lookup);
   const options = { method: 'GET', headers: { 'user-agent': 'Mozilla/5.0 SwitchNotion/0.2', ...headers }, signal };
   if (!proxy) options.lookup = (_host, requested, callback) => requested?.all ? callback(null, addresses) : callback(null, addresses[0].address, addresses[0].family);
@@ -84,4 +101,4 @@ async function download(value, file, { maxBytes = 5 * 1024 ** 3, mime, ...option
   if (!bytes) { fs.unlinkSync(file); throw Error('资源下载结果为空。'); }
   return { bytes, contentType };
 }
-module.exports = { privateAddress, assertPublicUrl, effectiveProxy, openResponse, download };
+module.exports = { privateAddress, assertPublicUrl, effectiveProxy, resolveProxy, openResponse, download };

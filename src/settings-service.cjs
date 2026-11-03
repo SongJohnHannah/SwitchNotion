@@ -2,6 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { NotionRouter, registryName, consolidateConnections, saveConnections } = require('./notion-routing.cjs');
+const accelerator = require('./notion-accelerator.cjs');
+const ipProbe = require('./notion-ip-probe.cjs');
 const { ProviderRouter } = require('./provider.cjs');
 const { models } = require('./native-models.cjs');
 const { WebSources } = require('./web-sources.cjs');
@@ -43,7 +45,7 @@ class SettingsService {
   }
   async state() {
     const profiles = await this.profiles(), status = this.provider.status();
-    return { workspaces: profiles.map(p => this.publicProfile(p)), webSources: this.webSources.state(), deepseek: { keyConfigured: status.keyConfigured === true, model: models.some(m => m.apiId === status.model) ? status.model : 'deepseek-flash', thinking: status.thinking === true, reasoningEffort: status.reasoningEffort || 'high', multiAgent: status.multiAgent !== false, models: models.map(m => ({ id: m.apiId, name: m.label })) } };
+    return { workspaces: profiles.map(p => this.publicProfile(p)), accelerator: accelerator.read(this.root), webSources: this.webSources.state(), deepseek: { keyConfigured: status.keyConfigured === true, model: models.some(m => m.apiId === status.model) ? status.model : 'deepseek-flash', thinking: status.thinking === true, reasoningEffort: status.reasoningEffort || 'high', multiAgent: status.multiAgent !== false, models: models.map(m => ({ id: m.apiId, name: m.label })) } };
   }
   async identity(apiKey) {
     const profile = { apiKey }, client = this.router.client(profile);
@@ -119,6 +121,16 @@ class SettingsService {
     fs.writeFileSync(path.join(this.root, 'provider.local.json'), JSON.stringify({ ...config, mode: 'deepseek', model: input.model, keySource: 'local', thinking: input.thinking || config.thinking || 'disabled', reasoningEffort: input.reasoningEffort || config.reasoningEffort || 'high', multiAgent: input.multiAgent === undefined ? config.multiAgent !== false : input.multiAgent === 'enabled' }, null, 2) + '\n', { mode: 0o600, flush: true });
     return { message: 'DeepSeek 已保存，下一轮 AI 对话生效' };
   }
+  async saveAccelerator(input) {
+    const autoIp = input.autoIp === 'enabled';
+    accelerator.save(this.root, { bypassVpn: input.bypassVpn === 'enabled', autoIp });
+    const message = [input.bypassVpn === 'enabled' ? 'Notion 域名直连已开启，重启 Notion 后生效' : ''];
+    if (autoIp) {
+      const probe = await ipProbe.refresh(this.root);
+      message.push(probe.best ? `已选择最快 IP ${probe.best.ip}（${Math.round(probe.best.ms)} 毫秒）` : '当前网络没有可用 IP，暂不固定地址');
+    }
+    return { message: message.filter(Boolean).join('；') || '网络设置已保存', ...accelerator.read(this.root) };
+  }
   request(action, input = {}) {
     if (typeof action === 'string' && action.startsWith('ocr.')) return this.mediaTranscripts?.ocr.request(action, input) || Promise.resolve({ ok: false, error: '本机 OCR 服务尚未就绪。' });
     if (typeof action === 'string' && action.startsWith('transcript.')) return this.mediaTranscripts?.request(action, input) || Promise.resolve({ ok: false, error: '本机逐字稿服务尚未就绪。' });
@@ -126,8 +138,8 @@ class SettingsService {
     if (typeof action === 'string' && action.startsWith('transfer.')) return this.transfer?.request(action, input) || Promise.resolve({ ok: false, error: '对话同步尚未就绪。' });
     if (typeof action === 'string' && /^(mcp|browser|approval)\./.test(action)) return this.extensions?.request(action, input) || Promise.resolve({ ok: false, error: 'Notion MCP 服务尚未就绪。' });
     if (typeof action === 'string' && /^(memory|skill)\./.test(action)) return this.memoryRequest(action, input);
-    const methods = { state: 'state', 'workspace.save': 'saveWorkspace', 'workspace.test': 'testWorkspace', 'workspace.remove': 'removeWorkspace', 'deepseek.save': 'saveDeepseek', 'deepseek.test': 'testDeepseek', 'web.save': 'saveWebSources', 'web.test': 'testWebSources' };
-    const allowed = { state: [], 'workspace.save': ['id', 'name', 'apiKey'], 'workspace.test': ['id', 'apiKey'], 'workspace.remove': ['id'], 'deepseek.save': ['apiKey', 'model', 'thinking', 'reasoningEffort', 'multiAgent'], 'deepseek.test': ['apiKey'], 'web.save': ['enabled', 'apiKey', 'forgetKey'], 'web.test': ['apiKey'] };
+    const methods = { state: 'state', 'workspace.save': 'saveWorkspace', 'workspace.test': 'testWorkspace', 'workspace.remove': 'removeWorkspace', 'accelerator.save': 'saveAccelerator', 'deepseek.save': 'saveDeepseek', 'deepseek.test': 'testDeepseek', 'web.save': 'saveWebSources', 'web.test': 'testWebSources' };
+    const allowed = { state: [], 'workspace.save': ['id', 'name', 'apiKey'], 'workspace.test': ['id', 'apiKey'], 'workspace.remove': ['id'], 'accelerator.save': ['bypassVpn', 'autoIp'], 'deepseek.save': ['apiKey', 'model', 'thinking', 'reasoningEffort', 'multiAgent'], 'deepseek.test': ['apiKey'], 'web.save': ['enabled', 'apiKey', 'forgetKey'], 'web.test': ['apiKey'] };
     const job = async () => {
       if (!Object.hasOwn(methods, action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !allowed[action].includes(k)) || Object.values(input).some(v => typeof v !== 'string' || v.length > 1024)) return { ok: false, error: '无法识别这项操作，请刷新后重试。' };
       try { return { ok: true, result: await this[methods[action]](input) }; }

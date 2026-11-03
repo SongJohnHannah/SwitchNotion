@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('notionSwitch', Object.freeze({
   saveWorkspace: input => request('workspace.save', input),
   testWorkspace: input => request('workspace.test', input),
   removeWorkspace: input => request('workspace.remove', input),
+  saveAccelerator: input => request('accelerator.save', input),
   saveDeepseek: input => request('deepseek.save', input),
   testDeepseek: input => request('deepseek.test', input),
   saveWebSources: input => request('web.save', input),

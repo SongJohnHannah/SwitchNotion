@@ -3,6 +3,7 @@ const os = require('node:os');
 const childProcess = require('node:child_process');
 const { windows } = require('./windows.cjs');
 const { macos } = require('./macos.cjs');
+const network = require('../notion-accelerator.cjs');
 
 function unsupported(id, capability) {
   const error = Error(`${id === 'darwin' ? 'macOS' : id} 的${capability === 'syncLogin' ? '登录同步' : '桌面运行'}尚未实现或验证。`);
@@ -60,9 +61,19 @@ function createDesktopPlatform({ id = process.platform, arch = process.arch, env
     launchRuntime({ container, stateRoot, env: launchEnv = process.env, stdio, spawnImpl = childProcess.spawn }) {
       requireCapability('launchRuntime');
       const layout = adapter.runtimeLayout(container);
-      return spawnImpl(layout.executable, ['--enable-logging=stderr'], {
+      // 跳过 VPN 只让 Notion 域名直连，其余流量仍按系统代理走；自动测速只固定 Notion 域名。
+      let settings = { bypassVpn: false, autoIp: false, bestIp: '' };
+      try { if (stateRoot) settings = network.read(stateRoot); } catch {}
+      const bypass = settings.bypassVpn === true;
+      const rules = settings.autoIp === true ? network.hostRules(settings.bestIp) : '';
+      // 固定了 IP 就必须直连，否则流量仍交给代理解析。
+      const bypassed = bypass || rules !== '';
+      const args = ['--enable-logging=stderr', ...(bypassed ? ['--proxy-bypass-list=' + network.bypassList] : []), ...(rules ? ['--host-resolver-rules=' + rules] : [])];
+      const env = { ...launchEnv, NOTION_SWITCH_ROOT: stateRoot };
+      if (bypassed) env.NO_PROXY = [env.NO_PROXY, network.bypassEnv].filter(Boolean).join(',');
+      return spawnImpl(layout.executable, args, {
         cwd: layout.appRoot, detached: true, ...adapter.launchOptions,
-        env: { ...launchEnv, NOTION_SWITCH_ROOT: stateRoot }, stdio
+        env, stdio
       });
     },
     isNodeExecutable(executable) {

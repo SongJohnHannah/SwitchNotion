@@ -20,6 +20,12 @@ async function load() {
   result('load-error', ''); render();
 }
 function render() {
+  const accelerator = state.accelerator || { bypassVpn: false, autoIp: false, bestIp: '', checkedAt: '' };
+  $('notion-bypass-vpn').checked = accelerator.bypassVpn === true;
+  $('notion-auto-ip').checked = accelerator.autoIp === true;
+  $('notion-auto-ip-state').textContent = accelerator.bestIp
+    ? '当前使用 ' + accelerator.bestIp + (accelerator.checkedAt ? ' · ' + new Date(accelerator.checkedAt).toLocaleString() : '')
+    : accelerator.autoIp === true ? '尚未测速，下次启动时自动检测' : '';
   $('workspace-count').textContent = state.workspaces.length; $('nav-count').textContent = state.workspaces.length;
   const list = $('workspace-list'); list.replaceChildren();
   if (!state.workspaces.length) { const empty = element('div', 'empty'); empty.append(element('h2', '', '添加你的第一个工作区'), element('p', '', '准备好 Notion API Key，点击右上角“添加工作区”即可。')); list.append(empty); }
@@ -284,6 +290,17 @@ async function checkLogin() {
   result('login-result', r.result.lastSync?.message || '检查仅确认本机登录信息是否存在；是否仍有效，以 Notion 窗口为准。', !!r.result.lastSync && r.result.lastSync.status !== 'applied');
 }
 $('check-login').addEventListener('click', () => operation($('login-card'), checkLogin));
+$('update-switch-notion-login').addEventListener('click', () => operation($('login-card'), async () => {
+  const button = $('update-switch-notion-login'); button.textContent = '正在更新…';
+  result('login-result', '正在检查并下载最新代码，请稍候…');
+  try { const r = await api.updateSwitchNotion(); result('login-result', r.ok ? r.result.message : r.error, !r.ok); }
+  finally { button.textContent = '更新 Switch Notion'; }
+}));
+$('save-accelerator').addEventListener('click', () => operation($('login-card'), async () => {
+  const response = await api.saveAccelerator({ bypassVpn: $('notion-bypass-vpn').checked ? 'enabled' : 'disabled', autoIp: $('notion-auto-ip').checked ? 'enabled' : 'disabled' });
+  result('accelerator-result', response.ok ? response.result.message : response.error, !response.ok);
+  if (response.ok) await load();
+}));
 $('open-login-notion').addEventListener('click', async () => { const r = await api.openNotion(); if (!r.ok) toast(r.error); });
 $('sync-login').addEventListener('click', () => $('login-dialog').showModal());
 $('cancel-login').addEventListener('click', () => { if (!busy) $('login-dialog').close(); });

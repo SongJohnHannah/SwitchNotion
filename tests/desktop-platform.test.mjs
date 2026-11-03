@@ -40,6 +40,31 @@ test('Windows discovery, staging and launch share one layout and preserve isolat
   assert.equal(platform.isNodeExecutable(process.execPath), true);
 });
 
+test('Notion launch bypasses the system proxy for Notion domains only while the skip-VPN switch is on', t => {
+  const dir = fixture(t), root = path.join(dir, 'state'); fs.mkdirSync(root);
+  const platform = createDesktopPlatform({ id: 'win32', home: dir, env: { LOCALAPPDATA: dir, APPDATA: path.join(dir, 'roaming') }, registry: () => [] });
+  const source = install(platform, path.join(dir, 'Programs', 'Notion'));
+  platform.stageInstallation({ source, container: path.join(root, 'runtime'), copy: (a, b) => fs.cpSync(a, b, { recursive: true }) });
+  let launched;
+  const launch = () => platform.launchRuntime({ container: path.join(root, 'runtime'), stateRoot: root, env: { FIXTURE: 'kept' }, stdio: 'ignore', spawnImpl: (...args) => { launched = args; return 'child'; } });
+  launch();
+  assert.deepEqual(launched[1], ['--enable-logging=stderr']);
+  assert.equal(launched[2].env.NO_PROXY, undefined);
+  assert.equal(launched[2].env.FIXTURE, 'kept');
+  fs.writeFileSync(path.join(root, 'notion-accelerator.local.json'), JSON.stringify({ bypassVpn: true }));
+  launch();
+  assert.ok(launched[1].includes('--proxy-bypass-list=*.notion.so;*.notion.com;*.notion.site;notion.so;notion.com;notion.site'));
+  assert.match(launched[2].env.NO_PROXY, /\.notion\.so/);
+  assert.equal(launched[2].env.FIXTURE, 'kept');
+  fs.writeFileSync(path.join(root, 'notion-accelerator.local.json'), JSON.stringify({ autoIp: true, bestIp: '208.103.161.16' }));
+  launch();
+  const rules = launched[1].find(arg => arg.startsWith('--host-resolver-rules='));
+  assert.ok(rules && rules.includes('MAP api.notion.com 208.103.161.16'));
+  assert.equal(rules.includes('api.pgncs.notion.so'), false);
+  assert.ok(launched[1].some(arg => arg.startsWith('--proxy-bypass-list=')));
+  assert.match(launched[2].env.NO_PROXY, /\.notion\.so/);
+});
+
 test('macOS discovery uses app bundles without Windows commands or Windows archive hashes', t => {
   const dir = fixture(t), root = path.join(dir, 'state'); fs.mkdirSync(root);
   const platform = createDesktopPlatform({ id: 'darwin', arch: 'arm64', home: dir, env: {}, execFileSync: () => { throw Error('must not execute commands'); } });
