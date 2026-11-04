@@ -52,16 +52,17 @@ test('mediaocr reuses one client session for every frame', async () => {
   const { MediaOcr } = require('../src/mediaocr.cjs');
   const events = [], requests = [];
   const client = { start: async () => events.push('start'), tools: async () => [{ name: 'ocr_image', inputSchema: { properties: { image_paths: {} } } }],
-    request: async (_method, params) => { requests.push(params); return { structuredContent: { errcode: 0, text: '帧文字', confidence: .9 } }; },
+    request: async (_method, params) => { requests.push(params); const paths = params.arguments.image_paths; return paths.length > 1 ? { structuredContent: { errcode: 0, results: paths.map(() => ({ errcode: 0, text: '多图文字' })) } } : { structuredContent: { errcode: 0, text: '帧文字', confidence: .9 } }; },
     child: null, close: () => events.push('close') };
   const ocr = new MediaOcr({ root: '/fixture', clientFactory: () => client });
   ocr.available = () => true;
   const session = await ocr.openSession();
   assert.equal((await session.recognize('/a.jpg')).pages[0].text, '帧文字');
-  assert.equal((await session.recognize('/b.jpg')).pages[0].text, '帧文字');
+  assert.deepEqual(await session.recognizeMany(['/a.jpg', '/b.jpg']), ['多图文字', '多图文字']);
   await session.close(); await session.close();
   assert.deepEqual(events, ['start', 'close']); assert.equal(requests.length, 2);
   assert.deepEqual(requests[0].arguments, { image_paths: ['/a.jpg'], compact: true });
+  assert.deepEqual(requests[1].arguments, { image_paths: ['/a.jpg', '/b.jpg'], compact: true });
 });
 test('Ollama unloads the local model when released', async () => {
   const { OllamaService } = require('../src/collection/ollama.cjs');

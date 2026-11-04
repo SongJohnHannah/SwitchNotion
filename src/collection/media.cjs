@@ -189,29 +189,39 @@ class CollectionMedia {
       if (!this.ocrSession) progress('正在启动本机文字识别（mediaocr）…');
       ocrSession = await this.ensureOcrSession(signal);
     }
-    for (let i = 0; i < times.length; i += batchSize) {
-      progress(`${engine === 'local' ? '本地千问' : 'DeepSeek'} 正在识别${asset.kind === 'video' ? '视频关键帧' : '图片'}：${i + 1} / ${times.length}`);
-      const frames = [];
-      for (let j = i; j < Math.min(i + batchSize, times.length); j++) {
-        const frame = path.join(directory, 'frame-' + j + '.jpg');
-        if (asset.kind === 'image' && /\.svg$/i.test(asset.path) && this.browser?.imageFrame) await this.browser.imageFrame(asset.path, frame, signal);
-        else {
-          try { await run(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', ...(asset.kind === 'video' ? ['-ss', String(Math.max(0, times[j]))] : []), ...inputArgs(asset.path),
-            '-frames:v', '1', '-vf', `scale=w='min(iw,${maxSide})':h='min(ih,${maxSide})':force_original_aspect_ratio=decrease`, '-q:v', '3', '-y', frame], { signal, timeout: 60000 }); }
-          catch (error) { signal?.throwIfAborted(); if (asset.kind !== 'image' || !this.browser?.imageFrame) throw error; await this.browser.imageFrame(asset.path, frame, signal); }
-        }
-        frames.push({ frame, time: times[j] });
+    const frames = [];
+    for (let j = 0; j < times.length; j++) {
+      const frame = path.join(directory, 'frame-' + j + '.jpg');
+      if (asset.kind === 'image' && /\.svg$/i.test(asset.path) && this.browser?.imageFrame) await this.browser.imageFrame(asset.path, frame, signal);
+      else {
+        try { await run(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', ...(asset.kind === 'video' ? ['-ss', String(Math.max(0, times[j]))] : []), ...inputArgs(asset.path),
+          '-frames:v', '1', '-vf', `scale=w='min(iw,${maxSide})':h='min(ih,${maxSide})':force_original_aspect_ratio=decrease`, '-q:v', '3', '-y', frame], { signal, timeout: 60000 }); }
+        catch (error) { signal?.throwIfAborted(); if (asset.kind !== 'image' || !this.browser?.imageFrame) throw error; await this.browser.imageFrame(asset.path, frame, signal); }
       }
-      if (engine === 'local' && this.localOcr) {
-        const texts = [];
-        for (let k = 0; k < frames.length; k++) {
-          progress(`mediaocr 正在识别关键帧文字：${i + k + 1} / ${times.length}`);
-          texts.push(await this.frameText(frames[k].frame, signal, ocrSession));
+      frames.push({ frame, time: times[j] });
+    }
+    let texts = null;
+    if (engine === 'local' && this.localOcr) {
+      if (typeof ocrSession?.recognizeMany === 'function') {
+        progress(`mediaocr 正在识别 ${frames.length} 张关键帧文字…`);
+        try { texts = await ocrSession.recognizeMany(frames.map(item => item.frame), { signal }); }
+        catch (error) { signal?.throwIfAborted(); throw Error('本地文字识别未完成：' + error.message.replace(/^Notion 附件 OCR mediaocr /, '')); }
+      } else {
+        texts = [];
+        for (let j = 0; j < frames.length; j++) {
+          progress(`mediaocr 正在识别关键帧文字：${j + 1} / ${frames.length}`);
+          texts.push(await this.frameText(frames[j].frame, signal, ocrSession));
         }
-        const description = await this.localVision(frames, signal, progress);
-        const lines = frames.map((item, index) => `视频时间 ${item.time.toFixed(1)} 秒 · 文字：${texts[index] || '未识别到文字'}`);
+      }
+    }
+    for (let i = 0; i < frames.length; i += batchSize) {
+      const batch = frames.slice(i, i + batchSize);
+      progress(`${engine === 'local' ? '本地千问' : 'DeepSeek'} 正在识别${asset.kind === 'video' ? '视频关键帧' : '图片'}：${i + 1} / ${frames.length}`);
+      if (engine === 'local' && this.localOcr) {
+        const description = await this.localVision(batch, signal, progress);
+        const lines = batch.map((item, index) => `视频时间 ${item.time.toFixed(1)} 秒 · 文字：${texts[i + index] || '未识别到文字'}`);
         descriptions.push('【关键帧文字】\n' + lines.join('\n') + '\n\n【画面描述】\n' + description);
-      } else descriptions.push(engine === 'local' ? await this.localVision(frames, signal, progress) : await this.deepseekVision(config, asset, frames, signal));
+      } else descriptions.push(engine === 'local' ? await this.localVision(batch, signal, progress) : await this.deepseekVision(config, asset, batch, signal));
     }
     return { text: descriptions.join('\n\n'), note: asset.kind === 'video' ? `基于 ${times.length} 张关键帧的画面分析，不代表逐帧观看完整视频。` : '', ...(engine === 'local' ? { engine: 'local' } : {}) };
   }

@@ -15,6 +15,17 @@ function imageResult(result) {
   if (typeof data.text !== 'string' || data.text.length > 200000) fail('结果正文无效。');
   return { pages: [{ page: 1, text: data.text, confidence: typeof data.confidence === 'number' ? data.confidence : null }] };
 }
+function imageResults(result, expected) {
+  if (result.isError) fail('识别未完成，请检查已准备的本机引擎。');
+  let data;
+  try { data = result.structuredContent || JSON.parse((result.content || []).filter(item => item.type === 'text').map(item => item.text).join('\n')); } catch { fail('结果不是有效 JSON。'); }
+  if (data?.errcode !== 0 || !Array.isArray(data.results) || data.results.length !== expected) fail('引擎返回的图片数量不一致，未使用不完整结果。');
+  return data.results.map(item => {
+    if (item.errcode !== 0) fail('部分图片识别失败，请检查本机组件。');
+    if (typeof item.text !== 'string' || item.text.length > 200000) fail('结果正文无效。');
+    return item.text;
+  });
+}
 function layout(root, platform = process.platform, arch = process.arch) {
   const directory = path.resolve(root, 'mediaocr', REVISION, platform + '-' + arch);
   return { directory, source: path.join(directory, 'source'), python: path.join(directory, 'venv', ...(platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python3'])), ready: path.join(directory, 'ready.json') };
@@ -96,6 +107,19 @@ class MediaOcr {
           try { result = await client.request('tools/call', { name: 'ocr_image', arguments: { image_paths: [file], compact: true } }); }
           catch (error) { callSignal?.throwIfAborted(); if (/^Notion 附件 OCR mediaocr/.test(error.message)) throw error; fail('本机 MCP 通道或识别未完成，请重新准备后重试。'); }
           callSignal?.throwIfAborted(); return imageResult(result);
+        },
+        async recognizeMany(files, { signal: callSignal } = {}) {
+          if (!Array.isArray(files) || !files.length) return [];
+          const texts = [];
+          for (let at = 0; at < files.length; at += 20) {
+            const chunk = files.slice(at, at + 20);
+            callSignal?.throwIfAborted();
+            let result;
+            try { result = await client.request('tools/call', { name: 'ocr_image', arguments: { image_paths: chunk, compact: true } }); }
+            catch (error) { callSignal?.throwIfAborted(); if (/^Notion 附件 OCR mediaocr/.test(error.message)) throw error; fail('本机 MCP 通道或识别未完成，请重新准备后重试。'); }
+            callSignal?.throwIfAborted(); texts.push(...imageResults(result, chunk.length));
+          }
+          return texts;
         },
         async close() { if (closed) return; closed = true; await owner.shutdown(client); }
       };
