@@ -23,7 +23,7 @@ function fixture(t, extra = {}) {
   const media = { acquire: async (node, directory) => { calls.push('download:' + node.kind); fs.mkdirSync(directory, { recursive: true }); const file = path.join(directory, 'original.bin'); fs.writeFileSync(file, 'fixture'); return { path: file, kind: node.kind, duration: 1, audio: true }; },
     prepareUpload: async asset => [{ path: asset.path, kind: asset.kind }], transcript: async () => { calls.push('transcript'); return { text: '原始语音逐字稿' }; },
     vision: async () => { calls.push('vision'); return { text: '画面识别结果' }; }, ...extra.media };
-  const service = new CollectionService({ root, downloadsDirectory: path.join(root, 'Downloads'), binaries: { directory: root, status: () => ({}) }, browser: { inspect: async () => extra.document || document }, notion, media, extraction: extra.extraction });
+  const service = new CollectionService({ root, downloadsDirectory: path.join(root, 'Downloads'), binaries: { directory: root, status: () => ({}) }, browser: { inspect: async () => extra.document || document }, notion, media, provider: extra.provider, extraction: extra.extraction });
   const destination = { workspaceId: randomUUID(), id: randomUUID(), kind: 'page', label: '资料收集', workspaceName: '独立工作区' };
   service.settings = preferences({ destination, keepLocal: false, keepHistory: true, extraction: { mode: 'off' } }); t.after(() => service.close());
   return { root, service, calls, saved, document, destination };
@@ -70,7 +70,7 @@ test('the default local copy uses the native Downloads directory independently o
   assert.equal(f.service.status().defaultDownloadDirectory,base);assert.equal(job.status,'completed');
   const folders=fs.readdirSync(base);assert.equal(folders.length,1);assert.equal(fs.existsSync(path.join(base,folders[0],'content.json')),true);
   assert.equal(folders[0],'一篇混合内容');assert.equal(fs.existsSync(path.join(base,folders[0],'原文.md')),true);
-  assert.equal(fs.existsSync(path.join(f.root,'collection/jobs',job.id)),false);assert.equal(preferences().keepLocal,true);
+  assert.equal(fs.existsSync(path.join(f.root,'collection/jobs',job.id)),false);assert.equal(preferences().keepLocal,false);
 });
 
 test('same-title downloads stay in separate visible folders and deleting a partial task removes only its own folder', async t => {
@@ -101,11 +101,11 @@ test('a busy download folder keeps the failed task and recovery journal availabl
   assert.equal(f.service.jobs.has(job.id),true);assert.equal(fs.existsSync(f.service.location(job)),true);assert.equal(fs.existsSync(record),true);
   assert.equal((await f.service.request('delete-task',{id:job.id})).ok,true);assert.equal(fs.existsSync(job.exportDirectory),false);
 });
-test('saved prompt edits persist offline and keep the other template and destination', async t => {
+test('saved extraction preference persists offline and keeps the destination', async t => {
   const f = fixture(t); f.service.notion.verifyTarget = async () => { throw Error('Notion 离线'); };
-  await f.service.configure({ extraction: { article: '只提取执行步骤' } });
+  await f.service.configure({ extraction: { mode: 'auto', preference: '重点总结主播的口播风格' } });
   const restored = new CollectionService({ root: f.root, binaries: { status: () => ({}) }, browser: {}, media: {}, notion: {} });
-  assert.equal(restored.settings.extraction.article, '只提取执行步骤'); assert.equal(restored.settings.extraction.video, f.service.settings.extraction.video);
+  assert.equal(restored.settings.extraction.preference, '重点总结主播的口播风格'); assert.equal(restored.settings.extraction.mode, 'auto');
   assert.deepEqual(restored.settings.destination, f.destination); restored.close();
 });
 test('successful no-history collection clears only its own records and keeps a session-only Notion receipt', async t => {
@@ -197,7 +197,7 @@ test('local Qwen engine only analyzes video keyframes and labels the appendix ac
   const f = fixture(t, { media: { vision: async (asset, options) => { seen.push({ kind: asset.kind, engine: options.engine }); return { text: '本地识别', engine: 'local' }; } } });
   await f.service.create({ input: 'https://example.com/article', options: { visionEngine: 'local' } }); await idle(f.service);
   assert.deepEqual(seen, [{ kind: 'video', engine: 'local' }]);
-  assert.match(JSON.stringify(f.saved[0]), /本地千问视频分析/);
+  assert.match(JSON.stringify(f.saved[0]), /本地千问画面分析/);
 });
 test('downloads pipeline so the next resource downloads while the first is analyzed', async t => {
   const document = normalizeDocument({ title: '多视频', url: 'https://example.com/multi', nodes: [
@@ -223,4 +223,59 @@ test('cancel stops remaining stages, persisted interrupted work reloads and malf
   const file = path.join(f.root, 'collection/jobs', result.jobs[0].id, 'job.json'), job = JSON.parse(fs.readFileSync(file)); job.status = 'uploading'; fs.writeFileSync(file, JSON.stringify(job));
   const restored = new CollectionService({ root: f.root, browser: {}, media: {}, notion: {}, binaries: { status: () => ({}) } });
   assert.equal(restored.jobs.get(job.id).status, 'interrupted'); restored.close();
+});
+
+test('OCR runs for videos even when visual description is disabled', async t => {
+  const seen = [];
+  const f = fixture(t, { media: {
+    ocr: async () => { seen.push('ocr'); return { text: '【关键帧文字】\n视频时间 0.0 秒：屏幕字', note: '基于 1 张关键帧', engine: 'mediaocr', frames: [{ frame: path.join(t.name, 'frame.jpg'), time: 0 }] }; },
+    vision: async () => { seen.push('vision'); return { text: '画面描述' }; } } });
+  await f.service.create({ input: 'https://example.com/article', options: { vision: false, transcribe: false } }); await idle(f.service);
+  const video = f.document.nodes.find(node => node.kind === 'video');
+  const job = [...f.service.jobs.values()].find(item => item.status === 'completed');
+  assert.deepEqual(seen, ['ocr']); assert.match(job.analyses[video.id].ocr.text, /屏幕字/);
+  assert.equal(job.analyses[video.id].vision, undefined);
+});
+test('an OCR failure leaves the task partial with a visible reason', async t => {
+  const f = fixture(t, { media: { ocr: async () => { throw Error('本地文字识别未完成：引擎未准备'); }, vision: async () => ({ text: '画面' }) } });
+  await f.service.create({ input: 'https://example.com/article', options: { vision: false, transcribe: false } }); await idle(f.service);
+  const job = [...f.service.jobs.values()].find(item => item.status === 'partial');
+  assert.ok(job); assert.ok(job.warnings.some(warning => /本地文字识别未完成/.test(warning)));
+});
+test('a resumed task uses the currently configured vision engine', async t => {
+  const engines = [];
+  const f = fixture(t, { media: { vision: async (_asset, options) => { engines.push(options.engine); if (options.engine === 'local') throw Error('本地识别失败'); return { text: 'API 画面', engine: 'deepseek' }; } } });
+  const result = await f.service.create({ input: 'https://example.com/article', options: { visionEngine: 'local', vision: true, transcribe: false } }); await idle(f.service);
+  const id = result.jobs[0].id, job = f.service.jobs.get(id);
+  assert.equal(job.status, 'partial'); assert.deepEqual(engines, ['local']);
+  f.service.settings = preferences({ visionEngine: 'deepseek' }, f.service.settings);
+  f.service.retry(id); await idle(f.service);
+  assert.ok(engines.includes('deepseek')); assert.equal(job.options.visionEngine, 'deepseek');
+  const video = f.document.nodes.find(node => node.kind === 'video');
+  assert.equal(job.analyses[video.id].vision.text, 'API 画面');
+});
+test('regenerating a type template updates the saved library without touching jobs', async t => {
+  const generated = [];
+  const provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate(input) { generated.push(input);
+    yield JSON.stringify({ title: '宠物护理', template: '# 宠物护理\n## 步骤\n' + '内容'.repeat(200) + '\n## 注意\n' + '注意'.repeat(50) }); } };
+  const f = fixture(t, { provider });
+  const first = await f.service.request('regenerate-template', { type: '宠物护理', guidance: '步骤要能照着做' });
+  assert.equal(first.ok, true); assert.equal(first.result.revision, 1);
+  const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'collection', 'summary-templates.json'), 'utf8'));
+  assert.equal(saved.types['宠物护理'].title, '宠物护理'); assert.match(generated[0].messages[1].content, /步骤要能照着做/);
+  const second = await f.service.request('regenerate-template', { type: '宠物护理' });
+  assert.equal(second.ok, true); assert.equal(second.result.revision, 2);
+  assert.equal(f.calls.includes('write'), false);
+});
+test('video-hint detects video input through the request allowlist', async t => {
+  const f = fixture(t);
+  assert.deepEqual(await f.service.request('video-hint', { input: 'https://b23.tv/abc' }), { ok: true, result: true });
+  assert.deepEqual(await f.service.request('video-hint', { input: 'https://example.com/article' }), { ok: true, result: false });
+});
+test('completed tasks delete working files when local copies are not kept', async t => {
+  const f = fixture(t);
+  const result = await f.service.create({ input: 'https://example.com/article', options: { keepLocal: false } }); await idle(f.service);
+  const job = f.service.jobs.get(result.jobs[0].id);
+  assert.equal(job.status, 'completed');
+  assert.equal(fs.existsSync(path.join(f.service.location(job), 'working')), false);
 });

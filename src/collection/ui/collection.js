@@ -1,6 +1,6 @@
 'use strict';
 const api = window.collection, $ = id => document.getElementById(id);
-let state, chosen, expanded = false, activePanel = 'destination', selectedJob, destinationResults = [], cursors = {}, searchTimer, refreshTimer, searchVersion = 0, promptDraft, promptTab = 'article', checkingAccounts = false;
+let state, chosen, expanded = false, activePanel = 'destination', selectedJob, destinationResults = [], cursors = {}, searchTimer, refreshTimer, searchVersion = 0, pendingVision = null, visionResolver = null, templateType = '', checkingAccounts = false;
 const names = { paragraph: '正文', heading: '标题', quote: '引用', list: '列表', code: '代码', divider: '分隔', link: '链接', image: '图片', video: '视频', audio: '音频' };
 const statuses = { queued: '等待中', reading: '识别中', downloading: '下载中', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需登录／检查完整性', completed: '已保存', partial: '待补全', failed: '失败', cancelled: '已停止', interrupted: '可继续' };
 const active = ['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving'];
@@ -24,11 +24,11 @@ function setPanel(name, focus = false) {
 }
 function readOptions() {
   return { transcribe: $('transcribe').checked, vision: $('vision').checked || $('vision-local').checked,
-    visionEngine: $('vision-local').checked ? 'local' : 'deepseek', compress: $('compress').checked, keepLocal: $('keepLocal').checked,
+    visionEngine: $('vision-local').checked ? 'local' : 'deepseek', compress: $('compress').checked, keepLocal: !$('delete-local').checked,
     quality: $('quality').value, types: [...$('type-options').querySelectorAll('input:checked')].map(i => i.value), destination: chosen, extraction: state.settings.extraction };
 }
 function showOptions(options) { $('vision').checked = options.vision && options.visionEngine !== 'local'; $('vision-local').checked = options.vision && options.visionEngine === 'local';
-  for (const id of ['transcribe', 'compress', 'keepLocal']) $(id).checked = options[id]; $('quality').value = options.quality;
+  for (const id of ['transcribe', 'compress']) $(id).checked = options[id]; $('delete-local').checked = !options.keepLocal; $('quality').value = options.quality;
   for (const input of $('type-options').querySelectorAll('input')) input.checked = options.types.includes(input.value); }
 async function refresh() {
   const first = !state; state = await request('state');
@@ -40,7 +40,7 @@ async function refresh() {
   $('task-status').hidden = !state.jobs.length; $('queue-state').hidden = !!state.jobs.length;
   $('task-status').className = 'task-status ' + tasks.tone; $('task-status').textContent = tasks.text;
   $('task-status').title = state.jobs.length + ' 条收集任务，点击查看进度';
-  $('prompt-status').textContent = ({ auto: '✧ 自动提取 · 文章 / 音视频', article: '✧ 文章精读模板', video: '✧ 音视频提取模板', off: '仅保存原文 · 未启用 AI 提取' })[state.settings.extraction.mode];
+  $('prompt-status').textContent = ({ auto: '✧ 自动识别类型 · 按内容套模板', off: '仅保存原文 · 未启用 AI 总结' })[state.settings.extraction.mode] || '✧ 自动识别类型 · 按内容套模板';
   $('keep-history').checked = state.settings.keepHistory;
   $('last-result').hidden = !state.latestCompletion;
   $('components').textContent = (state.binaries.downloader ? '下载器已就绪' : '下载器待准备') + ' · ' + (state.binaries.ffmpeg ? '媒体处理已就绪' : '媒体处理待准备') + (state.lastError ? ' · ' + state.lastError : '');
@@ -102,7 +102,13 @@ function renderFavorites() {
 }
 async function submit(preview) {
   if (!preview && !chosen) { setPanel('destination'); setExpanded(true); message('请先搜索并选择保存位置。', true); return; }
-  const result = await request('create', { input: $('links').value, options: readOptions(), preview });
+  const input = $('links').value;
+  pendingVision = null;
+  const video = await request('video-hint', { input }).catch(() => false);
+  if (video) pendingVision = await askVision();
+  const options = readOptions();
+  if (video) options.vision = pendingVision === true;
+  const result = await request('create', { input, options, preview });
   const pending = result.jobs.filter(job => job.status !== 'completed');
   const waiting = pending.find(job => ['awaiting_selection', 'needs_login'].includes(job.status));
   $('links').value = ''; message(!pending.length ? '此来源已保存，无需重复收集；点击下方打开 Notion。' : waiting ? '此来源已有待处理内容，请在下方完成选择或登录。' : preview ? '正在识别内容，完成后可逐项选择。' : '已加入后台队列，可以收起窗口继续工作。');
@@ -130,9 +136,11 @@ function renderTasks() {
       if (job.warnings.length > 5) reasons.append(element('li', '', '另有 ' + (job.warnings.length - 5) + ' 项未完成'));
       card.append(reasons);
     }
+    if (job.classification) card.append(element('div', 'task-meta', '总结类型：' + job.classification.title));
     const actions = element('div', 'task-actions');
     if (job.preview) actions.append(button(['awaiting_selection', 'needs_login'].includes(job.status) ? '选择内容' : '查看内容', () => { selectedJob = job.id; renderSelection(job); }));
     if (job.page) actions.append(button('打开 Notion ↗', () => request('open-page', { id: job.id })));
+    if (job.classification) actions.append(button('重新生成模板', () => openTemplateDialog(job.classification.type, job.classification.title)));
     if (job.status === 'completed') actions.append(button('重新收集为新记录', async () => { await request('create', { input: job.url, options: readOptions(), force: true }); await refresh(); }));
     if (active.includes(job.status)) actions.append(button('停止', async () => { await request('cancel', { id: job.id }); await refresh(); }));
     if (['failed', 'partial', 'cancelled', 'interrupted', 'needs_login'].includes(job.status)) actions.append(button('继续／重试', async () => { await request('retry', { id: job.id }); await refresh(); }));
@@ -238,31 +246,50 @@ for (const tab of document.querySelectorAll('[data-tab]')) {
 for (const id of ['wechat-help-close', 'wechat-help-done']) $(id).addEventListener('click', () => $('wechat-help').close());
 $('wechat-yuanbao').addEventListener('click', () => void request('login', { site: 'wechat' }).then(result => { $('wechat-help').close(); message(result.message); }).catch(() => {}));
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && !document.querySelector('dialog[open]')) api.request('hide'); });
-function editPromptTab(kind) {
-  if (promptDraft) promptDraft[promptTab] = $('prompt-editor').value;
-  promptTab = kind; $('prompt-editor').value = promptDraft[kind]; $('prompt-editor').scrollTop = 0;
-  $('prompt-label').textContent = (kind === 'article' ? '文章精读' : '音视频提取') + '提示词 · 可自由修改';
-  for (const tab of ['article', 'video']) $('tab-' + tab).setAttribute('aria-selected', String(tab === kind));
-}
 async function openPrompts() {
-  if (!state) await refresh(); promptDraft = structuredClone(state.settings.extraction); promptTab = 'article';
-  $('prompt-editor').value = promptDraft.article; $('extraction-mode').value = promptDraft.mode;
-  $('prompt-error').hidden = true; editPromptTab('article');
-  await api.request('expand', { expanded: true }); $('prompt-dialog').showModal(); $('prompt-editor').focus({ preventScroll: true }); $('prompt-editor').setSelectionRange(0, 0); $('prompt-editor').scrollTop = 0;
+  if (!state) await refresh();
+  $('extraction-mode').value = state.settings.extraction.mode;
+  $('prompt-editor').value = state.settings.extraction.preference || '';
+  $('prompt-error').hidden = true;
+  await api.request('expand', { expanded: true }); $('prompt-dialog').showModal(); $('prompt-editor').focus();
 }
 function closePrompts() { $('prompt-dialog').close(); }
 $('prompt-open').addEventListener('click', () => void openPrompts().catch(() => {}));
 $('prompt-status').addEventListener('click', () => void openPrompts().catch(() => {}));
 $('prompt-close').addEventListener('click', closePrompts); $('prompt-cancel').addEventListener('click', closePrompts);
-$('prompt-dialog').addEventListener('close', () => { promptDraft = null; void api.request('expand', { expanded }); });
-for (const kind of ['article', 'video']) $('tab-' + kind).addEventListener('click', () => editPromptTab(kind));
-$('prompt-reset').addEventListener('click', () => { $('prompt-editor').value = state.promptTemplates[promptTab]; });
+$('prompt-dialog').addEventListener('close', () => { void api.request('expand', { expanded }); });
 $('prompt-form').addEventListener('submit', async event => {
-  event.preventDefault(); promptDraft[promptTab] = $('prompt-editor').value; promptDraft.mode = $('extraction-mode').value;
-  $('prompt-save').disabled = true;
-  try { await request('configure', { settings: { extraction: promptDraft } }); await refresh(); closePrompts(); message('提取要求已保存，下一次收集将使用这份模板。'); }
+  event.preventDefault(); $('prompt-save').disabled = true;
+  try { await request('configure', { settings: { extraction: { mode: $('extraction-mode').value, preference: $('prompt-editor').value } } }); await refresh(); closePrompts(); message('提取方式已保存，下一次收集会按内容类型选择总结模板。'); }
   catch (error) { $('prompt-error').textContent = error.message; $('prompt-error').hidden = false; }
   finally { $('prompt-save').disabled = false; }
+});
+function askVision() {
+  return new Promise(resolve => { visionResolver = resolve; $('vision-dialog').showModal(); $('vision-skip').focus(); });
+}
+function finishVision(value) {
+  const resolve = visionResolver; visionResolver = null;
+  if ($('vision-dialog').open) $('vision-dialog').close();
+  resolve?.(value);
+}
+$('vision-skip').addEventListener('click', () => finishVision(false));
+$('vision-run').addEventListener('click', () => finishVision(true));
+$('vision-dialog').addEventListener('cancel', event => { event.preventDefault(); finishVision(false); });
+function openTemplateDialog(type, title) {
+  templateType = type;
+  $('template-type').textContent = title || type;
+  $('template-guidance').value = ''; $('template-error').hidden = true;
+  $('template-dialog').showModal(); $('template-guidance').focus();
+}
+$('template-close').addEventListener('click', () => $('template-dialog').close());
+$('template-cancel').addEventListener('click', () => $('template-dialog').close());
+$('template-form').addEventListener('submit', async event => {
+  event.preventDefault(); $('template-save').disabled = true;
+  try {
+    const result = await request('regenerate-template', { type: templateType, guidance: $('template-guidance').value.trim() });
+    $('template-dialog').close(); message(result.message); await refresh();
+  } catch (error) { $('template-error').textContent = error.message; $('template-error').hidden = false; }
+  finally { $('template-save').disabled = false; }
 });
 $('keep-history').addEventListener('change', () => void request('configure', { settings: { keepHistory: $('keep-history').checked } }).then(refresh).catch(() => {}));
 for (const [id, other] of [['vision', 'vision-local'], ['vision-local', 'vision']]) $(id).addEventListener('change', () => { if ($(id).checked) $(other).checked = false; });
@@ -289,7 +316,7 @@ $('save-advanced').addEventListener('click', () => void request('configure', { s
 $('prepare').addEventListener('click', () => void request('prepare').then(result => { message(result.message); return refresh(); }).catch(() => {}));
 $('check-accounts').addEventListener('click', () => void accounts(true).catch(() => {})); $('login-site').addEventListener('click', () => void request('login', { site: $('custom-site').value.trim() }).then(r => message(r.message)).catch(() => {}));
 $('select-all').addEventListener('click', () => { const inputs = [...$('selection-list').querySelectorAll('input:not(:disabled)')], all = inputs.every(i => i.checked); inputs.forEach(i => { i.checked = !all; }); });
-$('save-selected').addEventListener('click', () => void request('select', { id: selectedJob, ids: [...$('selection-list').querySelectorAll('input:checked')].map(i => i.value), options: readOptions(), allowPartial: true }).then(refresh).catch(() => {}));
+$('save-selected').addEventListener('click', () => { const options = readOptions(); if (pendingVision !== null) options.vision = pendingVision === true; void request('select', { id: selectedJob, ids: [...$('selection-list').querySelectorAll('input:checked')].map(i => i.value), options, allowPartial: true }).then(refresh).catch(() => {}); });
 $('reread').addEventListener('click', () => void request('reread', { id: selectedJob }).then(refresh).catch(() => {}));
 $('task-search').addEventListener('input', () => state && renderTasks()); $('status-filter').addEventListener('change', () => state && renderTasks());
 api.onChange(() => { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => void refresh().catch(() => {}), 150); });

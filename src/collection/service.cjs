@@ -11,9 +11,10 @@ const { OllamaService } = require('./ollama.cjs');
 const { MediaOcr } = require('../mediaocr.cjs');
 const { CollectionNotion } = require('./notion.cjs');
 const { CollectionExtraction } = require('./extraction.cjs');
-const { parseInputs, describeLocal, checkLocal, localDocument } = require('./local-media.cjs');
+const { parseInputs, describeLocal, checkLocal, localDocument, isLikelyVideoInput } = require('./local-media.cjs');
 const { clearCompleted, ownedExport } = require('./history.cjs');
-const { templates } = require('./prompts.cjs');
+const { loadLibrary, saveLibrary, resolveTemplate, normalizeType } = require('./summary-templates.cjs');
+const { generateTemplate } = require('./classify.cjs');
 const { prepareLocalOutput, writeLocalOutput } = require('./local-output.cjs');
 const activeStates = new Set(['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving']);
 const deletableStates = new Set(['failed', 'partial', 'cancelled', 'interrupted', 'needs_login', 'awaiting_selection']);
@@ -33,13 +34,16 @@ class CollectionService extends EventEmitter {
       this.settings = preferences(value);
     } catch { this.configError = '收集配置无法读取，已保留原文件，请检查后恢复。'; }
     this.binaries = binaries || new CollectionBinaries({ root });
+    this.provider = provider;
     this.browser = browser || new CollectionBrowser({ root, getSettings: () => this.settings, binaries: this.binaries });
     this.media = media || new CollectionMedia({ root, browser: this.browser, binaries: this.binaries, speech, provider,
       ollama: new OllamaService(), ocr: ['win32', 'darwin'].includes(process.platform) ? new MediaOcr({ root }) : undefined });
     this.notion = notion || (process.platform === 'darwin'
       ? new (require('../compat/macos-collection-notion.cjs').MacCollectionNotion)({ root })
       : new CollectionNotion({ root }));
-    this.extractor = extraction || new CollectionExtraction({ provider });
+    this.templateLibrary = loadLibrary(root);
+    this.templateWrite = Promise.resolve();
+    this.extractor = extraction || new CollectionExtraction({ provider, library: this.templateLibrary, saveLibrary: () => this.persistTemplates() });
     const jobsDirectory = path.join(this.directory, 'jobs');
     if (fs.existsSync(jobsDirectory)) for (const name of fs.readdirSync(jobsDirectory)) {
       if (!/^[a-f\d-]{36}$/i.test(name)) continue;
@@ -74,9 +78,10 @@ class CollectionService extends EventEmitter {
   }
   status() {
     return { active: this.active, lastError: this.lastError, configError: this.configError || '', settings: structuredClone(this.settings), defaultDownloadDirectory: path.join(this.downloadsDirectory, 'NotionSwitch'),
-      binaries: this.binaries.status(), preparing: this.preparing, promptTemplates: templates, latestCompletion: this.latestCompletion || null,
+      binaries: this.binaries.status(), preparing: this.preparing, latestCompletion: this.latestCompletion || null,
       jobs: [...this.jobs.values()].filter(job => !job.historyCleared && (this.settings.keepHistory || job.status !== 'completed')).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(job => ({ id: job.id, url: job.url, local: !!job.localSource, title: job.document?.title || job.url,
         status: job.status, canDelete: deletableStates.has(job.status) && this.running?.id !== job.id && !this.queue.includes(job.id), message: job.message, createdAt: job.createdAt, page: job.page, options: job.options, warnings: job.warnings || [],
+        classification: job.classification ? { type: job.classification.type, title: job.classification.title, tone: job.classification.tone || '', degraded: job.classification.degraded === true } : null,
         selectedIds: job.selectedIds, preview: job.document ? { incomplete: job.document.incomplete, requiresLogin: job.document.requiresLogin,
           nodes: job.document.nodes.map(n => ({ id: n.id, kind: n.kind, text: n.text.slice(0, 600), caption: n.caption.slice(0,600), level: n.level })) } : null })) };
   }
@@ -87,6 +92,33 @@ class CollectionService extends EventEmitter {
     this.settings = next; atomicJson(this.settingsFile, { version: 1, platform: process.platform, settings: next });
     if (!next.keepHistory) for (const job of this.jobs.values()) if (job.status === 'completed' && !job.historyCleared) this.forgetCompleted(job);
     this.emit('settings'); this.emit('change'); return { message: '内容收集设置已保存，新任务使用新设置。', settings: next };
+  }
+  persistTemplates() {
+    const saved = saveLibrary(this.root, this.templateLibrary);
+    this.templateLibrary.types = saved.types;
+    return this.templateLibrary;
+  }
+  async regenerateTemplate({ type, guidance = '' }) {
+    const normalized = normalizeType(type);
+    if (!normalized) throw Error('总结类型无效。');
+    if (typeof guidance !== 'string' || guidance.length > 2000 || guidance.includes('\0')) throw Error('你的想法须为 0–2000 字。');
+    if (!this.provider) throw Error('内容总结需要 DeepSeek，请先在设置中配置。');
+    const config = this.provider.config();
+    if (config?.mode !== 'deepseek' || !this.provider.key(config)) throw Error('请先在 Switch Notion 配置 DeepSeek。');
+    const run = async () => {
+      const generated = await generateTemplate({ provider: this.provider, config, type: normalized, guidance });
+      if (!generated) throw Error('模板生成未完成，请稍后重试。');
+      const latest = loadLibrary(this.root), previous = latest.types[normalized] || resolveTemplate(this.templateLibrary, normalized) || { title: normalized, revision: 0 };
+      latest.types[normalized] = { type: normalized, title: generated.title || previous.title || normalized, template: generated.template,
+        revision: (previous.revision || 0) + 1, source: 'deepseek', updatedAt: new Date().toISOString() };
+      const saved = saveLibrary(this.root, latest);
+      this.templateLibrary.types = saved.types;
+      return { type: normalized, title: saved.types[normalized].title, revision: saved.types[normalized].revision,
+        message: `「${saved.types[normalized].title}」模板已更新；已有总结不变，之后同类型任务使用新模板。` };
+    };
+    const task = this.templateWrite.then(run, run);
+    this.templateWrite = task.catch(() => {});
+    return task;
   }
   async create({ input, options = {}, preview = false, force = false }) {
     if (this.configError) throw Error(this.configError);
@@ -183,9 +215,16 @@ class CollectionService extends EventEmitter {
             try { analysis.transcript = await this.media.transcript(current, { signal, progress: nodeProgress }); }
             catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
           }
-          if (job.options.vision && (job.options.visionEngine === 'local' ? node.kind === 'video' : ['image', 'video'].includes(node.kind)) && !analysis.vision) {
+          if (node.kind === 'video' && typeof this.media.ocr === 'function' && !analysis.ocr) {
             markProcessing();
-            try { analysis.vision = await this.media.vision(current, { signal, progress: nodeProgress, engine: job.options.visionEngine }); }
+            try { analysis.ocr = await this.media.ocr(current, { signal, progress: nodeProgress }); }
+            catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
+          }
+          const wantsVision = job.options.vision && (job.options.visionEngine === 'local' ? node.kind === 'video' : ['image', 'video'].includes(node.kind));
+          if (wantsVision && !analysis.vision) {
+            markProcessing();
+            const frames = analysis.ocr?.frames?.length && analysis.ocr.frames.every(item => fs.existsSync(item.frame)) ? analysis.ocr.frames : undefined;
+            try { analysis.vision = await this.media.vision(current, { signal, progress: nodeProgress, engine: job.options.visionEngine, frames, ocrText: analysis.ocr?.text }); }
             catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
           }
           if (!resource.parts) { markProcessing(); resource.parts = await this.media.prepareUpload(current, job.options, limit, { signal, progress: nodeProgress }); save(); }
@@ -267,6 +306,9 @@ class CollectionService extends EventEmitter {
   retry(id) {
     const job = this.jobs.get(id);
     if (!job || !['failed', 'partial', 'cancelled', 'interrupted', 'needs_login'].includes(job.status)) throw Error('此任务当前不需要重试。');
+    // A resumed task follows the engine currently configured, while keeping the
+    // job's own destination, extraction and per-collection vision choice.
+    job.options.visionEngine = this.settings.visionEngine;
     if (job.document?.incomplete && !job.page) { delete job.document; job.warnings = []; }
     this.enqueue(job); return { id };
   }
@@ -302,7 +344,8 @@ class CollectionService extends EventEmitter {
   }
   async request(action, input = {}) {
     const allowed = { state: [], configure: ['settings'], workspaces: [], destinations: ['workspaceId', 'query', 'cursors'], create: ['input', 'options', 'preview', 'force'],
-      select: ['id', 'ids', 'options', 'allowPartial'], cancel: ['id'], retry: ['id'], 'delete-task': ['id'], reread: ['id'], accounts: ['verify'], login: ['site'], prepare: [], 'create-library': ['workspaceId', 'parentId'] };
+      select: ['id', 'ids', 'options', 'allowPartial'], cancel: ['id'], retry: ['id'], 'delete-task': ['id'], reread: ['id'], accounts: ['verify'], login: ['site'], prepare: [], 'create-library': ['workspaceId', 'parentId'],
+      'regenerate-template': ['type', 'guidance'], 'video-hint': ['input'] };
     try {
       if (!Object.hasOwn(allowed, action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !allowed[action].includes(k))) throw Error('无法识别此项收集操作。');
       let result;
@@ -320,6 +363,8 @@ class CollectionService extends EventEmitter {
       else if (action === 'login') { if (typeof input.site !== 'string' || input.site.length > 8192) throw Error('网站地址无效。'); result = await this.browser.login(input.site, AbortSignal.timeout(60000)); }
       else if (action === 'prepare') result = await this.prepare();
       else if (action === 'create-library') result = await this.createLibrary(input.workspaceId, input.parentId);
+      else if (action === 'regenerate-template') result = await this.regenerateTemplate(input);
+      else if (action === 'video-hint') result = isLikelyVideoInput(input.input);
       return { ok: true, result };
     } catch (error) { return { ok: false, error: safeError(error) }; }
   }

@@ -50,11 +50,11 @@ function renderDocument(document, nodes, resources, analyses = {}, warnings = []
     slots[node.id] = { start: positions[node.id], count: result.length - positions[node.id], placeholder: false };
   }
   if (warnings.length) result.push(...textBlocks({ kind: 'heading', text: '完整性说明', level: 2 }), ...warnings.flatMap(text => textBlocks({ kind: 'paragraph', text })));
-  const appendix = nodes.filter(node => analyses[node.id]?.transcript || analyses[node.id]?.vision || analyses[node.id]?.errors?.length);
+  const appendix = nodes.filter(node => analyses[node.id]?.transcript || analyses[node.id]?.ocr || analyses[node.id]?.vision || analyses[node.id]?.errors?.length);
   if (appendix.length) result.push({ object: 'block', type: 'divider', divider: {} }, ...textBlocks({ kind: 'heading', text: '逐字稿与识别结果', level: 1 }));
   for (const node of appendix) {
     const item = analyses[node.id]; result.push(...textBlocks({ kind: 'heading', text: `素材 ${nodes.indexOf(node) + 1}${node.caption ? ' · ' + node.caption : ''}`, level: 2 }));
-    for (const [key, title] of [['transcript', '语音逐字稿'], ['vision', item.vision?.engine === 'local' ? '本地千问视频分析' : 'DeepSeek 图片与画面分析']]) if (item[key]) {
+    for (const [key, title] of [['transcript', '语音逐字稿'], ['ocr', '关键帧文字（mediaocr）'], ['vision', item.vision?.engine === 'local' ? '本地千问画面分析' : 'DeepSeek 画面分析']]) if (item[key]) {
       result.push(...textBlocks({ kind: 'heading', text: title, level: 3 }), ...textBlocks({ kind: 'paragraph', text: item[key].text || item[key].note || '没有识别结果。' }));
       if (item[key].text && item[key].note) result.push(paragraph(item[key].note));
     }
@@ -260,7 +260,7 @@ class CollectionNotion {
     job.sourceSlots ||= Object.fromEntries(Object.entries(job.writeSlots).map(([id, slot]) => [id, { ...slot, ids: expected.slice(slot.start, slot.start + slot.count), original: original.slice(slot.start, slot.start + slot.count) }]));
     job.savedAnalysis ||= hash(JSON.stringify(job.writeAnalyses));
     job.savedExtraction ||= job.extraction?.text ? hash(JSON.stringify(job.extraction)) : '';
-    job.savedAnalysisItems ||= Object.fromEntries(Object.entries(job.writeAnalyses).flatMap(([id, item]) => ['transcript', 'vision'].filter(key => item[key]).map(key => [id + ':' + key, hash(JSON.stringify(item[key]))])));
+    job.savedAnalysisItems ||= Object.fromEntries(Object.entries(job.writeAnalyses).flatMap(([id, item]) => ['transcript', 'ocr', 'vision'].filter(key => item[key]).map(key => [id + ':' + key, hash(JSON.stringify(item[key]))])));
     save();
     if (job.writeFingerprint !== fingerprint) return this.repair(job, nodes, plan, save, signal);
     return job.page;
@@ -339,14 +339,14 @@ class CollectionNotion {
       }
       const supplementary = [paragraph('补全的逐字稿与识别结果（此前未完成项以本次记录为准）')];
       for (const node of nodes) { const item = job.analyses[node.id]; if (!item) continue;
-        for (const [key, title] of [['transcript', '逐字稿'], ['vision', item.vision?.engine === 'local' ? '本地千问识别' : 'DeepSeek 识别']]) if ((item[key]?.text || item[key]?.note) && job.savedAnalysisItems?.[node.id + ':' + key] !== hash(JSON.stringify(item[key]))) supplementary.push(...textBlocks({ kind: 'heading', level: 3, text: `素材 ${nodes.indexOf(node) + 1} · ${title}` }), ...textBlocks({ kind: 'paragraph', text: item[key].text || item[key].note }));
+        for (const [key, title] of [['transcript', '逐字稿'], ['ocr', '关键帧文字'], ['vision', item.vision?.engine === 'local' ? '本地千问识别' : 'DeepSeek 识别']]) if ((item[key]?.text || item[key]?.note) && job.savedAnalysisItems?.[node.id + ':' + key] !== hash(JSON.stringify(item[key]))) supplementary.push(...textBlocks({ kind: 'heading', level: 3, text: `素材 ${nodes.indexOf(node) + 1} · ${title}` }), ...textBlocks({ kind: 'paragraph', text: item[key].text || item[key].note }));
       }
       job.analysisBatches ||= {};
       const groups = batches(supplementary), done = job.analysisBatches[analysisFingerprint] ||= [];
       for (let i = 0; i < groups.length; i++) if (!done[i]) { const response = await c.session.execute('append_blocks', { block_id: job.page.id, blocks: groups[i] });
         if (!response.verified) throw Error('补全的识别结果尚未核验。'); done[i] = response.created_block_ids; save(); }
       job.savedAnalysis = analysisFingerprint;
-      job.savedAnalysisItems = Object.fromEntries(Object.entries(job.analyses).flatMap(([id, item]) => ['transcript', 'vision'].filter(key => item[key]).map(key => [id + ':' + key, hash(JSON.stringify(item[key]))]))); save();
+      job.savedAnalysisItems = Object.fromEntries(Object.entries(job.analyses).flatMap(([id, item]) => ['transcript', 'ocr', 'vision'].filter(key => item[key]).map(key => [id + ':' + key, hash(JSON.stringify(item[key]))]))); save();
     }
     if (job.extraction?.text && job.savedExtraction !== hash(JSON.stringify(job.extraction))) {
       const fingerprint = hash(JSON.stringify(job.extraction));

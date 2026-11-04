@@ -7,7 +7,6 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { extractPage } = require('../src/collection/extract-page.cjs');
 const { normalizeDocument, preferences } = require('../src/collection/model.cjs');
-const { templates } = require('../src/collection/prompts.cjs');
 const project = path.resolve(import.meta.dirname, '..'), output = path.join(project, '.notion-switch', 'collection-ui-qa');
 const playwright = process.env.COLLECTION_PLAYWRIGHT_PATH || path.join(os.homedir(), 'media-kit/node_modules/playwright-core/index.mjs');
 const { chromium } = await import(pathToFileURL(playwright).href);
@@ -30,7 +29,7 @@ try {
   assert.equal(doc.nodes[1].spans.find(s => s.href).href, 'https://example.com/reference');
   const workspaceId = '11111111-1111-4111-8111-111111111111', id = '22222222-2222-4222-8222-222222222222';
   const destination = { workspaceId, id, kind: 'database', dataSourceId: '33333333-3333-4333-8333-333333333333', workspaceName: 'openClaw', label: '资料收集' };
-  const fixture = { settings: preferences({ destination, favorites: [destination, { ...destination, id: '44444444-4444-4444-8444-444444444444', label: '视频笔记', kind: 'page' }] }), promptTemplates: templates, active: 1, binaries: { downloader: true, ffmpeg: true }, jobs: [
+  const fixture = { settings: preferences({ destination, favorites: [destination, { ...destination, id: '44444444-4444-4444-8444-444444444444', label: '视频笔记', kind: 'page' }] }), active: 1, binaries: { downloader: true, ffmpeg: true }, jobs: [
     { id: 'pending-fixture', title: 'B站 · 产品设计入门', url: 'https://www.bilibili.com/video/BVfixture', status: 'processing', message: '正在生成逐字稿：3 / 5 分钟', createdAt: new Date().toISOString(), options: preferences({ destination }) },
   ] };
   await page.addInitScript(data => {
@@ -42,6 +41,7 @@ try {
       if (action === 'workspaces') result = { workspaces: [{ id: data.settings.destination.workspaceId, name: 'openClaw' }], unavailable: [] };
       if (action === 'destinations') result = { results: [data.settings.destination, { ...data.settings.destination, id: '44444444-4444-4444-8444-444444444444', label: '视频笔记', kind: 'page' }], cursors: {}, hasMore: false };
       if (action === 'accounts') result = [{ id: 'douyin', name: '抖音', state: 'valid' }, { id: 'xiaohongshu', name: '小红书', state: 'valid' }, { id: 'bilibili', name: 'B站', state: 'missing' }, { id: 'youtube', name: 'YouTube', state: 'deferred' }, { id: 'tiktok', name: 'TikTok', state: 'unknown', message: '网络暂时不可用，可在收集时继续检查。' }, { id: 'x', name: 'X', state: 'deferred' }, { id: 'wechat', name: '微信视频号', state: 'link' }];
+      if (action === 'video-hint') result = /\.(?:mp4|mov|mkv|webm|avi|flv)\b|bilibili\.com\/video|b23\.tv|youtube\.com|youtu\.be|douyin|xiaohongshu\.com\/explore/i.test(String(input.input || ''));
       if (action === 'create') {
         const page = { id: data.settings.destination.id };
         result = data.duplicate ? { jobs: [{ id: 'completed-fixture', status: 'completed', existing: true, page }] } : { jobs: [{ id: 'created-fixture' }] };
@@ -93,13 +93,10 @@ try {
   await page.locator('#prompt-open').click(); await page.setViewportSize({ width: 620, height: 768 });
   await page.locator('#prompt-dialog').waitFor({ state: 'visible' });
   await page.screenshot({ path: path.join(output, 'prompts.png') });
-  await page.locator('#prompt-editor').fill('# 文章模板\n只提取原文支持的操作步骤');
-  await page.locator('#tab-video').click(); assert.ok((await page.locator('#prompt-editor').inputValue()).includes('音视频提取'));
-  await page.screenshot({ path: path.join(output, 'video-prompts.png') });
-  await page.locator('#prompt-editor').fill('# 音视频模板\n提取口述步骤，不编造画面');
-  await page.locator('#tab-article').click(); assert.ok((await page.locator('#prompt-editor').inputValue()).includes('操作步骤'));
+  await page.locator('#prompt-editor').fill('重点总结主播的口播风格');
+  await page.locator('#extraction-mode').selectOption('auto');
   await page.locator('#prompt-save').click(); await page.locator('#prompt-dialog').waitFor({ state: 'hidden' });
-  assert.ok((await page.evaluate(() => window._collectionFixture.settings.extraction.video)).includes('不编造画面'));
+  assert.equal(await page.evaluate(() => window._collectionFixture.settings.extraction.preference), '重点总结主播的口播风格');
   await page.locator('#expand').click(); await page.setViewportSize({ width: 620, height: 768 });
   await page.locator('.destination-item').first().waitFor();
   await page.locator('#settings-tab-destination').focus(); await page.keyboard.press('ArrowRight');
@@ -122,10 +119,11 @@ try {
   await page.locator('label').filter({ has: page.locator('#vision') }).click();
   assert.equal(await page.locator('#vision').isChecked(), false, 'The entire option card must be clickable');
   await page.locator('#links').fill('https://example.com/article\nC:\\媒体资料\\本地视频.mp4'); await page.locator('#collect').click();
+  await page.locator('#vision-dialog').waitFor({ state: 'visible' }); await page.locator('#vision-skip').click();
   const calls = await page.evaluate(() => window._collectionCalls);
   assert.equal(calls.find(c => c.action === 'create').input.options.vision, false);
   assert.ok(calls.find(c => c.action === 'create').input.input.includes('本地视频.mp4'));
-  assert.ok(calls.find(c => c.action === 'create').input.options.extraction.article.includes('操作步骤'));
+  assert.equal(calls.find(c => c.action === 'create').input.options.extraction.preference, '重点总结主播的口播风格');
   assert.equal((await page.evaluate(() => window._collectionFixture.settings.vision)), true);
   assert.deepEqual(errors, []);
   await page.evaluate(() => { window._collectionFixture.duplicate = true; });

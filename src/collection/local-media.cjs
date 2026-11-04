@@ -26,6 +26,32 @@ function parseInputs(value, { platform = process.platform, home = os.homedir() }
   if (!unique.length || unique.length > 30) throw Error('请输入 1 到 30 个网页链接或本地音视频路径。');
   return unique;
 }
+function videoExtension(file) { return video.has(path.extname(String(file).replace(/[?#].*$/, '')).toLowerCase()); }
+function isLikelyVideoInput(value) {
+  if (typeof value !== 'string' || !value.trim() || value.length > 65536) return false;
+  for (let line of value.split(/\r?\n/).map(text => text.trim()).filter(Boolean)) {
+    line = line.replace(/^['"]|['"]$/g, '');
+    if (/^file:/i.test(line)) { try { line = fileURLToPath(new URL(line)); } catch { continue; } }
+    if (/^https?:\/\//i.test(line)) {
+      let url; try { url = new URL(line); } catch { continue; }
+      const host = url.hostname.toLowerCase().replace(/^www\./, ''), pathname = url.pathname.toLowerCase();
+      if (videoExtension(pathname)) return true;
+      if (/(^|\.)bilibili\.com$/.test(host) && /^\/(video|bangumi)\//.test(pathname)) return true;
+      if (host === 'b23.tv' || host === 'bili2233.cn') return true;
+      if (/(^|\.)(youtube\.com|youtube-nocookie\.com)$/.test(host) && /^\/(watch|shorts|live)\b/.test(pathname)) return true;
+      if (host === 'youtu.be') return true;
+      if (/(^|\.)(douyin\.com|iesdouyin\.com)$/.test(host) || host === 'v.douyin.com') return true;
+      if (/(^|\.)tiktok\.com$/.test(host)) return true;
+      if (/(^|\.)xiaohongshu\.com$/.test(host) && /^\/(explore|discovery)\//.test(pathname)) return true;
+      if (host === 'channels.weixin.qq.com' || host === 'weishi.qq.com' || host === 'weixin.qq.com' && /^\/sph\//.test(pathname)) return true;
+      if (/(^|\.)(vimeo\.com|twitch\.tv|ixigua\.com|kuaishou\.com)$/.test(host)) return true;
+      if (/(^|\.)(x\.com|twitter\.com)$/.test(host) && /\/status\//.test(pathname)) return true;
+      continue;
+    }
+    if (videoExtension(line)) return true;
+  }
+  return false;
+}
 function describeLocal(file) {
   let real, stat; try { real = fs.realpathSync(file); stat = fs.statSync(real); } catch { throw Error('本地音视频文件不存在或无法读取，请检查完整路径。'); }
   const extension = path.extname(real).toLowerCase(), kind = video.has(extension) ? 'video' : audio.has(extension) ? 'audio' : null;
@@ -42,4 +68,4 @@ function localDocument(source) {
   return { title: path.basename(source.name, path.extname(source.name)), url: '', sourceKind: 'local', sourceName: source.name, author: '', warnings: [], incomplete: false, requiresLogin: false,
     nodes: [{ id: 'local-' + source.signature.slice(0, 12), kind: source.kind, text: '', caption: source.name }] };
 }
-module.exports = { parseInputs, describeLocal, checkLocal, localDocument };
+module.exports = { parseInputs, describeLocal, checkLocal, localDocument, isLikelyVideoInput };
