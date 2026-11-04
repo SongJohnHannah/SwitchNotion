@@ -1,6 +1,10 @@
 const { randomUUID, createHash } = require('node:crypto');
 const { uuid } = require('./native-context.cjs');
 const richText = value => Array.isArray(value) ? value.map(part => typeof part?.[0] === 'string' ? part[0] : '').join('') : '';
+// Saved meeting audio keeps its file name in properties.title. Attachments are
+// not meeting text, and counting them would invalidate a summary that is being
+// generated while the recording is still being attached to the page.
+const mediaTypes = new Set(['image', 'pdf', 'file', 'audio', 'video', 'bookmark', 'embed', 'link_preview']);
 const textOf = block => block?.type === 'table_row' ? Object.values(block.properties || {}).map(richText).join(' | ') : richText(block?.properties?.title);
 const fingerprint = snapshot => createHash('sha256').update(JSON.stringify([snapshot.notes, snapshot.transcript])).digest('hex');
 function entry(value) {
@@ -46,7 +50,7 @@ class NativeMeetingStore {
       }
     }
     const lines = [];
-    const visit = key => { const block = records.get(key).value; const text = textOf(block); if (text.trim()) lines.push(text); for (const child of block.content || []) visit(child); };
+    const visit = key => { const block = records.get(key).value; const text = mediaTypes.has(block.type) ? '' : textOf(block); if (text.trim()) lines.push(text); for (const child of block.content || []) visit(child); };
     visit(uuid(id));
     const text = lines.join('\n');
     if (text.length > 160000) throw Error('会议文字过长，未提交截断摘要。');

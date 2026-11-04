@@ -53,6 +53,22 @@ test('an unconfirmed write prevents a new summary transaction and never reports 
   assert.equal(f.records.get(ids.meeting).format.transcription_summary_id, undefined);
 });
 
+test('saved meeting audio is not summary text and does not invalidate an in-flight summary', async t => {
+  const f = meetingFixture(t), audio = id => ({ id, space_id: ids.space, version: 1, type: 'audio', alive: true,
+    parent_id: ids.notes, parent_table: 'block', properties: {
+      source: [['https://example.invalid/meeting-import-1.mp3']], title: [['meeting-import-1.mp3']], caption: [['recording']] } });
+  const existing = '44444444-4444-4444-8444-444444444444', late = '55555555-5555-4555-8555-555555555555';
+  f.records.set(existing, audio(existing)); f.records.get(ids.notes).content.push(existing);
+  f.provider.generate = async function* (args) {
+    f.generations.push(args);
+    yield '# Story notes\n\nThe recording describes a story.';
+    f.records.set(late, audio(late)); f.records.get(ids.notes).content.push(late);
+  };
+  const result = await service(f).run(info(f), new AbortController().signal);
+  assert.equal(result.ok, true); assert.equal(f.writes().length, 1);
+  assert.doesNotMatch(JSON.stringify(f.generations[0].messages), /meeting-import-1\.mp3/);
+});
+
 test('model failure, read-only permission, changed source and cancellation preserve the notes and transcript', async t => {
   for (const failure of ['model', 'permission', 'changed', 'cancel']) {
     const f = meetingFixture(t), abort = new AbortController();

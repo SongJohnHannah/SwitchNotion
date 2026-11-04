@@ -4,6 +4,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { uuid } = require('./native-context.cjs');
 const { summarySelection, resolveSummaryInstructions, summaryMessages } = require('./meeting-summary-instructions.cjs');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const describe = error => String(error?.message || error).replace(/\s+/g, ' ').slice(0, 300);
 function summaryInput(endpoint, input) {
   const legacy = endpoint === 'runInferenceTranscript' ? input?.transcript?.find(s => s?.type === 'config' && s.value?.type === 'summarize-transcript')?.value : null;
   const spaceId = uuid(input?.spaceId || legacy?.transcriptPointer?.spaceId), meetingId = uuid(legacy?.transcriptPointer?.id || input?.transcriptionBlockId);
@@ -103,7 +104,7 @@ class MeetingSummaryService {
       }).catch(error => {
         if (signal.aborted) return;
         const message = /^(?:会议|此前会议|该摘要|当前|同一摘要|生成|无法读取|所选|暂不支持|请先|DeepSeek)/.test(error.message || '') ? error.message : '会议笔记生成失败，原有转录与手写笔记保持不变。';
-        this.lastError = message; this.log({ type: 'meeting-summary-failed', stage: 'generate-or-save' });
+        this.lastError = message; this.log({ type: 'meeting-summary-failed', stage: 'generate-or-save', reason: describe(error) });
         // Native stream helpers consume generic errors before onResponse.
         // Notify the meeting callback first so it shows the failure and
         // dismisses its preparation indicator, then terminate as an error.
