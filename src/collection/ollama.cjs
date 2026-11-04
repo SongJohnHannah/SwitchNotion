@@ -55,6 +55,13 @@ class OllamaService {
     }
     throw Error('已尝试启动本机 Ollama，但服务尚未就绪；请手动打开 Ollama 后重试。');
   }
+  async unload(model, signal) {
+    if (!this.active || !model) return;
+    const timeout = AbortSignal.timeout(15000), combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    try {
+      await this.fetchImpl(this.active + '/api/generate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, keep_alive: 0 }), signal: combined });
+    } catch {}
+  }
 }
 
 module.exports = { OllamaService };

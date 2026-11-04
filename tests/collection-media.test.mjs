@@ -63,6 +63,15 @@ test('mediaocr reuses one client session for every frame', async () => {
   assert.deepEqual(events, ['start', 'close']); assert.equal(requests.length, 2);
   assert.deepEqual(requests[0].arguments, { image_paths: ['/a.jpg'], compact: true });
 });
+test('Ollama unloads the local model when released', async () => {
+  const { OllamaService } = require('../src/collection/ollama.cjs');
+  const calls = [];
+  const service = new OllamaService({ fetchImpl: async (url, options) => { calls.push({ url, body: JSON.parse(options.body) }); return { ok: true }; } });
+  service.active = 'http://127.0.0.1:21434';
+  await service.unload('qwen3.8-27b-vl:latest');
+  assert.deepEqual(calls, [{ url: 'http://127.0.0.1:21434/api/generate', body: { model: 'qwen3.8-27b-vl:latest', keep_alive: 0 } }]);
+  calls.length = 0; service.active = ''; await service.unload('qwen3.8-27b-vl:latest'); assert.equal(calls.length, 0);
+});
 test('Ollama starts on the fallback port when the default port is unavailable', async () => {
   const { OllamaService } = require('../src/collection/ollama.cjs');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'notion-switch-ollama-')), executable = path.join(directory, 'ollama.exe');

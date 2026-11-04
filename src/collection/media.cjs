@@ -239,6 +239,9 @@ class CollectionMedia {
     const session = this.ocrSession; this.ocrSession = null;
     if (session) await session.close().catch(() => {});
   }
+  async unloadLocalModel() {
+    if (this.ollama) await this.ollama.unload(localVisionProfile.model);
+  }
   async localVision(frames, signal, progress = () => {}) {
     let target = localVisionProfile.endpoint;
     if (this.ollama) {

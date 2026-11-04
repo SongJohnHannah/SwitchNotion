@@ -187,10 +187,10 @@ test('vision failure retains originals and transcripts and can retry recognition
   assert.equal(job.status, 'completed'); assert.equal(job.page.id, page); assert.equal(f.calls.filter(x => x.startsWith('download:')).length, downloads);
 });
 test('the shared OCR session closes once the collection queue drains', async t => {
-  let closed = 0;
-  const f = fixture(t, { media: { closeOcrSession: async () => { closed++; } } });
+  let closed = 0, unloaded = 0;
+  const f = fixture(t, { media: { closeOcrSession: async () => { closed++; }, unloadLocalModel: async () => { unloaded++; } } });
   await f.service.create({ input: 'https://example.com/article' }); await idle(f.service);
-  assert.equal(closed, 1);
+  assert.equal(closed, 1); assert.equal(unloaded, 1);
 });
 test('local Qwen engine only analyzes video keyframes and labels the appendix accordingly', async t => {
   const seen = [];

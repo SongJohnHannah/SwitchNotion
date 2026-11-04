@@ -117,7 +117,7 @@ class CollectionService extends EventEmitter {
     const job = this.jobs.get(id), controller = new AbortController(); this.running = { id, controller };
     try { await this.process(job, controller.signal); }
     catch (error) { job.status = controller.signal.aborted ? 'cancelled' : 'failed'; job.message = controller.signal.aborted ? '已停止后续处理；已保存的内容和进度保留。' : safeError(error); this.save(job); }
-    finally { this.running = null; this.emit('change'); if (!this.queue.length) void this.media.closeOcrSession?.(); if (!this.closed) void this.pump(); }
+    finally { this.running = null; this.emit('change'); if (!this.queue.length && !this.closed) { void this.media.closeOcrSession?.(); void this.media.unloadLocalModel?.(); } if (!this.closed) void this.pump(); }
   }
   async process(job, signal) {
     const save = () => this.save(job);
@@ -323,6 +323,11 @@ class CollectionService extends EventEmitter {
       return { ok: true, result };
     } catch (error) { return { ok: false, error: safeError(error) }; }
   }
-  close() { this.closed = true; this.running?.controller.abort(Error('应用退出，任务进度保留。')); void this.media.closeOcrSession?.(); }
+  close() {
+    if (this.closed) return undefined;
+    this.closed = true; this.running?.controller.abort(Error('应用退出，任务进度保留。'));
+    const tasks = [this.media.closeOcrSession?.(), this.media.unloadLocalModel?.()].filter(value => value && typeof value.then === 'function');
+    return tasks.length ? Promise.allSettled(tasks) : undefined;
+  }
 }
 module.exports = { CollectionService, activeStates, safeError };

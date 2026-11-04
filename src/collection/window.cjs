@@ -77,7 +77,12 @@ function setupCollection({ root, speech, createWindow, openSettings, platform })
     notice.on('click', () => { if (info.status === 'completed' && /^[a-f\d-]{36}$/i.test(info.pageId)) void shell.openExternal('https://www.notion.so/' + info.pageId.replaceAll('-', '')); else void open(true); }); notice.show();
   });
   app.whenReady().then(register).catch(() => {});
-  app.on('before-quit', () => { quitting = true; service.close(); });
+  app.on('before-quit', event => {
+    if (quitting) return;
+    quitting = true;
+    const done = service.close();
+    if (done && typeof done.then === 'function') { event.preventDefault(); void done.finally(() => app.quit()); }
+  });
   app.on('will-quit', () => { if (registered) globalShortcut.unregister(registered); });
   return { service, open, status: () => ({ active: service.active, shortcutError }) };
 }
