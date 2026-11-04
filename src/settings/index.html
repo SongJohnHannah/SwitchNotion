@@ -114,7 +114,7 @@
           <label class="check-label"><input id="notion-bypass-vpn" type="checkbox"> 跳过 VPN：Notion 域名直连</label>
           <p class="field-help">开启后启动 Notion 时只对 notion.so、notion.com、notion.site 绕过系统代理，其他网站仍走 VPN；需要重新启动 Notion 生效。如果 VPN 使用 TUN 或全局路由接管，还需要在 VPN 客户端里把这些域名设为直连。</p>
           <label class="check-label"><input id="notion-auto-ip" type="checkbox"> 智能加速：自动测速选择最快的 Notion IP</label>
-          <p class="field-help">启用和每次启动时解析 Notion 官方 IP，逐个测试 TLS 握手并固定最快的一个；只作用于 Notion 域名并直连，不修改系统 hosts，IP 失效会自动重新选择。</p>
+          <p class="field-help">启用和每次启动时解析 Notion 官方 IP，逐个测试 TLS 与 API 往返并固定最快的一个；仅在没有系统代理时固定并直连，系统代理开启时自动交给代理，实时同步等子域名不固定，不修改系统 hosts，IP 失效会自动重新选择。</p>
           <p id="notion-auto-ip-state" class="field-help"></p>
           <div class="form-actions"><button id="save-accelerator" class="button secondary">保存网络设置</button></div>
           <div id="accelerator-result" class="inline-result" role="status" hidden></div>

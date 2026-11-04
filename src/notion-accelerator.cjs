@@ -2,12 +2,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const fileName = 'notion-accelerator.local.json';
-// Chromium 的 --proxy-bypass-list 与 NO_PROXY 都使用这些域名。
-const bypassList = '*.notion.so;*.notion.com;*.notion.site;notion.so;notion.com;notion.site';
-const bypassEnv = 'notion.so,.notion.so,notion.com,.notion.com,notion.site,.notion.site';
-// 这些域名实测都可以由 Notion 源站 IP 提供服务；api.pgncs.notion.so 在 AWS，不能固定。
-const mappedHosts = ['api.notion.com', 'notion.so', 'www.notion.so', 'msgstore.www.notion.so', 'exp.notion.so',
-  'calendar-api.notion.so', 'file.notion.so', 'notion.com', 'www.notion.com', 'calendar.notion.so'];
+// 只让真正由 Notion 网页边缘提供服务的域名直连；实时同步（msgstore/realtime）、
+// 身份（identity）和 api.pgncs 等不在同一后端，继续交给系统代理/正常解析。
+const mappedHosts = ['api.notion.com', 'notion.so', 'www.notion.so', 'exp.notion.so',
+  'file.notion.so', 'notion.com', 'www.notion.com', 'calendar.notion.so', 'calendar-api.notion.so'];
+// Chromium 的 --proxy-bypass-list 与 NO_PROXY 使用这些域名。这里用精确域名而不是
+// *.notion.so，避免把 WebSocket 等不同后端的子域名也强制直连。
+const bypassList = ['localhost', '127.0.0.1', ...mappedHosts].join(';');
+const bypassEnv = ['localhost', '127.0.0.1', ...mappedHosts].join(',');
 
 function ipv4(value) {
   return typeof value === 'string' && /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/.test(value) ? value : '';

@@ -18,8 +18,10 @@ test('network settings default to direct with no pinned IP', t => {
   assert.deepEqual(accelerator.read(directory), { bypassVpn: false, autoIp: false, bestIp: '', checkedAt: '' });
   assert.deepEqual(accelerator.save(directory, { bypassVpn: true }), { bypassVpn: true, autoIp: false, bestIp: '', checkedAt: '' });
   assert.equal(accelerator.read(directory).bypassVpn, true);
-  assert.match(accelerator.bypassList, /\*\.notion\.so/);
-  assert.match(accelerator.bypassEnv, /\.notion\.so/);
+  assert.match(accelerator.bypassList, /notion\.so/);
+  assert.equal(accelerator.bypassList.includes('*'), false);
+  assert.equal(accelerator.bypassList.includes('msgstore'), false);
+  assert.equal(accelerator.bypassEnv.includes('msgstore'), false);
   assert.equal(accelerator.save(directory, { bypassVpn: false }).bypassVpn, false);
 });
 
@@ -31,6 +33,8 @@ test('automatic IP selection keeps only valid addresses and builds Notion-only r
   assert.equal(accelerator.hostRules(chosen.bestIp), accelerator.mappedHosts.map(host => `MAP ${host} 208.103.161.16`).join(', '));
   assert.match(accelerator.hostRules(chosen.bestIp), /MAP api\.notion\.com 208\.103\.161\.16/);
   assert.equal(accelerator.hostRules(chosen.bestIp).includes('api.pgncs.notion.so'), false);
+  assert.equal(accelerator.mappedHosts.includes('msgstore.www.notion.so'), false);
+  assert.equal(accelerator.hostRules(chosen.bestIp).includes('msgstore'), false);
   assert.equal(accelerator.hostRules('not-an-ip'), '');
   const kept = accelerator.save(directory, { bypassVpn: true });
   assert.equal(kept.bestIp, '208.103.161.16');

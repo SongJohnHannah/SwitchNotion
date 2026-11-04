@@ -58,18 +58,22 @@ function createDesktopPlatform({ id = process.platform, arch = process.arch, env
       // updater promotes it. Signing failure must preserve the working runtime.
       adapter.finalizeRuntime(layout);
     },
-    launchRuntime({ container, stateRoot, env: launchEnv = process.env, stdio, spawnImpl = childProcess.spawn }) {
+    launchRuntime({ container, stateRoot, env: launchEnv = process.env, stdio, spawnImpl = childProcess.spawn, proxyEnabled = false }) {
       requireCapability('launchRuntime');
       const layout = adapter.runtimeLayout(container);
-      // 跳过 VPN 只让 Notion 域名直连，其余流量仍按系统代理走；自动测速只固定 Notion 域名。
+      // 有系统代理时交给代理解析，不固定 IP；没有代理（且未强制直连）时才固定最快 IP。
+      // 这样代理启动/关闭都能用，不会被加速设置绑死。
       let settings = { bypassVpn: false, autoIp: false, bestIp: '' };
       try { if (stateRoot) settings = network.read(stateRoot); } catch {}
       const bypass = settings.bypassVpn === true;
-      const rules = settings.autoIp === true ? network.hostRules(settings.bestIp) : '';
+      const direct = settings.autoIp === true && (!proxyEnabled || bypass);
+      const rules = direct ? network.hostRules(settings.bestIp) : '';
       // 固定了 IP 就必须直连，否则流量仍交给代理解析。
       const bypassed = bypass || rules !== '';
       const args = ['--enable-logging=stderr', ...(bypassed ? ['--proxy-bypass-list=' + network.bypassList] : []), ...(rules ? ['--host-resolver-rules=' + rules] : [])];
       const env = { ...launchEnv, NOTION_SWITCH_ROOT: stateRoot };
+      // 系统代理关闭时，环境里残留的 HTTP(S)_PROXY 会让 Electron 网络栈继续尝试已经不存在的代理。
+      if (!bypassed && !proxyEnabled) for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) delete env[key];
       if (bypassed) env.NO_PROXY = [env.NO_PROXY, network.bypassEnv].filter(Boolean).join(',');
       return spawnImpl(layout.executable, args, {
         cwd: layout.appRoot, detached: true, ...adapter.launchOptions,

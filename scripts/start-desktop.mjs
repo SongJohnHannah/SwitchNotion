@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { prepare, runtime, stateRoot } from './prepare-desktop.mjs';
@@ -10,6 +11,20 @@ import platformModule from '../src/platform/index.cjs';
 
 const platform = platformModule.createDesktopPlatform();
 platform.requireCapability('launchRuntime');
+// 代理只在需要时启动：按系统代理开关决定 Notion 走代理还是直连。
+function systemProxyEnabled() {
+  try {
+    if (platform.id === 'win32') {
+      const output = execFileSync('reg', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', '/v', 'ProxyEnable'], { encoding: 'utf8', windowsHide: true, timeout: 3000 });
+      return /ProxyEnable\s+REG_DWORD\s+0x1\b/i.test(output);
+    }
+    if (platform.id === 'darwin') {
+      const output = execFileSync('scutil', ['--proxy'], { encoding: 'utf8', timeout: 3000 });
+      return /(?:HTTP|HTTPS|SOCKS)Enable\s*:\s*1/.test(output);
+    }
+  } catch {}
+  return false;
+}
 const macRuntime = platform.id === 'darwin' ? createRequire(import.meta.url)('../src/platform/macos-runtime.cjs') : null;
 const macRuntimeHealthFetch = macRuntime?.macRuntimeHealthFetch;
 const control = path.join(stateRoot, 'control.json');
@@ -44,6 +59,7 @@ function launch() {
  const stderr = fs.openSync(path.join(stateRoot, 'desktop-stderr.log'), 'a');
  const child = platform.launchRuntime({ container: runtime, stateRoot,
   env: { ...process.env, NOTION_SWITCH_PROJECT: path.resolve(import.meta.dirname, '..'), ...(['blocked', 'held'].includes(prepared.updateStatus) ? { NOTION_SWITCH_OPEN_SETTINGS: '1', NOTION_SWITCH_UPDATE_VIEW: '1' } : {}) },
+  proxyEnabled: systemProxyEnabled(),
   stdio: ['ignore', stdout, stderr],
  });
  fs.closeSync(stdout); fs.closeSync(stderr);
