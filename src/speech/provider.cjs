@@ -4,8 +4,7 @@ const { discover, worker } = require('./discovery.cjs');
 const { createSpeechPlatform } = require('./platform.cjs');
 const { decodeWav, validatePcm } = require('./wav.cjs');
 class SpeechProvider {
-  constructor({ root, runtime, model = runtime?.model || 'medium', engine = 'faster-whisper',
-    platform = createSpeechPlatform({ model, engine }), spawnImpl = spawn, discoverImpl = discover, idleMs = 20000, timeoutMs = 120000 } = {}) {
+  constructor({ root, runtime, model = runtime?.model || 'medium', platform = createSpeechPlatform({ model }), spawnImpl = spawn, discoverImpl = discover, idleMs = 20000, timeoutMs = 120000 } = {}) {
     if (!root || !path.isAbsolute(root)) throw Error('请指定离线语音资源的绝对目录。');
     Object.assign(this, { root, platform, spawnImpl, discoverImpl, idleMs, timeoutMs });
     try { this.runtime = runtime ? platform.normalizeRuntime(runtime) : null; } catch { this.runtime = null; }
