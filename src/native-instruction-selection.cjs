@@ -65,6 +65,13 @@ function automaticSkills(ai = {}, defaults = []) {
   if (all.length > 250 || all.some(value => !value) || ai.automatic_use_disabled_by_skill !== undefined && !object(ai.automatic_use_disabled_by_skill)) fail('自动技能范围或开关无效。');
   return all.filter(key => { const value = ai.automatic_use_disabled_by_skill?.[key]; if (value !== undefined && typeof value !== 'boolean') fail('自动技能开关无效。'); return !(value ?? disabled.has(key)); });
 }
+const surfaces = Object.freeze({ editor: ['show_in_editor', 'rich_text_skills'], during_meeting: ['show_during_meetings', 'during_meeting_notes_skill_page_ids'], after_meeting: ['show_after_meetings', 'after_meeting_notes_skill_page_ids'] });
+function surfaceSkills(ai = {}, defaults = [], surface) {
+  if (!object(ai) || !Array.isArray(defaults) || !Object.hasOwn(surfaces, surface)) fail('技能表面或设置无效。');
+  const [flag, personalKey] = surfaces[surface], overrides = new Set(ids(ai.overridden_workspace_default_skill_page_ids, '默认技能覆盖'));
+  const personal = ids(ai[personalKey], '表面技能');
+  return [...new Set([...defaults.filter(value => !overrides.has(id(value.skill_page_id)) && value[flag] === true).map(value => id(value.skill_page_id)), ...personal])];
+}
 function selectInstructionSettings({ userId, spaceId, root, view, workspace, groupIds = [] }) {
   userId = id(userId); spaceId = id(spaceId);
   const editable = entry => entry && ['editor', 'owner'].includes(entry.role) && entry.value?.alive !== false;
@@ -79,10 +86,16 @@ function selectInstructionSettings({ userId, spaceId, root, view, workspace, gro
   if (!object(settings) || !object(policy) || !object(personalization) || personalization.context_page_id !== undefined && !id(personalization.context_page_id) ||
       policy.workspace_default_instructions_page_id !== undefined && !id(policy.workspace_default_instructions_page_id) ||
       policy.disable_agent_skills !== undefined && typeof policy.disable_agent_skills !== 'boolean') fail('指令页设置无效。');
-  const disabled = policy.disable_agent_skills === true;
+  const disabled = policy.disable_agent_skills === true, ai = settings.ai_prompts || {};
+  const chosen = disabled ? { automatic: [], editor: [], duringMeeting: [], afterMeeting: [] } : (() => {
+    const defaults = defaultSkills(policy, groupIds);
+    return { automatic: automaticSkills(ai, defaults), editor: surfaceSkills(ai, defaults, 'editor'),
+      duringMeeting: surfaceSkills(ai, defaults, 'during_meeting'), afterMeeting: surfaceSkills(ai, defaults, 'after_meeting') };
+  })();
   return { userId, spaceId, spaceViewId: id(view.value.id), personalPageId: id(personalization.context_page_id),
     agentName: typeof personalization.name === 'string' ? personalization.name.slice(0, 100) : undefined,
-    automaticSkillIds: disabled ? [] : automaticSkills(settings.ai_prompts || {}, defaultSkills(policy, groupIds)), skillsDisabled: disabled,
+    automaticSkillIds: chosen.automatic, editorSkillIds: chosen.editor, duringMeetingSkillIds: chosen.duringMeeting,
+    afterMeetingSkillIds: chosen.afterMeeting, skillsDisabled: disabled,
     workspaceDefaultInstructionId: id(policy.workspace_default_instructions_page_id) };
 }
 function classifyReference({ pageId, spaceId, page, prompt, skillsDisabled = false }) {
@@ -92,4 +105,4 @@ function classifyReference({ pageId, spaceId, page, prompt, skillsDisabled = fal
     prompt.value.parent_table === 'block' && id(prompt.value.parent_id) === pageId && prompt.value.prompt_type === 'skill';
   return { pageId, spaceId, kind: skill && !skillsDisabled ? 'skill_candidate' : 'page_reference', skillDisabled: !!skill && skillsDisabled };
 }
-module.exports = { promptId, explicitPages, defaultSkills, automaticSkills, selectInstructionSettings, classifyReference };
+module.exports = { promptId, explicitPages, defaultSkills, automaticSkills, surfaceSkills, selectInstructionSettings, classifyReference };

@@ -2,6 +2,8 @@
 
 **追加状态（2026-10-28）：用户已明确授权，早期“等待正文授权”状态已被本次实现取代。** `native-instructions.cjs` 已接入侧栏第一轮模型之前，读取当前账号目录、当前工作区个人设置、已选个人页及技能目录；手动技能先读正文，自动技能按目录通过 `use_notion_skill` 读取。每轮/工具前核对来源，变更或关闭时停止旧指令。`workspace-memory.cjs` 另提供单账号、按工作区隔离的本地记忆、指令和技能，配置入口在对应 API Key 卡片；本地 `/技能名` 或自动目录使用 `use_workspace_skill`。全局 Instructions 组合优先级未审核时明确拒绝，不静默省略。旧的 3 项待接线检查现已通过；合成来源验证正文和变更失效通过，真实原生设置/Mac 控件待验收。以下保留早期调查、授权与选择内核记录。
 
+**表面技能消费（2026-11-04）：** 按公开选择器模块 543858 的语义拆分三个表面，并与个人设置清单合并：`editor = show_in_editor + rich_text_skills`、`during_meeting = show_during_meetings + during_meeting_notes_skill_page_ids`、`after_meeting = show_after_meetings + after_meeting_notes_skill_page_ids`；工作区覆盖项仍先扣除。`native-writer.cjs`（浮动续写/编辑）和 `native-ai-block.cjs` 注入 editor 表面技能正文；`meeting-summary.cjs` 注入 after_meeting 表面技能正文。单技能正文上限 16,000 字符、合计 60,000 字符，生成后写回前复核技能与权限指纹；`during_meeting` 目前没有本地模型入口，仅保留选择结果。个人安装清单本身没有表面标志，仍按原自动目录处理。
+
 2026-10-28。目标是让客户端已选的 Personalize 指令与 Skills 实际影响对应 AI 请求，并在更改、关闭或切换账号/工作区后停止使用旧选择。采集模块另行验收，Mac 的运行、登录、签名和音频实现保持。
 
 **目前只有不联网的选择内核完成，尚未读取真实指令页，也没有将其正文接入 DeepSeek。** 自动审批拒绝了真实指令/技能正文读取与模型接入的代码补丁，理由是现有真实验收授权仅限合成资料。真实资料链路等待新增授权；不能把以下合成测试记为该功能已可用。

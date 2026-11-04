@@ -33,7 +33,25 @@ test('changing and disabling in-memory settings produces a fresh selection witho
   delete f.view.value.settings.agent_personalization_settings.context_page_id; f.workspace.value.settings.disable_agent_skills = true;
   const after = selection.selectInstructionSettings(f); assert.equal(before.personalPageId, id(4)); assert.equal(after.personalPageId, null);
   assert.equal(after.skillsDisabled, true); assert.deepEqual(after.automaticSkillIds, []);
+  assert.deepEqual(after.editorSkillIds, []); assert.deepEqual(after.duringMeetingSkillIds, []); assert.deepEqual(after.afterMeetingSkillIds, []);
   f.view.value.settings.agent_personalization_settings.context_page_id = id(7); assert.equal(selection.selectInstructionSettings(f).personalPageId, id(7));
+});
+
+test('editor, during-meeting and after-meeting selections merge workspace defaults with personal lists', () => {
+  const f = fixture(), policy = f.workspace.value.settings, ai = f.view.value.settings.ai_prompts;
+  policy.workspace_default_skills = [
+    { skill_page_id: id(10), show_in_editor: true },
+    { skill_page_id: id(11), show_during_meetings: true },
+    { skill_page_id: id(12), show_after_meetings: true },
+    { skill_page_id: id(13), show_in_editor: true }
+  ];
+  ai.rich_text_skills = [id(14)]; ai.during_meeting_notes_skill_page_ids = [id(15)]; ai.after_meeting_notes_skill_page_ids = [id(16)];
+  ai.overridden_workspace_default_skill_page_ids = [id(13)];
+  const result = selection.selectInstructionSettings(f);
+  assert.deepEqual(result.editorSkillIds, [id(10), id(14)]);
+  assert.deepEqual(result.duringMeetingSkillIds, [id(11), id(15)]);
+  assert.deepEqual(result.afterMeetingSkillIds, [id(12), id(16)]);
+  assert.throws(() => selection.surfaceSkills({}, [], 'unknown'), /表面/);
 });
 
 test('group defaults use only verified group IDs and per-user overrides can disable or remove automatic skills', () => {
@@ -88,5 +106,9 @@ test('automatic and group-default selections match the reviewed native selectors
   const actual = selection.defaultSkills({ workspace_default_skills: workspace, group_default_skills: groups }, [id(20)]);
   assert.deepEqual(actual, JSON.parse(JSON.stringify(expected)));
   const ai = { installed_skill_page_ids: [id(5)], rich_text_skills: [id(6)], overridden_workspace_default_skill_page_ids: [id(11)], automatic_use_disabled_by_skill: { [id(5)]: true } };
-  assert.deepEqual(selection.automaticSkills(ai, actual), Array.from(native.effective(ai, expected).autoEnabled));
+  const effective = native.effective(ai, expected);
+  assert.deepEqual(selection.automaticSkills(ai, actual), Array.from(effective.autoEnabled));
+  assert.deepEqual(selection.surfaceSkills(ai, actual, 'editor'), Array.from(effective.editor));
+  assert.deepEqual(selection.surfaceSkills(ai, actual, 'during_meeting'), Array.from(effective.duringMeeting));
+  assert.deepEqual(selection.surfaceSkills(ai, actual, 'after_meeting'), Array.from(effective.afterMeeting));
 });

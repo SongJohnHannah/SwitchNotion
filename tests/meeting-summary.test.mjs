@@ -14,7 +14,7 @@ test('summary writes only new summary blocks and its native pointer, reads them 
   const payload = f.writes()[0].payload;
   assert.equal(payload.transactions[0].spaceId, ids.space);
   assert.equal(payload.transactions[0].inSudoMode, undefined);
-  assert.ok(f.calls.filter(c => c.endpoint === 'getRecordValues').every(c => c.payload.requests.every(p => p.spaceId === ids.space)), 'New record IDs also require the explicit workspace');
+  assert.ok(f.calls.filter(c => c.endpoint === 'getRecordValues').every(c => c.payload.requests.every(p => p.spaceId === ids.space || p.table === 'user_root' && p.id === ids.user)), 'New record IDs also require the explicit workspace');
   assert.ok(payload.transactions[0].operations.every(o => o.pointer.spaceId === ids.space));
   assert.equal(f.generations[0].tools, undefined);
   assert.ok(!JSON.stringify(f.generations[0].messages).includes(ids.user));

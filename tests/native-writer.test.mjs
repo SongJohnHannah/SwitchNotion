@@ -7,7 +7,7 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { inlineDocumentRoute, id, USER, SPACE, THREAD } from './helpers/inline-document-route.mjs';
 const { NativeWriter } = createRequire(import.meta.url)('../src/native-writer.cjs');
-const PAGE = id(4), ANCHOR = id(5), PREVIOUS = id(6), NEXT = id(7);
+const PAGE = id(4), ANCHOR = id(5), PREVIOUS = id(6), NEXT = id(7), VIEW = id(90);
 
 function fixture(t, options = {}) {
   const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'writer-test-'));
@@ -21,9 +21,15 @@ function fixture(t, options = {}) {
   const store = { userId: USER, spaceId: SPACE, async records(ids) {
     reads.push(...ids); return new Map(ids.filter(value => blocks.has(value)).map(value => [value, { role: options.role || 'editor', value: structuredClone(blocks.get(value)) }]));
   }, async api(endpoint, payload) {
-    if (endpoint === 'getRecordValues') return { results: payload.requests.map(request => blocks.has(request.id) ? {
-      role: options.role || 'editor', value: structuredClone(blocks.get(request.id))
-    } : { role: 'none' }) };
+    if (endpoint === 'getRecordValues') return { results: payload.requests.map(request => request.table === 'user_root' && request.id === USER
+      ? { role: 'editor', value: { id: USER, alive: true, space_view_pointers: [{ table: 'space_view', id: VIEW, spaceId: SPACE }] } }
+      : request.table === 'space_view' && request.id === VIEW
+        ? { role: 'editor', value: { id: VIEW, space_id: SPACE, parent_table: 'user_root', parent_id: USER, alive: true, settings: { ai_prompts: {} } } }
+        : request.table === 'space' && request.id === SPACE
+          ? { role: 'editor', value: { id: SPACE, alive: true, settings: {} } }
+          : blocks.has(request.id) ? {
+            role: options.role || 'editor', value: structuredClone(blocks.get(request.id))
+          } : { role: 'none' }) };
     assert.equal(endpoint, 'saveTransactionsFanout'); writes.push(payload);
     if (!options.dropWrite && !(options.dropUndoWrite && writes.length > 1)) for (const { operations } of payload.transactions) for (const operation of operations) {
       const { pointer, path: keys, command, args } = operation;

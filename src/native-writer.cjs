@@ -3,6 +3,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { AgentMock } = require('./agent-mock.cjs');
 const { uuid } = require('./native-context.cjs');
+const { resolveSurfaceSkills } = require('./native-instructions.cjs');
 const { mayUseRecord, requestScope } = require('./local-ai-scope.cjs');
 
 // AgentServiceWriterPopup 382968, public 2026-10-29 asset
@@ -122,8 +123,9 @@ class NativeWriter {
       try {
         this.save(); active.throwIfAborted(); const store = this.storeFactory(info, meta), snapshot = await this.snapshot(info, store, active);
         const config = this.provider.config(info.modelSelection); if (config.mode !== 'deepseek') edit.fail('请先配置 DeepSeek。');
+        const skills = await resolveSurfaceSkills({ store, userId: info.userId, spaceId: info.spaceId, surface: 'editor', signal: active });
         let output = '';
-        for await (const delta of this.provider.generate({ config, messages: edit.messages(info, snapshot), signal: active })) {
+        for await (const delta of this.provider.generate({ config, messages: edit.messages(info, snapshot, skills?.message), signal: active })) {
           active.throwIfAborted(); output += delta; if (output.length > (info.mode === 'continue' ? 16000 : 64000)) edit.fail('生成内容过长，请缩小范围。');
           assistant.content[0].text = info.mode === 'continue' && !/^\s*(?:\{|```)/.test(output) ? output : '正在编辑所选文字…';
           this.events.emit(t, [{ op: 'put', entity: assistant }]);
@@ -131,6 +133,7 @@ class NativeWriter {
         active.throwIfAborted(); if (!output.trim()) edit.fail('模型没有返回内容，请检查配置后重试。');
         const parsed = edit.parseOutput(output, info, snapshot);
         if (parsed.clarification) { job.state = 'clarification'; job.message = parsed.clarification; this.finishEvents(job, job.message); this.save(); return; }
+        await skills?.verify?.(); active.throwIfAborted();
         const latest = await store.records(snapshot.fingerprints.map(([id]) => id), active); active.throwIfAborted();
         if (snapshot.fingerprints.some(([id, fingerprint]) => hash(latest.get(id) || null) !== fingerprint)) edit.fail('正文、位置或权限在生成期间发生变化，请重新编辑。');
         const plan = edit.buildPlan(info, snapshot, parsed);
@@ -150,7 +153,7 @@ class NativeWriter {
         if (!job.recordMap) { this.finishEvents(job, '编辑已经提交，但尚未核验；请检查页面后核对结果。', true); this.save(); }
       } catch (error) {
         if (job.state !== 'submitted' && job.state !== 'completed') {
-          job.state = 'failed'; job.message = active.aborted ? '编辑已停止，没有提交页面修改。' : /^(?:Notion (?:Writer|续写)：|DeepSeek )/.test(error.message || '') ? error.message : 'Notion Writer 未完成，请检查模型配置与页面权限后重试。';
+          job.state = 'failed'; job.message = active.aborted ? '编辑已停止，没有提交页面修改。' : /^(?:Notion (?:Writer|续写)：|Notion (?:指令|技能)|DeepSeek )/.test(error.message || '') ? error.message : 'Notion Writer 未完成，请检查模型配置与页面权限后重试。';
         }
         this.finishEvents(job, job.state === 'submitted' ? '编辑的提交结果尚未确定，请核对页面；不会重复提交。' : job.message || job.output, true);
         this.save();

@@ -3,6 +3,7 @@ const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { uuid } = require('./native-context.cjs');
 const { summarySelection, resolveSummaryInstructions, summaryMessages } = require('./meeting-summary-instructions.cjs');
+const { resolveSurfaceSkills } = require('./native-instructions.cjs');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const describe = error => String(error?.message || error).replace(/\s+/g, ' ').slice(0, 300);
 function summaryInput(endpoint, input) {
@@ -40,8 +41,9 @@ class MeetingSummaryService {
     const snapshot = await store.load(info.meetingId, signal);
     if (snapshot.spaceId !== info.spaceId) throw Error('会议实际所属工作区与请求不一致。');
     const template = await resolveSummaryInstructions(store, info, snapshot, signal);
+    const skills = await resolveSurfaceSkills({ store, userId: store.userId, spaceId: info.spaceId, surface: 'after_meeting', signal });
     const key = hash([store.userId, info.spaceId, info.meetingId, info.tabId]);
-    const sourceHash = hash(template.text ? [snapshot.sourceHash, info.language, template.selection, template.text] : [snapshot.sourceHash, info.language, template.selection]);
+    const sourceHash = hash([...(template.text ? [snapshot.sourceHash, info.language, template.selection, template.text] : [snapshot.sourceHash, info.language, template.selection]), ...(skills?.message?.content ? [skills.message.content] : [])]);
     let job = this.jobs.get(key);
     if (job && job.sourceHash !== sourceHash) throw Error('同一摘要请求的转录或摘要指令已经变化，请重新生成摘要。');
     for (const pending of this.jobs.values()) {
@@ -61,7 +63,7 @@ class MeetingSummaryService {
       notify({ type: 'notion-switch-summary-status', status: 'generating' });
       let markdown = '';
       for await (const text of this.provider.generate({ config: { ...config, maxTokens: Math.min(config.maxTokens || 32768, 32768) }, signal,
-        messages: summaryMessages(instructions, info, snapshot, template) })) {
+        messages: summaryMessages(instructions, info, snapshot, template, skills?.message) })) {
         markdown += text; if (markdown.length > 40000) throw Error('生成的会议笔记过长，未写入不完整结果。');
       }
       if (!markdown.trim()) throw Error('DeepSeek 没有返回会议笔记，转录内容保持不变。');
@@ -73,6 +75,7 @@ class MeetingSummaryService {
     if (fresh.sourceHash !== snapshot.sourceHash) throw Error('生成期间会议转录或手写笔记发生变化，未写入旧摘要，请停止录音后重新生成。');
     const freshTemplate = await resolveSummaryInstructions(store, info, fresh, signal);
     if (JSON.stringify(freshTemplate) !== JSON.stringify(template)) throw Error('会议摘要指令在生成期间发生变化，未写入旧摘要，请重新生成。');
+    await skills?.verify?.();
     notify({ type: 'notion-switch-summary-status', status: 'saving' });
     try {
       await store.submit(fresh, job.plan, signal, () => { job.status = 'submitted'; this.save(); });
@@ -103,7 +106,7 @@ class MeetingSummaryService {
         send({ type: 'notion-switch-summary-status', status: 'completed', verified: true, reused: !!result.reused });
       }).catch(error => {
         if (signal.aborted) return;
-        const message = /^(?:会议|此前会议|该摘要|当前|同一摘要|生成|无法读取|所选|暂不支持|请先|DeepSeek)/.test(error.message || '') ? error.message : '会议笔记生成失败，原有转录与手写笔记保持不变。';
+        const message = /^(?:会议|此前会议|该摘要|当前|同一摘要|生成|无法读取|所选|暂不支持|请先|Notion|DeepSeek)/.test(error.message || '') ? error.message : '会议笔记生成失败，原有转录与手写笔记保持不变。';
         this.lastError = message; this.log({ type: 'meeting-summary-failed', stage: 'generate-or-save', reason: describe(error) });
         // Native stream helpers consume generic errors before onResponse.
         // Notify the meeting callback first so it shows the failure and

@@ -1,5 +1,9 @@
 # AI 功能与文档对接检查记录
 
+## 2026-11-04 技能表面消费
+
+技能选择内核现按公开选择器语义输出 `editor`、`during_meeting`、`after_meeting` 三个表面：工作区/分组默认技能按 `show_in_editor`、`show_during_meetings`、`show_after_meetings` 过滤，并分别与个人 `rich_text_skills`、`during_meeting_notes_skill_page_ids`、`after_meeting_notes_skill_page_ids` 合并。浮动续写/编辑（`runWriter`）和 AI block 注入 editor 表面技能正文；会议摘要注入 after_meeting 表面技能正文；每次注入受单技能 16,000 字符、合计 60,000 字符限制，写回前复核技能与权限指纹。`during_meeting` 目前没有本地模型入口，只保留选择结果。原生设置和 Mac 控件仍需实机验收，详见[接口](NATIVE-INSTRUCTIONS-INTERFACE.md)。
+
 ## 2026-10-29 当前入口检查与 Writer 编辑/撤销
 
 本节优先于下方历史记录。检查结合当前源码、公开 Writer 客户端生产者和本机请求状态日志；“旧浮动框已接通”不能代替“新版 Writer 已接通”。

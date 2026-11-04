@@ -4,7 +4,8 @@ import storeModule from '../../src/meeting-summary-store.cjs';
 export const ids = { space: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', meeting: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
   summary: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', transcript: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
   notes: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', user: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
-  transcriptText: '11111111-1111-4111-8111-111111111111', noteText: '22222222-2222-4222-8222-222222222222' };
+  transcriptText: '11111111-1111-4111-8111-111111111111', noteText: '22222222-2222-4222-8222-222222222222',
+  view: '77777777-7777-4777-8777-777777777777' };
 export function meetingFixture(t) {
   const parent = path.resolve('.notion-switch'); fs.mkdirSync(parent, { recursive: true });
   const root = fs.mkdtempSync(path.join(parent, 'test-meeting-summary-'));
@@ -18,13 +19,16 @@ export function meetingFixture(t) {
     [ids.notes, block(ids.notes, ids.meeting, { content: [ids.noteText] })],
     [ids.transcript, block(ids.transcript, ids.meeting, { content: [ids.transcriptText] })],
     [ids.noteText, block(ids.noteText, ids.notes, { properties: { title: [['User handwritten note: verify the dates.']] } })],
-    [ids.transcriptText, block(ids.transcriptText, ids.transcript, { properties: { title: [['This is a recorded story, not a business meeting.']] } })]
+    [ids.transcriptText, block(ids.transcriptText, ids.transcript, { properties: { title: [['This is a recorded story, not a business meeting.']] } })],
+    [ids.user, { id: ids.user, version: 1, alive: true, space_view_pointers: [{ table: 'space_view', id: ids.view, spaceId: ids.space }] }],
+    [ids.view, { id: ids.view, space_id: ids.space, version: 1, parent_table: 'user_root', parent_id: ids.user, alive: true, settings: { ai_prompts: {} } }],
+    [ids.space, { id: ids.space, space_id: ids.space, version: 1, alive: true, settings: {} }]
   ]);
   const calls = [], generations = []; let role = 'editor', writeBehavior = 'ok';
   const api = async (endpoint, payload, options = {}) => {
     calls.push({ endpoint, payload: structuredClone(payload) });
     if (endpoint === 'getRecordValues') {
-      if (payload.requests.some(p => p.spaceId !== ids.space) || options.spaceId !== ids.space) throw Error('Native record pointers must include the workspace, including for newly allocated IDs');
+      if (payload.requests.some(p => p.spaceId !== ids.space && !(p.table === 'user_root' && p.id === ids.user)) || options.spaceId !== ids.space) throw Error('Native record pointers must include the workspace, including for newly allocated IDs');
       return { results: payload.requests.map(p => records.has(p.id) ? { role, value: structuredClone(records.get(p.id)) } : {}) };
     }
     if (endpoint !== 'saveTransactionsFanout') throw Error('Unexpected native API');
