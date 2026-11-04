@@ -112,6 +112,7 @@ Mac 证据分级：用户已确认既有基础流程可用；AI 回复 Add to ch
 | --- | --- | --- |
 | 已审核 Mac 音频连接模块 241978 | 恢复 `17048-37d068bc6d2dddf7.js`，模块 SHA-256 `69d220828e180883982a383af5204ae9db3be7fa308d1c3d41b0aea76c798728`，语义指纹一致，协议测试通过 | 已审核版本的保留流程和重分包适配；不代表当前 Mac 实际加载版本或设备录音已新增验收 |
 | 已审核 Mac 录音生命周期模块 331787 | 恢复 `89269-b1b071cd41334f47.js`，模块 SHA-256 `444d8bad2ad5f737a86b836776421e449b37dd93a7cd83ed9f15841927beb406`，语义指纹一致，停止来源遥测/排空与权限流程检查通过 | 保留 Mac 差异，没有用 Windows 指纹替代；实际系统权限和音频设备仍以 Mac 原生记录为准 |
+| Windows Notion 7.41.0 语音资源 | 接受 `17521-131dcaeec5afd619.js`（模块 328616，SHA-256 `2c512d87d65969684f713de5002eb8ade82f8cdba60db1a702f5293e0d88eca8`）、`17048-5703c16bce2711ca.js`（模块 697264，SHA-256 `858cb7eee1d5334707f03c0eb506b5e246d83c1d13df44d2bb8d6161d6cc308a`）、`89269-150edb97f2301594.js`（模块 372201，SHA-256 `2d05e78d890a255b428410377d8a1681f908126efaef3185b36f7c360c194d56`）；328616/697264 与 `macos-speech-reviewed.json` 一致，372201 为本机当前构建单独审核 | 恢复 `getAudioProcessorAuthToken` 前的资源适配；录音启动、系统音频采集和真实会议转写仍需在 Windows 原生界面按 MEET-01/02 验收 |
 | 平台、启动与语音配置隔离 | `macos-ai-compatibility-audit.log` 中 24 项通过、0 跳过 | 模拟安装发现、布局、启动/签名顺序、回退及 CPU/平台状态隔离；未实际启动 Mac 应用 |
 | 新增 AI 资料路径与资源加载 | `tests/ai-state-paths.test.mjs` 的两项检查覆盖中文/空格的 Application Support 与项目 `.notion-switch/mac-arm64` 目录，子进程从另一空目录运行 | 实际侧栏与浮动上传/解析/恢复使用传入根目录，PDF 离线中文映射按模块路径加载；调用目录无资料落盘、另一资料根不能读取该附件。仍是 Windows 文件系统中的路径契约检查 |
 | 模块依赖大小写 | `macos-ai-module-paths-result.json`：71 个生产模块、136 处相对依赖，0 不匹配 | 排除 Windows 大小写宽容可能掩盖的静态模块名错误；动态 PDF 资源由上项覆盖 |

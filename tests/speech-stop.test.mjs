@@ -126,6 +126,52 @@ test('cancellation while flushing never sends a previous recording into a replac
     'A late stop from the old generation cannot shut down the replacement recording');
 });
 
+const notional = name => { const file = new URL('../research/.public-assets/' + name, import.meta.url); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null; };
+const audio7410 = notional('17521-131dcaeec5afd619.js'), connection7410 = notional('17048-5703c16bce2711ca.js'), recording7410 = notional('89269-150edb97f2301594.js');
+
+test('Notion 7.41.0 audio transport redirects to loopback only when enabled and still fails closed', audio7410 ? {} : { skip: 'Official 7.41.0 audio asset unavailable' }, () => {
+  const asset = '17521-131dcaeec5afd619.js', options = { localSpeechEnabled: true, audioEndpoint: 'http://127.0.0.1:32123' };
+  assert.equal(compatibility.adaptClient(audio7410, asset), audio7410);
+  const adapted = compatibility.adaptClient(audio7410, asset, options);
+  assert.ok(adapted.includes('let l="http://127.0.0.1:32123"+"?"+u.toString()'));
+  assert.throws(() => compatibility.adaptClient(audio7410.replace('328616(t,e,r){', '328616(t,e,r){/*changed*/'), asset, options));
+  assert.throws(() => compatibility.adaptClient(audio7410, asset, { ...options, audioEndpoint: 'https://attacker.example' }));
+});
+
+test('Notion 7.41.0 connection module is accepted unchanged', connection7410 ? {} : { skip: 'Official 7.41.0 connection asset unavailable' }, () => {
+  const asset = '17048-5703c16bce2711ca.js', adapted = compatibility.adaptClient(connection7410, asset, { localSpeechEnabled: true });
+  assert.equal(adapted, connection7410);
+  new vm.Script(adapted);
+});
+
+test('Notion 7.41.0 recorder drains through transport 697264 and the new store binding', recording7410 ? {} : { skip: 'Official 7.41.0 recording asset unavailable' }, async () => {
+  const asset = '89269-150edb97f2301594.js', adapted = compatibility.adaptClient(recording7410, asset, { localSpeechEnabled: true });
+  assert.match(adapted, /transcriptionDrainEnabled:!0/);
+  assert.match(adapted, /static stopDictationAfterLocalFlush\(e\)/);
+  assert.match(adapted, /static stopDictation\(e\)\{return \(function stopWithAudioFlush/);
+  assert.match(adapted, /transport:i\(697264\)/);
+  assert.match(adapted, /S\(\)\.Ay/);
+  new vm.Script(adapted);
+  assert.equal(compatibility.adaptClient(recording7410, asset), recording7410);
+  assert.throws(() => compatibility.adaptClient(recording7410.replace('static stopDictation(e){', 'static stopDictation(e){throw Error("changed");'), asset, { localSpeechEnabled: true }));
+
+  const f = fixture();
+  let captureStopped = false;
+  f.api.state.state.audioRecorder = { stop: () => { captureStopped = true; } };
+  const start = adapted.indexOf('static stopDictation(e){'), end = adapted.indexOf('static stopDictationAfterLocalFlush(e){', start);
+  assert.ok(start >= 0 && end > start);
+  const native = vm.runInNewContext('class Current{' + adapted.slice(start, end) + '};Current', {
+    S: () => ({ Ay: f.api.state }), setTimeout, clearTimeout,
+    i: id => id === 585823 ? { Ay: f.api.state } : id === 697264 ? f.api.transport : id === 216735 ? { $g: f.api.send } : id === 392719 ? { Rk: f.api.encode, c9() {} } : {}
+  });
+  Object.assign(native, f.actions);
+  const result = native.stopDictation({});
+  assert.equal(captureStopped, true);
+  await result.revisionDrain;
+  assert.equal(f.calls.length, 3);
+  assert.equal(f.events.filter(value => value === 'stop').length, 1);
+});
+
 const asset = '89269-cbd3af4d28334ce0.js', file = new URL('../research/.public-assets/' + asset, import.meta.url);
 const official = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
 function nativeLifecycle(source) {

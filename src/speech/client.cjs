@@ -63,6 +63,7 @@ function adaptRecordingClient(source, asset, { inputMode = 'meeting', gateModule
     return source;
   }
   if (![218744, 211589].includes(gateModuleId) || ![241978, 697264].includes(transportModuleId)) throw Error('Unsupported native recording imports');
+  if (!source.includes('i(' + transportModuleId + ').H1)')) throw Error('Unsupported native recording transport');
   source = replaceOnce(source, 'transcriptionDrainEnabled:i(' + gateModuleId + ').default.checkGate({gateName:"meeting_notes_transcription_drain_enabled"})', 'transcriptionDrainEnabled:!0');
   for (const entry of ['static async startDictation(e){', 'static async getDictationAudioRecorder(e){']) {
     source = replaceOnce(source, entry, entry + 'e={...e,includeSystemAudio:' + (inputMode !== 'microphone' ? '!0' : '!1') + '};');

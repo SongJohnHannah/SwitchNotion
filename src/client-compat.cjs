@@ -1,5 +1,5 @@
 const { createHash } = require('node:crypto');
-const { compatibleModule } = require('./client-module-compat.cjs');
+const { compatibleModule, matchModule } = require('./client-module-compat.cjs');
 const { adaptRecordingClient } = require('./speech/client.cjs');
 const { adaptAutomatic } = require('./compat/automatic.cjs');
 const { adaptAutofill, isAutofillCandidate } = require('./compat/autofill.cjs');
@@ -22,8 +22,9 @@ const reviewedAssets = {
 };
 const anchor = /let [A-Za-z_$][\w$]*=\(null==\(r=\(o=e\[u\]\)\.isOverrideAllowed\)\?void 0:r\.call\(o,n\.data\)\)\?\?!0/g;
 function adaptClient(source, asset, { localSpeechEnabled = false, audioEndpoint, inputMode = 'meeting', onAdaptation } = {}) {
+  const matched = /^(?:95271|96975|32453|17521|89269|17048)-[a-f\d]{16}\.js$/.test(asset) ? matchModule(source, asset) : null;
   if (macClient?.isMacClientAsset(asset)) return macClient.adaptMacClient(source, asset, { localSpeechEnabled, audioEndpoint, inputMode, onAdaptation });
-  if (macSpeech?.isMacSpeechCandidate(source, asset) && !reviewedAssets[asset] && !compatibleModule(source, asset))
+  if (macSpeech?.isMacSpeechCandidate(source, asset) && !reviewedAssets[asset] && !matched)
     return macSpeech.adaptMacSpeech(source, asset, { localSpeechEnabled, audioEndpoint, inputMode, onAdaptation });
   if (isInlineDocumentCandidate(source, asset)) {
     try { return adaptInlineDocuments(source, asset, onAdaptation); }
@@ -35,11 +36,14 @@ function adaptClient(source, asset, { localSpeechEnabled = false, audioEndpoint,
   }
   if (reviewedAssets[asset]) {
     if (createHash('sha256').update(source).digest('hex') !== reviewedAssets[asset]) throw Error('Unreviewed native client asset');
-  } else if (!compatibleModule(source, asset)) {
+  } else if (!matched) {
     try { return adaptAutomatic(source, asset, { localSpeechEnabled, audioEndpoint, inputMode, onAdaptation }); }
     catch { throw Error('Unreviewed native client asset'); }
   }
-  if (/^(?:89269|17048)-/.test(asset)) return localSpeechEnabled ? adaptRecordingClient(source, asset, { inputMode }) : source;
+  if (/^(?:89269|17048)-/.test(asset)) {
+    const ids = matched?.gateModuleId ? { gateModuleId: matched.gateModuleId, transportModuleId: matched.transportModuleId } : {};
+    return localSpeechEnabled ? adaptRecordingClient(source, asset, { inputMode, ...ids }) : source;
+  }
   if (asset.startsWith('17521-')) {
     if (!localSpeechEnabled) return source;
     let url; try { url = new URL(audioEndpoint); } catch { throw Error('Local audio endpoint unavailable'); }

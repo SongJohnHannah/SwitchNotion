@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { assertReviewedBuild, reviewedBuilds } from '../scripts/prepare-desktop.mjs';
 const { adaptClient } = createRequire(import.meta.url)('../src/client-compat.cjs');
+const { compatibleModule, matchModule } = createRequire(import.meta.url)('../src/client-module-compat.cjs');
 const asset = '95271-adc4a76136e50ec0.js';
 const cached = name => { const file = path.resolve('research/.public-assets', name); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null; };
 const source = cached(asset), renamedSource = cached('95271-ae201a176278efa7.js');
@@ -34,6 +35,15 @@ test('reviewed local minifier renaming is accepted without weakening permission 
   assert.ok(patched.includes('let g=(null==(r=(o=e[u]).isOverrideAllowed)'));
   assert.throws(() => adaptClient(renamed.replace('workspaceRestriction:y', 'workspaceRestriction:undefined'), name), /Unreviewed/);
   assert.throws(() => adaptClient(renamed.replace('isOverrideAllowed', 'differentPermission'), name), /Unreviewed/);
+});
+test('a chunk carrying two candidate speech modules fails closed', () => {
+  const chunk = '(globalThis.rspackChunknotion_next||=[]).push([[89269],{331787(a,b,c){return 1},372201(a,b,c){return 2}}]);';
+  assert.equal(compatibleModule(chunk, '89269-0123456789abcdef.js'), false);
+  assert.equal(matchModule(chunk, '89269-0123456789abcdef.js'), null);
+});
+test('a single speech module with unreviewed bytes remains rejected', () => {
+  const chunk = '(globalThis.rspackChunknotion_next||=[]).push([[89269],{372201(a,b,c){return 1}}]);';
+  assert.equal(matchModule(chunk, '89269-0123456789abcdef.js'), null);
 });
 test('the updated desktop build is pinned while unknown versions and changed hashes remain blocked', () => {
   assert.doesNotThrow(() => assertReviewedBuild('7.40.1', '36cc65c5d17811f6bbe90aa0444be3f3f267f3151ea59988411e8f94dba9ff73'));
