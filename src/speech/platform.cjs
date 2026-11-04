@@ -4,16 +4,19 @@ const os = require('node:os');
 const models = require('./models.json');
 
 function createSpeechPlatform({ id = process.platform, arch = process.arch, env = process.env, device = 'auto',
-  home = os.homedir(), fsImpl = fs, model = 'medium' } = {}) {
+  home = os.homedir(), fsImpl = fs, model = 'medium', engine = 'faster-whisper' } = {}) {
   if (!Object.hasOwn(models, model)) throw Error('本机语音模型选择无效。');
   if (!['auto', 'cpu'].includes(device)) throw Error('语音计算设备选择无效。');
+  if (!['faster-whisper', 'custom-whisper'].includes(engine)) throw Error('本机语音引擎选择无效。');
   const windows = id === 'win32' && arch === 'x64';
   const apple = id === 'darwin' && arch === 'arm64';
   const cuda = windows && device !== 'cpu';
+  const custom = engine === 'custom-whisper';
+  if (custom && !cuda) throw Error('自定义 Whisper 引擎仅支持 Windows x64 CUDA');
   const paths = id === 'win32' ? path.win32 : path.posix;
   const profile = Object.freeze({ platform: id, architecture: arch, supported: windows || apple,
-    provider: 'faster-whisper', model, device: cuda ? 'cuda' : 'cpu',
-    computeType: cuda ? 'float16' : 'int8', cpuThreads: 4, offline: true,
+    provider: custom ? 'custom-whisper' : 'faster-whisper', model, device: cuda ? 'cuda' : 'cpu',
+    computeType: custom ? 'float32' : cuda ? 'float16' : 'int8', cpuThreads: 4, offline: true,
     hardwareLabel: cuda ? 'NVIDIA GPU' : apple ? 'Apple Silicon CPU' : windows ? '本机 CPU' : '不支持的平台' });
   function requireSupported() {
     if (!profile.supported) {
@@ -58,16 +61,17 @@ function createSpeechPlatform({ id = process.platform, arch = process.arch, env 
   }
   function environment(root) {
     // Explicit local-execution variables only; never inherit API keys or login tokens.
-    const allowed = windows ? /^(?:PATH|SYSTEMROOT|WINDIR|TEMP|TMP|USERPROFILE|LOCALAPPDATA|APPDATA|HOMEDRIVE|HOMEPATH|CUDA_PATH(?:_V[\d_]+)?)$/i
-      : /^(?:PATH|HOME|TMPDIR|LANG|LC_ALL|LC_CTYPE)$/;
+    const allowed = windows ? /^(?:PATH|SYSTEMROOT|WINDIR|TEMP|TMP|USERPROFILE|LOCALAPPDATA|APPDATA|HOMEDRIVE|HOMEPATH|CUDA_PATH(?:_V[\d_]+)?|NOTION_SWITCH_SPEECH_ENGINE|NOTION_SWITCH_WHISPER_HF)$/i
+      : /^(?:PATH|HOME|TMPDIR|LANG|LC_ALL|LC_CTYPE|NOTION_SWITCH_SPEECH_ENGINE|NOTION_SWITCH_WHISPER_HF)$/;
     const value = { ...Object.fromEntries(Object.entries(env).filter(([key]) => allowed.test(key))),
       PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1',
       HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1', HF_HUB_DISABLE_TELEMETRY: '1' };
     if (cuda) value.CUDA_CACHE_PATH = paths.join(root, 'speech/cuda-cache');
     if (windows && !cuda) value.NOTION_SWITCH_SPEECH_DEVICE = 'cpu';
+    if (custom) value.NOTION_SWITCH_SPEECH_ENGINE = 'custom';
     return value;
   }
   return Object.freeze({ profile, requireSupported, normalizeRuntime, candidates, environment,
-    withModel: next => createSpeechPlatform({ id, arch, env, home, fsImpl, model: next, device }) });
+    withModel: next => createSpeechPlatform({ id, arch, env, home, fsImpl, model: next, device, engine }) });
 }
 module.exports = { createSpeechPlatform };
