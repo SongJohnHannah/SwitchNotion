@@ -4,16 +4,19 @@ const { discover, worker } = require('./discovery.cjs');
 const { createSpeechPlatform } = require('./platform.cjs');
 const { decodeWav, validatePcm } = require('./wav.cjs');
 class SpeechProvider {
-  constructor({ root, runtime, model = runtime?.model || 'medium', platform = createSpeechPlatform({ model }), spawnImpl = spawn, discoverImpl = discover, idleMs = 20000, timeoutMs = 120000 } = {}) {
+  constructor({ root, runtime, model = runtime?.model || 'medium', engine = 'faster-whisper',
+    platform = createSpeechPlatform({ model, engine }), spawnImpl = spawn, discoverImpl = discover, idleMs = 20000, timeoutMs = 120000 } = {}) {
     if (!root || !path.isAbsolute(root)) throw Error('请指定离线语音资源的绝对目录。');
     Object.assign(this, { root, platform, spawnImpl, discoverImpl, idleMs, timeoutMs });
     try { this.runtime = runtime ? platform.normalizeRuntime(runtime) : null; } catch { this.runtime = null; }
     this.child = null; this.current = null; this.sequence = 0; this.queue = Promise.resolve(); this.initializing = null;
     this.checked = false; this.epoch = 0; this.leases = 0; this.idle = null;
+    this.stderrTail = ''; this.lastFailure = '';
   }
   status() {
     return { ...this.platform.profile, protocolVersion: 1, configured: !!this.runtime,
-      ready: this.checked, loaded: !!this.child && this.checked, busy: !!this.current, languages: ['auto', 'zh', 'en'] };
+      ready: this.checked, loaded: !!this.child && this.checked, busy: !!this.current,
+      lastFailure: this.lastFailure, languages: ['auto', 'zh', 'en'] };
   }
   async configure() {
     this.platform.requireSupported();
@@ -28,9 +31,14 @@ class SpeechProvider {
     this.initializing = (async () => {
       const runtime = await this.configure();
       if (epoch !== this.epoch) throw Error('离线转写已停止。');
+      this.stderrTail = '';
       const child = this.spawnImpl(runtime.pythonExecutable, [worker, '--root', this.root], {
-        windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'], env: this.platform.environment(this.root) });
+        windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: this.platform.environment(this.root) });
       this.child = child; let buffer = '';
+      if (child.stderr) {
+        child.stderr.setEncoding('utf8');
+        child.stderr.on('data', value => { this.stderrTail = (this.stderrTail + value).slice(-8192); });
+      }
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', value => {
         buffer += value;
@@ -43,7 +51,7 @@ class SpeechProvider {
           message.ok ? job.finish(null, message.result) : job.finish(Error('本机离线转写失败，请在配置中重新检测。'));
         }
       });
-      const ended = () => { if (this.child === child) { this.child = null; this.checked = false; } if (this.current?.child === child) this.current.finish(Error('离线转写进程已退出。')); };
+      const ended = () => { if (this.child === child) { this.child = null; this.checked = false; } if (this.current?.child === child) this.current.finish(this.exitError()); };
       child.on('error', ended); child.on('exit', ended);
       const configured = await this.exchange(child, 'configure', { protocolVersion: 1, runtime });
       if (configured?.protocolVersion !== 1 || ['provider', 'model', 'platform', 'architecture', 'device', 'computeType']
@@ -54,7 +62,17 @@ class SpeechProvider {
       .finally(() => { this.initializing = null; });
     return this.initializing;
   }
-  fail(child, error) { if (this.current?.child === child) this.current.finish(error); if (this.child === child) { this.child = null; this.checked = false; } child.kill(); }
+  detail() {
+    const lines = this.stderrTail.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    return lines.slice(-2).join(' ').slice(-240);
+  }
+  exitError() {
+    const detail = this.detail();
+    const error = Error('离线转写进程已退出。' + (detail ? ' ' + detail : ''));
+    this.lastFailure = error.message;
+    return error;
+  }
+  fail(child, error) { this.lastFailure = error.message; if (this.current?.child === child) this.current.finish(error); if (this.child === child) { this.child = null; this.checked = false; } child.kill(); }
   exchange(child, type, fields = {}, signal) {
     signal?.throwIfAborted(); const id = ++this.sequence;
     return new Promise((resolve, reject) => {

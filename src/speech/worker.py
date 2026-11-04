@@ -23,7 +23,12 @@ socket.socket.connect = no_network
 socket.socket.connect_ex = no_network
 sys.stdout.reconfigure(encoding='utf-8', errors='strict')
 sys.dont_write_bytecode = True
-from faster_backend import configure as configure_backend, discover as discover_backend
+_engine = os.environ.get('NOTION_SWITCH_SPEECH_ENGINE', 'faster-whisper')
+if _engine == 'custom':
+    sys.path.insert(0, str(Path(__file__).resolve().parent / 'custom'))
+    from custom_backend import configure as configure_backend, discover as discover_backend
+else:
+    from faster_backend import configure as configure_backend, discover as discover_backend
 from recognition import transcribe as recognize
 def send(data):
     print(json.dumps(data, ensure_ascii=False), flush=True)

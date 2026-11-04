@@ -34,9 +34,10 @@ class NativeSpeech {
   warm() {
     if (this.warming) return;
     this.warmError = null;
-    this.warming = Promise.resolve().then(() => this.speech.provider.probe()).catch(() => {
+    this.warming = Promise.resolve().then(() => this.speech.provider.probe()).catch(error => {
       if (this.closed) return;
       this.warmError = '本机转写引擎未能载入，请停止录音并重新检测。';
+      this.log({ type: 'offline-speech-warm-failed', reason: String(error?.message || error).replace(/\s+/g, ' ').slice(0, 300) });
       for (const connection of this.connections) connection.fail();
     }).finally(() => { this.warming = null; });
   }
@@ -56,13 +57,14 @@ class NativeSpeech {
       if (!text.startsWith('4')) { peer.close(); return; }
       let input; try { input = JSON.parse(text.slice(1)); } catch { peer.close(); return; }
       if (typeof input === 'string' && input.startsWith('primus::pong::')) return;
-      session.handle(input).catch(() => {
+      session.handle(input).catch(error => {
+        this.log({ type: 'offline-audio-request-failed', reason: String(error?.message || error).replace(/\s+/g, ' ').slice(0, 300) });
         send({ type: 'response', requestId: String(input?.requestId || ''), status: 'error', result: { message: '本机离线转写失败，录音未转发云端。' } });
         send({ type: 'openai_error', message: '本机离线语音处理失败，请停止并检测本机引擎。' });
       });
     } });
     if (!peer) return;
-    session = new MeetingAudioSession({ provider: this.speech.provider, inputMode: this.speech.inputMode || 'meeting', emit: send,
+    session = new MeetingAudioSession({ provider: this.speech.provider, inputMode: this.speech.inputMode || 'meeting', emit: send, log: this.log,
       recordingFactory: context => this.recordings?.begin({ ...context, userId: ticket.userId }), onActivity: value => {
       if (active === value) return; active = value;
       if (value) this.speech.provider.retain(); else this.speech.provider.release();

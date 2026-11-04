@@ -47,6 +47,30 @@ test('native recording cannot start when an unknown client has no verified stop-
   f.service.lifecycleReady = true; f.service.drainTransportReady = false;
   await assert.rejects(f.service.token(), /录音组件未就绪/);
 });
+test('a crashed transcriber is retried before the recording is marked failed', async () => {
+  const events = [], logs = []; let calls = 0;
+  const provider = { async transcribeDetailed() { calls++; if (calls === 1) throw Error('离线转写进程已退出。 CUDA error'); return { text: '恢复后的文字', context: '' }; } };
+  const session = new sessions.MeetingAudioSession({ provider, emit: value => events.push(value), log: value => logs.push(value), retryDelayMs: 0, crashRetryDelayMs: 0 });
+  await session.handle({ type: '/api/v1/transcriptionInfo', requestId: 'context', rootBlockId: B, spaceId: W });
+  const pcm = Buffer.alloc(16000 * 4); for (let i = 0; i < pcm.length; i += 4) pcm.writeFloatLE(.1, i);
+  await session.handle({ type: '/api/v1/audioData', requestId: 'audio', blockId: B, spaceId: W, base64Audio: pcm.toString('base64') });
+  await session.handle({ type: '/api/v1/drainTranscription', requestId: 'drain' });
+  const complete = events.find(value => value.transcription?.status === 'complete');
+  assert.equal(complete?.transcription.text, '恢复后的文字'); assert.equal(calls, 2); assert.equal(session.failure, null);
+  assert.ok(logs.some(value => value.type === 'offline-transcription-retry')); session.close();
+});
+test('a transcriber that keeps crashing ends the recording with one explicit error', async () => {
+  const events = [], logs = []; let calls = 0;
+  const provider = { async transcribeDetailed() { calls++; throw Error('离线转写进程已退出。'); } };
+  const session = new sessions.MeetingAudioSession({ provider, emit: value => events.push(value), log: value => logs.push(value), retryDelayMs: 0, crashRetryDelayMs: 0 });
+  await session.handle({ type: '/api/v1/transcriptionInfo', requestId: 'context', rootBlockId: B, spaceId: W });
+  const pcm = Buffer.alloc(16000 * 4); for (let i = 0; i < pcm.length; i += 4) pcm.writeFloatLE(.1, i);
+  await session.handle({ type: '/api/v1/audioData', requestId: 'audio', blockId: B, spaceId: W, base64Audio: pcm.toString('base64') });
+  await assert.rejects(session.handle({ type: '/api/v1/drainTranscription', requestId: 'drain' }), /转写失败/);
+  assert.equal(calls, 2);
+  assert.equal(events.filter(value => value.type === 'openai_error').length, 1);
+  assert.ok(logs.some(value => value.type === 'offline-transcription-failed')); session.close();
+});
 test('background model failure is explicit and releases the native recording rather than leaving a false running state', async t => {
   const f = fixture(t); let fail;
   f.service.speech.provider.probe = () => new Promise((_resolve, reject) => { fail = reject; });

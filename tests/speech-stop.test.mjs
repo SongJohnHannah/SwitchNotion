@@ -144,6 +144,18 @@ test('Notion 7.41.0 connection module is accepted unchanged', connection7410 ? {
   new vm.Script(adapted);
 });
 
+const recording7410b = notional('89269-9bcd893cc39ed546.js');
+
+test('Notion 7.41.0 alternate recorder minifier rename is accepted', recording7410b ? {} : { skip: 'Alternate 7.41.0 recording asset unavailable' }, () => {
+  const asset = '89269-9bcd893cc39ed546.js', adapted = compatibility.adaptClient(recording7410b, asset, { localSpeechEnabled: true });
+  assert.match(adapted, /transcriptionDrainEnabled:!0/);
+  assert.match(adapted, /static stopDictationAfterLocalFlush\(e\)/);
+  assert.match(adapted, /transport:i\(697264\)/);
+  new vm.Script(adapted);
+  assert.equal(compatibility.adaptClient(recording7410b, asset), recording7410b);
+  assert.throws(() => compatibility.adaptClient(recording7410b.replace('static stopDictation(e){', 'static stopDictation(e){throw Error("changed");'), asset, { localSpeechEnabled: true }));
+});
+
 test('Notion 7.41.0 recorder drains through transport 697264 and the new store binding', recording7410 ? {} : { skip: 'Official 7.41.0 recording asset unavailable' }, async () => {
   const asset = '89269-150edb97f2301594.js', adapted = compatibility.adaptClient(recording7410, asset, { localSpeechEnabled: true });
   assert.match(adapted, /transcriptionDrainEnabled:!0/);

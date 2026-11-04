@@ -14,17 +14,24 @@ class SpeechSettings {
     this.autoAttachAudio = saved.autoAttachAudio !== false;
     this.inputMode = ['microphone', 'system', 'meeting'].includes(saved.inputMode) ? saved.inputMode : 'meeting';
     const model = Object.hasOwn(models, saved.model) ? saved.model : 'medium';
-    this.provider = provider || new SpeechProvider({ root, runtime: saved.runtime, model });
+    const engine = process.platform === 'win32' && saved.engine === 'custom-whisper' ? 'custom-whisper' : 'faster-whisper';
+    const runtime = engine === 'custom-whisper' && saved.runtime && typeof saved.runtime === 'object'
+      ? { ...saved.runtime, device: 'cuda', computeType: 'float32', dllDirectory: null, dllDirectories: [] }
+      : saved.runtime;
+    this.engine = engine;
+    this.provider = provider || new SpeechProvider({ root, runtime, model, engine });
     this.progress = null; this.capture = new RecordingTest({ provider: this.provider, isBusy });
   }
   get recording() { return this.capture.active; }
-  status() { return { ...this.provider.status(), enabled: this.enabled, preparing: this.preparing,
-    lastError: this.lastError, progress: this.progress, recording: this.recording, modelName: models[this.provider.status().model || 'medium']?.name, engineName: 'faster-whisper',
+  status() { const provider = this.provider.status(); return { ...provider, enabled: this.enabled, preparing: this.preparing,
+    lastError: this.lastError, progress: this.progress, recording: this.recording, modelName: models[provider.model || 'medium']?.name,
+    engineName: provider.provider === 'custom-whisper' ? 'custom-whisper' : 'faster-whisper',
     summaryUsesNetwork: true, autoSummary: this.autoSummary, autoAttachAudio: this.autoAttachAudio, audioImports: this.audioImports?.status(), inputMode: this.inputMode, nativeMeetingAdapter: !!this.native?.status().available }; }
   save() {
     const { provider, model, platform, architecture, device, computeType } = this.provider.status();
     fs.writeFileSync(this.file, JSON.stringify({ version: 2, provider, model, platform, architecture,
-      device, computeType, enabled: this.enabled, autoSummary: this.autoSummary, autoAttachAudio: this.autoAttachAudio, inputMode: this.inputMode, runtime: this.provider.runtime }, null, 2) + '\n', { mode: 0o600, flush: true });
+      device, computeType, engine: provider === 'custom-whisper' ? 'custom-whisper' : 'faster-whisper',
+      enabled: this.enabled, autoSummary: this.autoSummary, autoAttachAudio: this.autoAttachAudio, inputMode: this.inputMode, runtime: this.provider.runtime }, null, 2) + '\n', { mode: 0o600, flush: true });
   }
   async prepare() {
     if (this.preparing || this.provider.status().busy || this.provider.leases) throw Error('离线引擎正在工作，请稍后重试。');

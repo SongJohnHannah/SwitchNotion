@@ -9,7 +9,8 @@ const reviewed = {
   '89269': {
     '331787': { hashes: ['ab86f11d59a12b5741999825de7cd33993d762d8a23f13a51a93ec8e6e3ddfc2',
       'bca0ae2d158c332bb481a7756f2ac054ec4bf57bfea896ba93cf00fdbdde8dfc'], gateModuleId: 218744, transportModuleId: 241978 },
-    '372201': { hashes: ['2d05e78d890a255b428410377d8a1681f908126efaef3185b36f7c360c194d56'], gateModuleId: 211589, transportModuleId: 697264 }
+    '372201': { hashes: ['2d05e78d890a255b428410377d8a1681f908126efaef3185b36f7c360c194d56',
+      'd710d066887056c7ed09f3e303774ab2d227bbb4955c2ab6658bf96fe5e72a1d'], gateModuleId: 211589, transportModuleId: 697264 }
   },
   '17048': {
     '241978': { hashes: ['ac822dea14dcffa0a1c3ae952afb9c8038ea7feb87f15d1a4d406c987e49071e'] },

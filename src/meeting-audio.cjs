@@ -3,11 +3,13 @@ const { uuid } = require('./native-context.cjs');
 const { PcmSegmenter } = require('./speech/segmentation.cjs');
 const FRAME_LIMIT = 16000 * 4 * 2;
 const QUEUE_LIMIT = 16000 * 4 * 600;
+const describe = error => String(error?.message || error).replace(/\s+/g, ' ').slice(0, 300);
 class MeetingAudioSession {
-  constructor({ root, provider, emit, inputMode = 'meeting', authorize = async () => {}, recordingFactory, onActivity = () => {}, onTranscript = () => {} }) {
+  constructor({ root, provider, emit, inputMode = 'meeting', authorize = async () => {}, recordingFactory, onActivity = () => {}, onTranscript = () => {}, log = () => {}, retryDelayMs = 800, crashRetryDelayMs = 10000 }) {
     if (!['microphone', 'system', 'meeting'].includes(inputMode)) throw Error('录音来源设置无效。');
     this.inputMode = inputMode;
     this.root = root; this.provider = provider; this.emit = emit; this.authorize = authorize; this.recordingFactory = recordingFactory; this.onActivity = onActivity; this.onTranscript = onTranscript;
+    this.log = log; this.retryDelayMs = retryDelayMs; this.crashRetryDelayMs = crashRetryDelayMs;
     this.id = randomUUID(); this.context = null; this.sources = new Map(); this.seen = new Map(); this.jobs = Promise.resolve(); this.queuedBytes = 0; this.closed = false; this.failure = null; this.abort = new AbortController(); this.drained = false;
   }
   settings() {
@@ -77,12 +79,25 @@ class MeetingAudioSession {
       // Notion's preferred dictation language can default to English even
       // when the speaker is Chinese. Native meeting input is always bilingual.
       const options = { pcm, language: 'auto', context: state.context || '', signal: this.abort.signal };
-      const result = this.provider.transcribeDetailed ? await this.provider.transcribeDetailed(options) : { text: await this.provider.transcribe(options) };
+      const run = () => this.provider.transcribeDetailed
+        ? this.provider.transcribeDetailed(options)
+        : this.provider.transcribe(options).then(text => ({ text, context: '' }));
+      let result, lastError;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try { result = await run(); lastError = null; break; }
+        catch (error) {
+          lastError = error;
+          this.log({ type: 'offline-transcription-retry', attempt: attempt + 1, device: this.provider.status?.().device, reason: describe(error) });
+          if (this.closed) return;
+          if (attempt === 0) await new Promise(resolve => setTimeout(resolve, /进程已退出/.test(describe(error)) ? this.crashRetryDelayMs : this.retryDelayMs));
+        }
+      }
+      if (lastError) throw lastError;
       if (this.closed) return;
       const text = result.text; state.context = typeof result.context === 'string' ? result.context.slice(-120) : '';
       if (text.trim()) this.onTranscript({ ...this.context, id, text, source, start, duration });
       this.emit(frame(text.trim() ? 'complete' : 'ignore', text));
-    }).catch(() => { this.failure = Error('本机语音转写失败，请停止录音后在配置中检测引擎。'); this.onActivity(false); this.emit({ type: 'openai_error', message: this.failure.message }); }).finally(() => { this.queuedBytes -= pcm.length; });
+    }).catch(error => { this.failure = Error('本机语音转写失败，请停止录音后在配置中检测引擎。'); this.log({ type: 'offline-transcription-failed', reason: describe(error) }); this.onActivity(false); this.emit({ type: 'openai_error', message: this.failure.message }); }).finally(() => { this.queuedBytes -= pcm.length; });
   }
   close() { this.closed = true; this.abort.abort(); this.recording?.abort(); this.sources.clear(); this.onActivity(false); }
 }

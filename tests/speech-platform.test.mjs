@@ -22,6 +22,16 @@ test('Windows GPU and M1 CPU profiles share a multilingual offline interface; In
   }
 });
 
+test('custom Whisper is Windows x64 CUDA only and selects the custom worker engine', () => {
+  const custom = createSpeechPlatform({ id: 'win32', arch: 'x64', engine: 'custom-whisper', env: {}, home: 'C:/Users/test' });
+  assert.equal(custom.profile.provider, 'custom-whisper');
+  assert.equal(custom.profile.computeType, 'float32');
+  assert.equal(custom.profile.device, 'cuda');
+  assert.equal(custom.environment('C:/state').NOTION_SWITCH_SPEECH_ENGINE, 'custom');
+  assert.throws(() => createSpeechPlatform({ id: 'darwin', arch: 'arm64', engine: 'custom-whisper' }));
+  assert.throws(() => createSpeechPlatform({ id: 'win32', arch: 'x64', device: 'cpu', engine: 'custom-whisper' }));
+});
+
 test('M1 discovery uses native macOS paths and ignores copied Windows settings and credentials', () => {
   const p = mac({ env: { PATH: '/opt/homebrew/bin:/usr/bin', HOME: '/Users/test', DEEPSEEK_API_KEY: 'fixture',
     NOTION_TOKEN: 'fixture', CUDA_PATH: 'C:\\cuda', PYTHONPATH: '/untrusted' }, fsImpl: {
