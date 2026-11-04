@@ -30,10 +30,38 @@ test('mediaocr extracts frame text while the local model only describes the pict
   try {
     assert.equal(media.localOcr, true);
     assert.equal(await media.frameText(frame), '第一行\n第二行');
+    assert.equal(await media.frameText(frame, undefined, { recognize: async () => ({ pages: [{ text: '会话文字' }] }) }), '会话文字');
     assert.deepEqual(calls, [{ file: frame, signal: false }]);
     const unavailable = new CollectionMedia({ ocr: { recognize: async () => null } });
     await assert.rejects(unavailable.frameText(frame), /尚未准备/);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+test('one OCR session is shared across vision runs until it is closed', async () => {
+  let opens = 0, closes = 0;
+  const session = { recognize: async () => ({ pages: [{ text: '文字' }] }), close: async () => { closes++; } };
+  const media = new CollectionMedia({ ocr: { openSession: async () => { opens++; return session; }, recognize: async () => ({ pages: [{ text: '文字' }] }) } });
+  const [first, second] = await Promise.all([media.ensureOcrSession(), media.ensureOcrSession()]);
+  assert.equal(first, session); assert.equal(second, session); assert.equal(opens, 1);
+  assert.equal(await media.ensureOcrSession(), session); assert.equal(opens, 1);
+  await media.closeOcrSession(); assert.equal(closes, 1);
+  await media.closeOcrSession(); assert.equal(closes, 1);
+  assert.equal(await media.ensureOcrSession(), session); assert.equal(opens, 2);
+  await media.closeOcrSession();
+});
+test('mediaocr reuses one client session for every frame', async () => {
+  const { MediaOcr } = require('../src/mediaocr.cjs');
+  const events = [], requests = [];
+  const client = { start: async () => events.push('start'), tools: async () => [{ name: 'ocr_image', inputSchema: { properties: { image_paths: {} } } }],
+    request: async (_method, params) => { requests.push(params); return { structuredContent: { errcode: 0, text: '帧文字', confidence: .9 } }; },
+    child: null, close: () => events.push('close') };
+  const ocr = new MediaOcr({ root: '/fixture', clientFactory: () => client });
+  ocr.available = () => true;
+  const session = await ocr.openSession();
+  assert.equal((await session.recognize('/a.jpg')).pages[0].text, '帧文字');
+  assert.equal((await session.recognize('/b.jpg')).pages[0].text, '帧文字');
+  await session.close(); await session.close();
+  assert.deepEqual(events, ['start', 'close']); assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0].arguments, { image_paths: ['/a.jpg'], compact: true });
 });
 test('Ollama starts on the fallback port when the default port is unavailable', async () => {
   const { OllamaService } = require('../src/collection/ollama.cjs');

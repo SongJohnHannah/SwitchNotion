@@ -8,7 +8,7 @@ function clock(value) { const match = String(value).match(/(\d+):(\d+):(\d+(?:\.
 const inputArgs = file => ['-protocol_whitelist', 'file,pipe,crypto,data', '-format_whitelist', 'mov,matroska,webm,avi,asf,mpeg,mpegts,aac,ac3,aiff,wav,ogg,flac,mp3,gif,apng,png_pipe,jpeg_pipe,webp_pipe,bmp_pipe,tiff_pipe,image2,image2pipe,hevc,h264', '-i', file];
 const localVisionProfile = Object.freeze({ endpoint: 'http://127.0.0.1:11434/api/chat', model: 'qwen3.8-27b-vl:latest' });
 class CollectionMedia {
-  constructor({ root, browser, binaries, speech, provider, ollama, ocr, fetchImpl = fetch }) { Object.assign(this, { root, browser, binaries, speech, provider, ollama, ocr, fetchImpl }); this.localVisionQueue = Promise.resolve(); }
+  constructor({ root, browser, binaries, speech, provider, ollama, ocr, fetchImpl = fetch }) { Object.assign(this, { root, browser, binaries, speech, provider, ollama, ocr, fetchImpl }); this.localVisionQueue = Promise.resolve(); this.ocrSession = null; this.ocrStarting = null; }
   get localOcr() { return !!this.ocr; }
   async importLocal(source, directory, { signal, progress = () => {} } = {}) {
     const { checkLocal } = require('./local-media.cjs'); checkLocal(source); signal?.throwIfAborted();
@@ -184,6 +184,11 @@ class CollectionMedia {
     const count = Math.max(1, Math.min(60, Math.ceil((asset.duration || 0) / 30)));
     const times = asset.kind === 'video' ? Array.from({ length: count }, (_, i) => Math.max(0, Math.min(asset.duration - .05, i * asset.duration / count))) : [0];
     const descriptions = [], batchSize = engine === 'local' ? 2 : 4, maxSide = engine === 'local' ? 1024 : 1600;
+    let ocrSession = null;
+    if (engine === 'local' && this.localOcr) {
+      if (!this.ocrSession) progress('正在启动本机文字识别（mediaocr）…');
+      ocrSession = await this.ensureOcrSession(signal);
+    }
     for (let i = 0; i < times.length; i += batchSize) {
       progress(`${engine === 'local' ? '本地千问' : 'DeepSeek'} 正在识别${asset.kind === 'video' ? '视频关键帧' : '图片'}：${i + 1} / ${times.length}`);
       const frames = [];
@@ -201,7 +206,7 @@ class CollectionMedia {
         const texts = [];
         for (let k = 0; k < frames.length; k++) {
           progress(`mediaocr 正在识别关键帧文字：${i + k + 1} / ${times.length}`);
-          texts.push(await this.frameText(frames[k].frame, signal));
+          texts.push(await this.frameText(frames[k].frame, signal, ocrSession));
         }
         const description = await this.localVision(frames, signal, progress);
         const lines = frames.map((item, index) => `视频时间 ${item.time.toFixed(1)} 秒 · 文字：${texts[index] || '未识别到文字'}`);
@@ -217,12 +222,22 @@ class CollectionMedia {
       { role: 'system', content: '你负责图片文字提取和画面分析。只报告可以在图片中观察到的信息，不把推断当作事实，不修改逐字稿。' }, { role: 'user', content }], signal })) text += delta;
     return text.trim();
   }
-  async frameText(frame, signal) {
+  async frameText(frame, signal, session) {
     try {
-      const result = await this.ocr.recognize(frame, { signal });
+      const result = await (session || this.ocr).recognize(frame, { signal });
       if (!result) throw Error('本机 mediaocr 尚未准备，请先在设置中准备 OCR 组件。');
       return result.pages.map(page => page.text).join('\n').trim();
     } catch (error) { signal?.throwIfAborted(); throw Error('本地文字识别未完成：' + error.message.replace(/^Notion 附件 OCR mediaocr /, '')); }
+  }
+  async ensureOcrSession(signal) {
+    if (this.ocrSession) return this.ocrSession;
+    if (!this.localOcr || typeof this.ocr?.openSession !== 'function') return null;
+    if (!this.ocrStarting) this.ocrStarting = this.ocr.openSession({ signal }).then(session => { if (session) this.ocrSession = session; return session; }).finally(() => { this.ocrStarting = null; });
+    return this.ocrStarting;
+  }
+  async closeOcrSession() {
+    const session = this.ocrSession; this.ocrSession = null;
+    if (session) await session.close().catch(() => {});
   }
   async localVision(frames, signal, progress = () => {}) {
     let target = localVisionProfile.endpoint;
