@@ -19,6 +19,7 @@ test('embedded credential strings stop packaging without printing the credential
   const f = fixture(t), key = 'sk-' + 'A'.repeat(32), file = f.write('src/example.cjs', `const key='${key}'`);
   assert.throws(() => assertDistributionFiles(f.root, [file]), error => error.message.includes('停止打包') && !error.message.includes(key));
 });
+
 test('the actual locally configured key is checked in UTF-8 and UTF-16 without entering the package', t => {
   const f = fixture(t), key = 'fixture-private-credential';
   f.write('.notion-switch/provider.local.json', JSON.stringify({ apiKeyFile: 'custom-key.txt' })); f.write('.notion-switch/custom-key.txt', key);
@@ -28,11 +29,4 @@ test('the actual locally configured key is checked in UTF-8 and UTF-16 without e
     assert.throws(() => assertDistributionFiles(f.root, [file], keys), /停止打包/);
   }
   assert.doesNotThrow(() => assertDistributionFiles(f.root, [f.write('src/clean.cjs', 'module.exports={};')], keys));
-});
-
-test('a configured Brave search key is excluded and scanned even when it has no DeepSeek key prefix', t => {
-  const f = fixture(t), key = 'synthetic-brave-private-value';
-  f.write('.notion-switch/web-sources.local.json', JSON.stringify({ version: 1, enabled: true, braveApiKey: key }));
-  const keys = localDeepSeekKeys(f.root, {}); assert.deepEqual(keys, [key]);
-  assert.throws(() => assertDistributionFiles(f.root, [f.write('src/accidental.cjs', 'value=' + key)], keys), error => /停止打包/.test(error.message) && !error.message.includes(key));
 });

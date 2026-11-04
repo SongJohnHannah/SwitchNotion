@@ -12,7 +12,7 @@
 4. 双击 **NotionSwitch 配置.exe**，填写 DeepSeek 和需要访问的 Notion 工作区连接密钥。Notion 登录页中可从本机 Notion 同步登录；先确认页面已同步并退出原版 Notion。
 5. 从隔离原型右下角的原生 AI 入口使用 DeepSeek。
 
-可选联网来源：在配置中心 **DeepSeek → 联网搜索与网页阅读** 启用并保存。读取公开网址无需额外密钥；网页搜索需填写独立的 Brave Search API Key。该功能默认关闭，搜索词发送到 Brave，读到的正文作为资料发送给 DeepSeek。覆盖侧栏个人 Agent，以及原生研究模式明确选择“仅网页”的分支；包含 Notion 页面/数据库或全部来源的研究仍等待正文接入授权。详见 [联网来源说明](docs/WEB-SOURCES-INTERFACE.md) 和 [研究模式范围](docs/NATIVE-RESEARCH-INTERFACE.md)。
+可选联网来源：在配置中心 **DeepSeek → 联网搜索与网页阅读** 启用并保存。网页阅读只需打开总开关；联网搜索默认关闭，打开后复用已保存的 DeepSeek 密钥，不单独保存搜索密钥。每轮对话由模型根据问题自行决定是否搜索。搜索词发送到 DeepSeek，读到的正文作为资料发送给 DeepSeek。覆盖侧栏个人 Agent，以及原生研究模式明确选择“仅网页”的分支；包含 Notion 页面/数据库或全部来源的研究仍等待正文接入授权。详见 [联网来源说明](docs/WEB-SOURCES-INTERFACE.md) 和 [研究模式范围](docs/NATIVE-RESEARCH-INTERFACE.md)。
 
 迁移包不包含 Notion 客户端，也不包含这台电脑的 API Key、登录资料或聊天历史。新电脑需要重新配置密钥和登录。Notion 中已保存的页面仍在原来的账号和工作区中。
 

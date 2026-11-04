@@ -90,7 +90,7 @@ npm run check:secrets
 | 独立公式编辑器 AI 入口 | 已接入生成/修复预览、取消和错误说明；两种包内链路及真实 DeepSeek 合成公式通过，原生控件及完整编译效果仍需逐项验收 |
 | Build with AI 数据库创建向导 | onboarding 入口已接通六种布局、桌面路由、预览、原生确认/拒绝、本地历史和重启核对；多视图字段/排序绑定、空分组及六视图真实模型/包内合成链路通过。页面/Home 独立布局向导、其余字段及真实服务器/原生控件仍待完成。[实现记录](NATIVE-DATABASE-BUILD-INTERFACE.md) |
 | Skills、Personalize 指令页与记忆 | 已核对个人设置、默认/分组技能和显式引用协议，完成按账号/工作区检查的纯选择内核；14 项合成及两种暂存包检查通过。真实正文读取和模型接入补丁被自动审批拒绝，等待新增授权；尚未运行时接线，记忆等仍待实现。[范围与证据](NATIVE-INSTRUCTIONS-INTERFACE.md) |
-| Web search 与公开网页阅读 | 侧栏个人 Agent 已接入默认关闭的联网设置、Brave Search 和公开网页正文读取；含分页、来源链接、停止、历史续问与只读协作。实际桌面路由/两平台包内及真实模型合成链路通过，真实公开 IANA 页读取通过；真实 Brave 搜索、原生菜单/管理员策略与控件仍待验收。[接口与边界](WEB-SOURCES-INTERFACE.md) |
+| Web search 与公开网页阅读 | 侧栏个人 Agent 已接入默认关闭的联网设置、DeepSeek 搜索和公开网页正文读取；含分页、来源链接、停止、历史续问与只读协作。实际桌面路由/两平台包内及真实模型合成链路通过，真实公开 IANA 页读取通过；真实 DeepSeek 搜索、原生菜单/管理员策略与控件仍待验收。[接口与边界](WEB-SOURCES-INTERFACE.md) |
 | Research Mode | 已接通两种配置的明确“仅网页”报告流、本地事务/历史、停止、超时和重启续问；实际桌面路由、两平台暂存包及真实 DeepSeek 新合成网页验收通过。工作区/混合来源正文接入被自动审批拒绝、等待授权；原生窗口与管理员策略仍待完成。[范围与证据](NATIVE-RESEARCH-INTERFACE.md) |
 | Web Browser | 未接入交互式浏览器操作；公开静态网页阅读与只读协作不能替代此入口。[官方浏览器说明](https://www.notion.com/help/turn-on-web-browser-for-notion-agent) |
 | AI Connectors 与跨应用 Enterprise Search | 未接入 Slack、Drive、GitHub 等原生连接器索引；当前只搜索配置的 Notion 连接已授权页面 |

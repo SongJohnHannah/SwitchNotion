@@ -14,9 +14,9 @@ const { parseDocument } = require('../src/web-parser.cjs');
 const { SettingsService } = require('../src/settings-service.cjs');
 const id = n => 'ad00aa00-aaaa-4aaa-8aaa-' + String(n).padStart(12, '0');
 const content = [{ type: 'text', text: '请核对 https://example.com/article 的公开内容。' }];
-function fixture(t, fetchPublic) {
+function fixture(t, fetchPublic, options = {}) {
   const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-web-'));
-  const sources = new WebSources({ root, fetchPublic, now: () => 1793155200000 });
+  const sources = new WebSources({ root, fetchPublic, now: () => 1793155200000, ...options });
   t.after(() => { sources.close(); assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
   return { root, sources, open: extra => sources.open({ userId: id(1), spaceId: id(2), content, ...extra }) };
 }
@@ -56,15 +56,14 @@ test('DNS addresses are validated and pinned and every redirect is checked befor
   await assert.rejects(mixed('https://example.com/'), /内网|本机/); assert.equal(connected, 0);
 });
 
-test('redirect loops and credential headers cannot be used to send the search key to another host', async () => {
+test('redirect loops and credential headers cannot be used to send a key to another host', async () => {
   const fetched = [], fetchPublic = createPublicFetcher({ lookup: async () => [{ address: '8.8.8.8', family: 4 }], transport: async (url, options) => {
     fetched.push(options.headers); return { status: 302, headers: { location: url.href } };
   } });
   await assert.rejects(fetchPublic('https://example.com/'), /重复跳转/);
   await assert.rejects(fetchPublic('https://example.com/', { headers: { cookie: 'must-not-send' } }), /请求头/);
-  await assert.rejects(fetchPublic('https://example.com/', { headers: { 'x-subscription-token': 'synthetic-key' }, redirect: false }), /请求头/);
-  await assert.rejects(fetchPublic('https://api.search.brave.com/', { headers: { 'x-subscription-token': 'synthetic-key' }, redirect: false }), /HTTP 302/);
-  assert.equal(fetched.length, 2); assert.ok(fetched.every(value => !value.cookie && !value.authorization));
+  await assert.rejects(fetchPublic('https://api.deepseek.com/', { headers: { authorization: 'Bearer synthetic-key' } }), /请求头/);
+  assert.equal(fetched.length, 1); assert.ok(fetched.every(value => !value.cookie && !value.authorization));
 });
 
 test('stopping while DNS is pending prevents the transport from starting', async () => {
@@ -126,24 +125,28 @@ test('only current user URLs and rich-text links are explicit; ordinary embedded
   await assert.rejects(session.execute('read_web_page', { url: 'https://example.com/article', headers: { cookie: 'secret' } }), /范围/); assert.equal(fetches, 0);
 });
 
-test('search results remain snippets, preserve source links, use real pagination flags and authorize later body reads', async t => {
-  const calls = [], f = fixture(t, async (url, options) => {
-    calls.push({ url, options });
-    if (url.startsWith('https://api.search.brave.com/')) return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ query: { more_results_available: true }, web: { results: [
-      { title: '<b>合成文章</b>', description: '这只是<b>搜索摘要</b>', url: 'https://public.example/article#part' },
-      { title: 'duplicate', description: 'same', url: 'https://public.example/article' }, { title: 'blocked', url: 'http://127.0.0.1/' }
-    ] } })) };
-    return { ...html('实际合成正文'), url };
+test('search stays opt-in, uses the shared DeepSeek key and keeps results as snippets', async t => {
+  const calls = [], rows = Array.from({ length: 12 }, (_, index) => ({ title: '<b>合成文章 ' + index + '</b>', summary: '这是<b>摘要</b> ' + index, url: 'https://public.example/a' + index, date: '2026-10-27T00:00:00Z' }));
+  rows.push({ title: 'duplicate', summary: 'same', url: 'https://public.example/a0' }, { title: 'blocked', url: 'http://127.0.0.1/' });
+  const f = fixture(t, async url => ({ ...html('实际合成正文'), url }), {
+    deepseekKey: () => 'synthetic-deepseek-key',
+    fetchJson: async (url, options) => { calls.push({ url, options }); return { status: 200, json: async () => ({ results: rows }) }; }
   });
-  f.sources.save({ enabled: 'enabled', apiKey: 'synthetic-brave-key' }); const session = await f.open();
+  f.sources.save({ enabled: 'enabled' }); let session = await f.open();
+  assert.deepEqual(session.definitions.map(value => value.function.name), ['read_web_page']);
+  f.sources.save({ enabled: 'enabled', searchEnabled: 'enabled' }); session = await f.open();
+  assert.deepEqual(session.definitions.map(value => value.function.name), ['search_web', 'read_web_page']);
   const result = await session.execute('search_web', { query: '合成公开资料', freshness: 'week' });
-  assert.equal(result.results.length, 1); assert.equal(result.skipped_results, 1); assert.equal(result.results[0].snippet, '这只是搜索摘要');
-  assert.equal(result.results[0].body_available, false); assert.equal(result.has_more, true); assert.equal(result.next_offset, 1);
-  assert.equal(new URL(calls[0].url).searchParams.get('freshness'), 'pw'); assert.equal(calls[0].options.redirect, false);
-  assert.equal(calls[0].options.headers['x-subscription-token'], 'synthetic-brave-key');
+  assert.equal(result.results.length, 10); assert.equal(result.skipped_results, 1); assert.equal(result.results[0].snippet, '这是摘要 0');
+  assert.equal(result.results[0].body_available, false); assert.equal(result.results[0].published_hint, '2026-10-27T00:00:00Z');
+  assert.equal(result.has_more, true); assert.equal(result.next_offset, 1);
+  assert.equal(calls[0].url, 'https://api.deepseek.com/v1/tools/search'); assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.headers.authorization, 'Bearer synthetic-deepseek-key'); assert.equal(calls[0].options.headers['content-type'], 'application/json');
+  const body = JSON.parse(calls[0].options.body);
+  assert.match(body.query, /^合成公开资料 after:\d{4}-\d{2}-\d{2}$/); assert.equal(body.count, 50); assert.equal(body.need_content, false);
   const page = await session.execute('read_web_page', { url: result.results[0].url }); assert.equal(page.text, '实际合成正文'); assert.equal(page.complete, true);
-  assert.equal(calls[1].options.headers, undefined);
-  const last = await session.execute('search_web', { query: '合成公开资料', offset: 9 }); assert.equal(last.has_more, false); assert.equal(last.incomplete, true);
+  const last = await session.execute('search_web', { query: '合成公开资料', offset: 1 });
+  assert.equal(last.results.length, 2); assert.equal(last.has_more, false); assert.equal(last.next_offset, null);
 });
 
 test('long pages use one bounded snapshot and cannot claim completion after skipping a range', async t => {
@@ -168,19 +171,24 @@ test('concurrent reads and redirect aliases keep one consistent page snapshot fo
 test('overlong bodies, unsupported formats, malformed search output and HTTP errors are not turned into completed sources', async t => {
   const f = fixture(t, async () => html('长'.repeat(120001))); f.sources.save({ enabled: 'enabled' }); const session = await f.open();
   const result = await session.execute('read_web_page', { url: 'https://example.com/article', limit: 16000 }); assert.equal(result.source_truncated, true); assert.equal(result.complete, false);
-  const bad = fixture(t, async () => ({ body: Buffer.from('upstream private body must not appear'), headers: { 'content-type': 'application/json' } }));
-  bad.sources.save({ enabled: 'enabled', apiKey: 'synthetic-brave-key' }); const other = await bad.open();
+  const bad = fixture(t, async () => ({}), { deepseekKey: () => 'synthetic-deepseek-key',
+    fetchJson: async () => ({ status: 200, json: async () => ({ results: 'upstream private body must not appear' }) }) });
+  bad.sources.save({ enabled: 'enabled', searchEnabled: 'enabled' }); const other = await bad.open();
   await assert.rejects(other.execute('search_web', { query: 'synthetic' }), error => !error.message.includes('upstream private body'));
   await assert.rejects(other.execute('search_web', { query: 'synthetic', offset: -1 }), /分页/);
+  const failing = fixture(t, async () => ({}), { deepseekKey: () => 'synthetic-deepseek-key', fetchJson: async () => ({ status: 500, json: async () => ({}) }) });
+  failing.sources.save({ enabled: 'enabled', searchEnabled: 'enabled' });
+  await assert.rejects((await failing.open()).execute('search_web', { query: 'synthetic' }), /HTTP 500/);
 });
 
-test('settings changes cancel in-flight reads and old sessions cannot keep using a removed search key', async t => {
+test('settings changes cancel in-flight reads and old sessions cannot keep using removed tools', async t => {
   let release; const pending = new Promise(resolve => { release = resolve; });
   const f = fixture(t, async (_url, { signal }) => { await pending; signal.throwIfAborted(); return html('不应进入模型'); });
-  f.sources.save({ enabled: 'enabled', apiKey: 'synthetic-brave-key' }); const session = await f.open();
+  f.sources.save({ enabled: 'enabled' }); const session = await f.open();
   const read = session.execute('read_web_page', { url: 'https://example.com/article' });
-  f.sources.save({ enabled: 'disabled', forgetKey: 'enabled' }); assert.equal(session.signal.aborted, true); release();
-  await assert.rejects(read, /设置已改变/); assert.equal(f.sources.state().keyConfigured, false);
+  f.sources.save({ enabled: 'disabled' }); assert.equal(session.signal.aborted, true); release();
+  await assert.rejects(read, /设置已改变/);
+  f.sources.save({ enabled: 'enabled', searchEnabled: 'enabled' });
   await assert.rejects(session.execute('search_web', { query: 'synthetic' }), /设置已改变/);
 });
 
@@ -194,13 +202,18 @@ test('account/workspace sessions keep separate explicit URL catalogs and close r
   first.close(); assert.equal(f.sources.sessions.size, 1); await assert.rejects(first.execute('read_web_page', { url: 'https://example.com/article' }));
 });
 
-test('settings IPC methods keep search keys private, preserve an empty key field and test only a fixed synthetic query', async t => {
-  const calls = [], f = fixture(t, async (url, options) => { calls.push({ url, options }); return { body: Buffer.from('{"query":{"more_results_available":false}}') }; });
+test('settings IPC methods keep the shared DeepSeek key private, preserve the search switch and test only a fixed synthetic query', async t => {
+  const calls = [], f = fixture(t, async () => { throw Error('unexpected page read'); }, { deepseekKey: () => 'synthetic-deepseek-key',
+    fetchJson: async (url, options) => { calls.push({ url, options }); return { status: 200, json: async () => ({ results: [] }) }; } });
   const service = new SettingsService({ root: f.root, webSources: f.sources });
-  let result = await service.request('web.save', { enabled: 'enabled', apiKey: 'synthetic-brave-key' }); assert.equal(result.ok, true);
-  result = await service.request('web.save', { enabled: 'enabled', apiKey: '' }); assert.equal(result.result.keyConfigured, true);
-  assert.ok(!JSON.stringify(await service.request('state')).includes('synthetic-brave-key')); assert.equal(calls.length, 0);
-  assert.equal((await service.request('web.test', {})).ok, true); assert.match(calls[0].url, /NotionSwitch%20connection%20test/);
+  let result = await service.request('web.save', { enabled: 'enabled', searchEnabled: 'enabled' }); assert.equal(result.ok, true);
+  assert.equal(result.result.searchEnabled, true);
+  result = await service.request('web.save', { enabled: 'enabled' }); assert.equal(result.result.searchEnabled, true);
+  assert.ok(!JSON.stringify(await service.request('state')).includes('synthetic-deepseek-key')); assert.equal(calls.length, 0);
+  assert.equal((await service.request('web.test', {})).ok, true);
+  assert.equal(calls[0].url, 'https://api.deepseek.com/v1/tools/search');
+  assert.equal(calls[0].options.headers.authorization, 'Bearer synthetic-deepseek-key');
+  assert.equal(JSON.parse(calls[0].options.body).query, 'NotionSwitch connection test');
   assert.equal((await service.request('web.save', { enabled: 'enabled', url: 'http://127.0.0.1/' })).ok, false);
   fs.writeFileSync(f.sources.file, '{bad JSON'); const before = fs.readFileSync(f.sources.file, 'utf8');
   assert.equal(f.sources.state().available, false); assert.equal((await service.request('web.save', { enabled: 'disabled' })).ok, false); assert.equal(fs.readFileSync(f.sources.file, 'utf8'), before);

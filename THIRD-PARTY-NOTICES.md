@@ -13,7 +13,7 @@ NotionSwitch 自写源代码采用根目录的 MIT 许可证。
 - 本地聊天文档解析内置 unpdf 1.9.1（MIT）的服务端 PDF.js 6.4.299 构建、pdfjs-dist 6.4.299（Apache-2.0）的 CMap/字体数据，以及 saxes 6.0.0（ISC，含上游继承的 MIT 许可）和 xmlchars 2.2.0（MIT）。完整许可分别位于 `src/vendor/unpdf/LICENSE`、`src/vendor/pdfjs-dist/LICENSE`、`src/vendor/saxes/LICENSE` 与 `src/vendor/xmlchars/LICENSE`。固定版本、归档校验及文件哈希见 `src/vendor/document-parser.manifest.json`；saxes 仅调整对 xmlchars 的相对引用，其归档遗漏的完整许可证按同版本上游文件及固定哈希补入。不包含 PDF.js 浏览器查看器，不联网下载字体或映射。
 - 上述 PDF.js CMap 与标准字体还各自附带原始许可，见 `src/vendor/pdfjs-dist/cmaps/LICENSE`、`src/vendor/pdfjs-dist/standard_fonts/LICENSE_FOXIT` 与 `src/vendor/pdfjs-dist/standard_fonts/LICENSE_LIBERATION`；保留这些完整文本及资源原始字节，不能仅按 PDF.js 主许可证理解全部字体资源。
 
-项目不附带任何 Notion AI、DeepSeek 或 Brave Search 服务额度。
+项目不附带任何 Notion AI 或 DeepSeek 服务额度；联网搜索按 DeepSeek 成功请求单独计费。
 
 - 快捷收集内置 [SongJohnHannah/media-kit](https://github.com/SongJohnHannah/media-kit) 1.1.0 的独立运行代码，按上游声明的 MIT 许可使用。原始文件哈希、来源和本地适配说明位于 `src/collection/media-kit/manifest.json` 与 `NOTICE.md`。
 - yt-dlp 与 FFmpeg 在需要时从各自发布来源下载到本机，不随迁移包携带。FFmpeg 对应平台的完整许可保存在本机收集组件目录 `collection/bin/FFMPEG-LICENSE.txt`；项目 MIT 许可证不替代这些组件的原有许可。

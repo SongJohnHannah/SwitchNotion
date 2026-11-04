@@ -64,7 +64,8 @@ app.removeAsDefaultProtocolClient = () => false;
 platform.configureAppIdentity(app);
 
 const provider = new ProviderRouter({ root });
-const webSources = new WebSources({ root });
+const webSources = new WebSources({ root, fetchJson: (url, options) => provider.fetchImpl(url, options),
+  deepseekKey: () => { try { const config = provider.config(); return config.mode === 'deepseek' ? provider.key(config) : ''; } catch { return ''; } } });
 const memory = new WorkspaceMemory({ root });
 const approveAi = async ({ title, message, detail, signal }) => {
   signal?.throwIfAborted(); await app.whenReady();

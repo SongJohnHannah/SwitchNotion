@@ -52,12 +52,11 @@
         <form id="web-sources-form" class="provider-card">
           <h2>联网搜索与网页阅读</h2>
           <label class="check-label"><input id="web-sources-enabled" type="checkbox"> 允许侧栏 AI 使用公开网页来源</label>
-          <p class="field-help">搜索词会发送到 Brave Search，读取到的网页正文会随本轮问题发送给 DeepSeek。网页阅读无需搜索密钥；不会沿用 Notion 登录信息。</p>
-          <label for="web-sources-key">Brave Search API Key <span class="optional">可选</span></label>
-          <div class="password-field"><input id="web-sources-key" type="password" autocomplete="off" spellcheck="false" placeholder="填写后启用网页搜索"><button type="button" data-toggle="web-sources-key" class="show-key">显示</button></div>
-          <p id="web-sources-help" class="field-help">搜索密钥独立于 DeepSeek 密钥，只保存在本机。</p>
+          <p class="field-help">读取网页正文在本机完成，不会沿用 Notion 登录信息。搜索复用配置中心已保存的 DeepSeek 密钥，不单独保存搜索密钥。</p>
+          <label class="check-label"><input id="web-search-enabled" type="checkbox"> 允许联网搜索（默认关闭）</label>
+          <p class="field-help">开启后，每轮对话由 AI 根据问题自行判断是否需要搜索：有时效或公开资料需求时先搜索再引用，不需要时直接回答。搜索词会发送给 DeepSeek，读到的网页正文随本轮问题一起发送。关闭时只能读取本轮明确提供的公开网址。</p>
+          <p id="web-sources-help" class="field-help">未配置 DeepSeek 密钥时搜索不可用。</p>
           <p class="field-help">关闭或更改联网设置会停止正在运行的联网任务，后续对话使用新设置。</p>
-          <label class="check-label"><input id="web-sources-forget" type="checkbox"> 移除已保存的搜索密钥</label>
           <div id="web-sources-result" class="inline-result" role="status" hidden></div>
           <div class="form-actions"><button id="test-web-sources" type="button" class="button secondary">检测搜索连接</button><button type="submit" class="button primary">保存联网设置</button></div>
         </form>

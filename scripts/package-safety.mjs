@@ -13,9 +13,7 @@ export function localDeepSeekKeys(project, env = process.env) {
       files.push(resolved);
     }
   }
-  const webFile = path.join(root, 'web-sources.local.json');
-  const webKey = fs.existsSync(webFile) ? JSON.parse(fs.readFileSync(webFile, 'utf8')).braveApiKey : undefined;
-  return [...new Set([env.DEEPSEEK_API_KEY, webKey, ...files.filter(file => fs.existsSync(file)).map(file => fs.readFileSync(file, 'utf8'))].filter(value => typeof value === 'string').map(value => value.trim()).filter(Boolean))];
+  return [...new Set([env.DEEPSEEK_API_KEY, ...files.filter(file => fs.existsSync(file)).map(file => fs.readFileSync(file, 'utf8'))].filter(value => typeof value === 'string').map(value => value.trim()).filter(Boolean))];
 }
 
 export function assertDistributionFiles(root, files, keys = []) {

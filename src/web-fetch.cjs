@@ -77,7 +77,7 @@ function createPublicFetcher({ lookup = (host, options) => dns.lookup(host, opti
   return async function fetchPublic(value, { signal: parentSignal, headers = {}, limit = 2 * 1024 * 1024, redirect = true, timeoutMs = 20000, allowedDomains } = {}) {
     let url = publicUrl(value); const signal = parentSignal ? AbortSignal.any([parentSignal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs), visited = new Set();
     const domains = normalizeDomains(allowedDomains);
-    for (const key of Object.keys(headers)) if (!['accept', 'user-agent', 'x-subscription-token'].includes(key.toLowerCase()) || key.toLowerCase() === 'x-subscription-token' && (url.origin !== 'https://api.search.brave.com' || redirect)) fail('请求头范围无效。');
+    for (const key of Object.keys(headers)) if (!['accept', 'user-agent'].includes(key.toLowerCase())) fail('请求头范围无效。');
     for (let hop = 0; hop <= 5; hop++) {
       signal.throwIfAborted();
       if (!domainAllowed(url.href, domains)) fail('目标或跳转超出工作流允许的网页域名。');

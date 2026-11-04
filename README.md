@@ -8,7 +8,7 @@
 
 - 保留页面右下角原生 AI 入口、侧栏对话、流式回复、停止和续聊。
 - 在原生模型菜单切换已接入的 DeepSeek Flash / Pro，并在配置中设置思考模式和多 Agent 协同。
-- 侧栏个人 Agent 可选启用公开网页阅读及 Brave Search，在配置的 DeepSeek 页保存联网开关和搜索密钥；支持来源链接、长文分页、停止与续问。默认关闭，搜索需独立密钥；交互式浏览器仍待接入。见 [联网来源接口](docs/WEB-SOURCES-INTERFACE.md)。
+- 侧栏个人 Agent 可选启用公开网页阅读，并单独开启联网搜索（复用 DeepSeek 密钥）；每轮由模型按需决定是否搜索，支持来源链接、长文分页、停止与续问。两项开关默认关闭；交互式浏览器仍待接入。见 [联网来源接口](docs/WEB-SOURCES-INTERFACE.md)。
 - 原生 Research Mode 已接通明确“仅网页”的报告、来源、本地历史、停止及重启续问；工作区页面/数据库及全部来源研究仍等待正文接入授权。见 [研究模式范围](docs/NATIVE-RESEARCH-INTERFACE.md)。
 - 自动识别当前页面和工作区，支持“总结此页面”“修改当前页”。
 - 搜索和读取已授权页面，创建、修改、移动和归档页面，操作内容块、表格、数据库及相关内容工具。
@@ -119,7 +119,7 @@ Windows 迁移包构建产物保存在 `dist/`，不创建桌面文件。配置�
 
 ## 密钥和本机资料
 
-**DeepSeek Key、可选 Brave Search Key、Notion 连接密钥、登录资料和本机聊天记录只在本机保存，不提交到 Git，也不打包分发。** 调用 DeepSeek 时，Key 通过官方 HTTPS API 用于认证，不传给 Notion。选定的页面内容会作为任务上下文发送给 DeepSeek。启用联网来源后，搜索词发送到 Brave Search，读到的公开网页正文作为资料发送给 DeepSeek。
+**DeepSeek Key、Notion 连接密钥、登录资料和本机聊天记录只在本机保存，不提交到 Git，也不打包分发。** 调用 DeepSeek 时，Key 通过官方 HTTPS API 用于认证，不传给 Notion。选定的页面内容会作为任务上下文发送给 DeepSeek。启用联网搜索后，搜索词发送到 DeepSeek 搜索接口，读到的公开网页正文作为资料发送给 DeepSeek。
 
 - 本机运行资料集中保存在 `.notion-switch/`；整个目录已忽略。
 - `research/` 包含本机验证记录，`dist/` 包含构建产物，均不提交。
@@ -151,7 +151,7 @@ Windows 迁移包构建产物保存在 `dist/`，不创建桌面文件。配置�
 
 依赖已审核 Notion 网页缓存的兼容测试，在没有对应本机缓存时明确跳过；第三方网页代码不随本项目分发。真实 GPU 推理测试需显式启用；跳过原因和本轮结果见 [Windows 验收清单](docs/WINDOWS-VALIDATION-CHECKLIST.md)。
 
-本机聊天记录不会同步到 Notion 云端或其他设备。模型服务目前仅接入 DeepSeek，可选搜索服务为 Brave Search。
+本机聊天记录不会同步到 Notion 云端或其他设备。模型服务目前仅接入 DeepSeek，联网搜索复用同一份密钥。
 
 配置的“离线语音”支持 Medium / Large-v3 Turbo 模型选择、缺失组件自动下载和直接麦克风录音测试。Windows 使用 NVIDIA CUDA FP16，M1 等 Apple Silicon Mac 使用 CPU INT8；本轮没有新增 Mac 硬件推理或真人录音验收。原生录音按片段离线识别，支持尾段收尾和去重。停止后默认把转录文字与手写笔记交给 DeepSeek，生成原生“摘要”标签并读回核验；原转录、手写笔记保留。可在配置关闭自动摘要，仅使用本机转写。`npm run package:speech` 可导出不包含模型、运行环境或用户资料的独立转写模块。详见 [跨平台转写接口](docs/SPEECH-INTERFACE.md)、[原生速记适配](docs/OFFLINE-SPEECH.md) 和 [摘要接口](docs/MEETING-SUMMARY-INTERFACE.md)。
 

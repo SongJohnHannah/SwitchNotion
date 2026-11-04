@@ -97,7 +97,7 @@ test('the actual desktop route uses the web-enabled native mock and rejects a fo
 test('calendar and custom thread kinds keep network tools disabled on follow-up even if a message claims to be personal', async t => {
   const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-web-thread-kind-'));
   const webSources = new WebSources({ root, fetchPublic: async () => assert.fail('Unsupported thread must not access the web') });
-  webSources.save({ enabled: 'enabled', apiKey: 'synthetic-brave-key' }); let calls = 0;
+  webSources.save({ enabled: 'enabled' }); let calls = 0;
   const provider = { config: () => ({ mode: 'deepseek', multiAgent: false }), async* generate({ tools }) {
     calls++; assert.ok(!tools.some(value => ['search_web', 'read_web_page'].includes(value.function.name))); yield '普通合成对话';
   } };
