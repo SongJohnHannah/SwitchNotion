@@ -7,6 +7,8 @@ const { defaults, preferences, destination, extractUrls, selectedNodes, mediaKin
 const { CollectionBinaries } = require('./binaries.cjs');
 const { CollectionBrowser } = require('./browser.cjs');
 const { CollectionMedia } = require('./media.cjs');
+const { OllamaService } = require('./ollama.cjs');
+const { MediaOcr } = require('../mediaocr.cjs');
 const { CollectionNotion } = require('./notion.cjs');
 const { CollectionExtraction } = require('./extraction.cjs');
 const { parseInputs, describeLocal, checkLocal, localDocument } = require('./local-media.cjs');
@@ -32,7 +34,8 @@ class CollectionService extends EventEmitter {
     } catch { this.configError = '收集配置无法读取，已保留原文件，请检查后恢复。'; }
     this.binaries = binaries || new CollectionBinaries({ root });
     this.browser = browser || new CollectionBrowser({ root, getSettings: () => this.settings, binaries: this.binaries });
-    this.media = media || new CollectionMedia({ root, browser: this.browser, binaries: this.binaries, speech, provider });
+    this.media = media || new CollectionMedia({ root, browser: this.browser, binaries: this.binaries, speech, provider,
+      ollama: new OllamaService(), ocr: ['win32', 'darwin'].includes(process.platform) ? new MediaOcr({ root }) : undefined });
     this.notion = notion || (process.platform === 'darwin'
       ? new (require('../compat/macos-collection-notion.cjs').MacCollectionNotion)({ root })
       : new CollectionNotion({ root }));
@@ -130,36 +133,7 @@ class CollectionService extends EventEmitter {
     if (!selected.length) throw Error('请至少选择一项要保存的内容。');
     if (job.options.keepLocal) { prepareLocalOutput(job, this.downloadsDirectory); save(); }
     const { limit } = await this.notion.verifyTarget(job.options.destination, signal);
-    for (const node of selected) {
-      if (!mediaKinds.has(node.kind)) continue; signal.throwIfAborted();
-      const resource = job.resources[node.id] ||= {}, analysis = job.analyses[node.id] ||= {};
-      delete resource.error; analysis.errors = [];
-      try {
-        if (!resource.asset || !fs.existsSync(resource.asset.path)) {
-          job.status = 'downloading'; save();
-          if (job.options.keepLocal && !ownedExport(job)) throw Error('资料文件夹已被手动删除，请停止任务或重新收集。');
-          const directory = job.options.keepLocal ? path.join(job.exportDirectory, '素材', String(selected.indexOf(node) + 1).padStart(2, '0') + '-' + ({ image: '图片', video: '视频', audio: '音频' }[node.kind])) : path.join(this.location(job), 'working', node.id);
-          resource.asset = job.localSource ? await this.media.importLocal(job.localSource, directory, { signal, progress }) : await this.media.acquire({ ...node, sourceUrl: job.document.url }, directory, { signal, progress }); save();
-        }
-        if (job.options.transcribe && ['audio', 'video'].includes(node.kind) && !analysis.transcript) {
-          job.status = 'processing'; save();
-          try { analysis.transcript = await this.media.transcript(resource.asset, { signal, progress }); }
-          catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
-        }
-        if (job.options.vision && (job.options.visionEngine === 'local' ? node.kind === 'video' : ['image', 'video'].includes(node.kind)) && !analysis.vision) {
-          job.status = 'processing'; save();
-          try { analysis.vision = await this.media.vision(resource.asset, { signal, progress, engine: job.options.visionEngine }); }
-          catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
-        }
-        if (!resource.parts) { resource.parts = await this.media.prepareUpload(resource.asset, job.options, limit, { signal, progress }); save(); }
-        resource.uploads ||= [];
-        for (let i = 0; i < resource.parts.length; i++) {
-          job.status = 'uploading'; progress(`正在上传${node.kind === 'image' ? '图片' : node.kind === 'video' ? '视频' : '音频'} ${i + 1}/${resource.parts.length}…`);
-          resource.uploads[i] ||= {};
-          if (!resource.uploads[i].uploaded) await this.notion.upload(resource.parts[i], job, resource.uploads[i], save, signal);
-        }
-      } catch (error) { signal.throwIfAborted(); resource.error = safeError(error); save(); }
-    }
+    await this.processMedia(job, selected, limit, save, progress, signal);
     if (job.options.extraction.mode !== 'off') {
       job.status = 'processing'; save();
       try { job.extraction = await this.extractor.run(job, selected, { signal, progress, save }); }
@@ -179,6 +153,69 @@ class CollectionService extends EventEmitter {
       this.latestCompletion = { id: job.id, title: job.document.title, page: job.page };
       if (!this.settings.keepHistory) this.forgetCompleted(job);
     }
+  }
+  async processMedia(job, nodes, limit, save, progress, signal) {
+    const entries = nodes.flatMap((node, index) => mediaKinds.has(node.kind) ? [{ node, index }] : []);
+    const assets = new Map(), downloads = [], work = [];
+    let processing = false;
+    const markProcessing = () => { if (processing) return; processing = true; job.status = 'processing'; save(); };
+    for (const { node, index } of entries) {
+      const resource = job.resources[node.id] ||= {}, analysis = job.analyses[node.id] ||= {};
+      delete resource.error; analysis.errors = [];
+      const label = `素材 ${index + 1}/${nodes.length} · `;
+      const nodeProgress = message => progress(label + message);
+      let asset = resource.asset && fs.existsSync(resource.asset.path) ? Promise.resolve(resource.asset) : null;
+      if (!asset) {
+        let resolve, reject; const state = { done: false };
+        asset = new Promise((resolved, rejected) => {
+          resolve = value => { if (!state.done) { state.done = true; resolved(value); } };
+          reject = error => { if (!state.done) { state.done = true; rejected(error); } };
+        });
+        downloads.push({ node, resource, progress: nodeProgress, resolve, reject, state,
+          directory: job.options.keepLocal ? path.join(job.exportDirectory, '素材', String(index + 1).padStart(2, '0') + '-' + ({ image: '图片', video: '视频', audio: '音频' }[node.kind])) : path.join(this.location(job), 'working', node.id) });
+      }
+      assets.set(node.id, asset);
+      work.push((async () => {
+        try {
+          const current = await asset; resource.asset = current; save();
+          if (job.options.transcribe && ['audio', 'video'].includes(node.kind) && !analysis.transcript) {
+            markProcessing();
+            try { analysis.transcript = await this.media.transcript(current, { signal, progress: nodeProgress }); }
+            catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
+          }
+          if (job.options.vision && (job.options.visionEngine === 'local' ? node.kind === 'video' : ['image', 'video'].includes(node.kind)) && !analysis.vision) {
+            markProcessing();
+            try { analysis.vision = await this.media.vision(current, { signal, progress: nodeProgress, engine: job.options.visionEngine }); }
+            catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
+          }
+          if (!resource.parts) { markProcessing(); resource.parts = await this.media.prepareUpload(current, job.options, limit, { signal, progress: nodeProgress }); save(); }
+          resource.uploads ||= [];
+          for (let i = 0; i < resource.parts.length; i++) {
+            job.status = 'uploading'; nodeProgress(`正在上传${node.kind === 'image' ? '图片' : node.kind === 'video' ? '视频' : '音频'} ${i + 1}/${resource.parts.length}…`);
+            resource.uploads[i] ||= {};
+            if (!resource.uploads[i].uploaded) await this.notion.upload(resource.parts[i], job, resource.uploads[i], save, signal);
+          }
+          if (processing) { job.status = 'processing'; save(); }
+        } catch (error) { signal.throwIfAborted(); resource.error = safeError(error); save(); }
+      })());
+    }
+    const pump = (async () => {
+      for (const item of downloads) {
+        if (signal.aborted) break;
+        try {
+          signal.throwIfAborted();
+          if (!processing) { job.status = 'downloading'; save(); }
+          if (job.options.keepLocal && !ownedExport(job)) throw Error('资料文件夹已被手动删除，请停止任务或重新收集。');
+          const asset = job.localSource ? await this.media.importLocal(job.localSource, item.directory, { signal, progress: item.progress }) : await this.media.acquire({ ...item.node, sourceUrl: job.document.url }, item.directory, { signal, progress: item.progress });
+          item.resource.asset = asset; item.resolve(asset); save();
+        } catch (error) { item.reject(error); }
+      }
+      const stopped = signal.reason || Error('已停止后续处理。');
+      for (const item of downloads) if (!item.state.done) item.reject(stopped);
+    })();
+    try { await Promise.allSettled(work); }
+    finally { await pump.catch(() => {}); }
+    signal.throwIfAborted();
   }
   forgetCompleted(job) {
     try {

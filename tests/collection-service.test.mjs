@@ -193,6 +193,22 @@ test('local Qwen engine only analyzes video keyframes and labels the appendix ac
   assert.deepEqual(seen, [{ kind: 'video', engine: 'local' }]);
   assert.match(JSON.stringify(f.saved[0]), /本地千问视频分析/);
 });
+test('downloads pipeline so the next resource downloads while the first is analyzed', async t => {
+  const document = normalizeDocument({ title: '多视频', url: 'https://example.com/multi', nodes: [
+    { kind: 'video', url: 'https://example.com/one.mp4' }, { kind: 'video', url: 'https://example.com/two.mp4' }] });
+  const events = []; let activeDownloads = 0, maxDownloads = 0;
+  const f = fixture(t, { document, media: {
+    acquire: async (node, directory) => { activeDownloads++; maxDownloads = Math.max(maxDownloads, activeDownloads); events.push('download:start:' + node.url); fs.mkdirSync(directory, { recursive: true }); await sleep(40); activeDownloads--; events.push('download:end:' + node.url); return { path: path.join(directory, 'asset.bin'), kind: node.kind, duration: 1, audio: true, marker: node.url }; },
+    transcript: async () => ({ text: '' }),
+    vision: async (asset, options) => { events.push('vision:start:' + asset.marker); await sleep(80); events.push('vision:end:' + asset.marker); return { text: '本地画面', engine: options.engine }; },
+    prepareUpload: async asset => [{ path: asset.path, kind: asset.kind }]
+  } });
+  await f.service.create({ input: 'https://example.com/multi', options: { transcribe: false, visionEngine: 'local' } }); await idle(f.service);
+  assert.equal(maxDownloads, 1);
+  assert.ok(events.indexOf('download:end:https://example.com/one.mp4') < events.indexOf('download:start:https://example.com/two.mp4'));
+  assert.ok(events.indexOf('vision:start:https://example.com/one.mp4') < events.indexOf('download:end:https://example.com/two.mp4'));
+  assert.equal(events.filter(event => event.startsWith('vision:end:')).length, 2);
+});
 test('cancel stops remaining stages, persisted interrupted work reloads and malformed requests expose no credentials', async t => {
   const f = fixture(t, { media: { acquire: async (_node, _directory, { signal }) => { await sleep(10000, null, { signal }); } } });
   const result = await f.service.create({ input: 'https://example.com/article' }); await sleep(30); f.service.cancel(result.jobs[0].id); await idle(f.service);

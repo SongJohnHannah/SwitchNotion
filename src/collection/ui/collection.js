@@ -4,6 +4,13 @@ let state, chosen, expanded = false, activePanel = 'destination', selectedJob, d
 const names = { paragraph: '正文', heading: '标题', quote: '引用', list: '列表', code: '代码', divider: '分隔', link: '链接', image: '图片', video: '视频', audio: '音频' };
 const statuses = { queued: '等待中', reading: '识别中', downloading: '下载中', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需登录／检查完整性', completed: '已保存', partial: '待补全', failed: '失败', cancelled: '已停止', interrupted: '可继续' };
 const active = ['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving'];
+function taskStatus() {
+  const processing = state.jobs.filter(job => active.includes(job.status)).length;
+  const attention = state.jobs.filter(job => !active.includes(job.status) && job.status !== 'completed').length;
+  const completed = state.jobs.length - processing - attention;
+  const text = [processing ? '处理中 ' + processing : '', attention ? '待补全 ' + attention : '', completed ? '已完成 ' + completed : ''].filter(Boolean).join(' · ');
+  return { text, tone: attention ? 'attention' : processing ? 'busy' : 'done' };
+}
 const element = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
 function message(text, error = false) { $('message').textContent = text || ''; $('message').hidden = !text; $('message').classList.toggle('error', error); }
 async function request(action, input) { const response = await api.request(action, input); if (!response.ok) { message(response.error, true); throw Error(response.error); } return response.result; }
@@ -29,6 +36,10 @@ async function refresh() {
   $('shortcut').textContent = state.settings.shortcut.replace('CommandOrControl', navigator.platform.includes('Mac') ? '⌘' : 'Ctrl').replaceAll('+', ' ');
   $('destination-pill').textContent = chosen ? (chosen.workspaceName ? chosen.workspaceName + ' / ' : '') + chosen.label + ' ⌄' : '选择工作区、数据库或页面 ⌄';
   $('queue-state').textContent = state.active ? state.active + ' 个任务处理中' : '支持链接与本地路径，原始内容优先';
+  const tasks = taskStatus();
+  $('task-status').hidden = !state.jobs.length; $('queue-state').hidden = !!state.jobs.length;
+  $('task-status').className = 'task-status ' + tasks.tone; $('task-status').textContent = tasks.text;
+  $('task-status').title = state.jobs.length + ' 条收集任务，点击查看进度';
   $('prompt-status').textContent = ({ auto: '✧ 自动提取 · 文章 / 音视频', article: '✧ 文章精读模板', video: '✧ 音视频提取模板', off: '仅保存原文 · 未启用 AI 提取' })[state.settings.extraction.mode];
   $('keep-history').checked = state.settings.keepHistory;
   $('last-result').hidden = !state.latestCompletion;
@@ -110,10 +121,15 @@ function renderTasks() {
   const filter = $('status-filter').value, query = $('task-search').value.trim().toLowerCase();
   const jobs = state.jobs.filter(j => (filter === 'all' || filter === 'active' && active.includes(j.status) || filter === 'completed' && j.status === 'completed' || filter === 'attention' && !active.includes(j.status) && j.status !== 'completed') && (j.title + ' ' + j.url + ' ' + j.options.destination?.label).toLowerCase().includes(query));
   $('tasks-section').hidden = !state.jobs.length;
-  $('tasks-summary').textContent = state.settings.keepHistory ? '本机收集记录（' + state.jobs.length + '）' : '当前处理与待补全（' + state.jobs.length + '）';
   const root = $('tasks'); root.replaceChildren(); if (!jobs.length) root.append(element('div', 'empty', '当前筛选下没有内容'));
   for (const job of jobs.slice(0, 100)) { const card = element('article', 'task ' + job.status), title = element('div', 'task-title', job.title); title.append(element('span', 'badge', statuses[job.status] || job.status));
     card.append(title, element('div', 'task-meta', (job.local ? '本地音视频' : new URL(job.url).hostname) + ' · ' + (job.options.destination?.label || '尚未选择位置')), element('div', 'task-message', job.message));
+    if (['partial', 'needs_login'].includes(job.status) && job.warnings.length) {
+      const reasons = element('ul', 'task-warnings');
+      for (const warning of job.warnings.slice(0, 5)) reasons.append(element('li', '', warning));
+      if (job.warnings.length > 5) reasons.append(element('li', '', '另有 ' + (job.warnings.length - 5) + ' 项未完成'));
+      card.append(reasons);
+    }
     const actions = element('div', 'task-actions');
     if (job.preview) actions.append(button(['awaiting_selection', 'needs_login'].includes(job.status) ? '选择内容' : '查看内容', () => { selectedJob = job.id; renderSelection(job); }));
     if (job.page) actions.append(button('打开 Notion ↗', () => request('open-page', { id: job.id })));
@@ -209,6 +225,8 @@ linksInput.addEventListener('drop', event => {
 $('links').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void submit(false).catch(() => {}); } });
 $('preview').addEventListener('click', () => void submit(true).catch(() => {}));
 $('expand').addEventListener('click', () => setExpanded(!expanded)); $('destination-pill').addEventListener('click', () => { setPanel('destination'); setExpanded(true); }); $('hide').addEventListener('click', () => api.request('hide'));
+$('task-status').addEventListener('click', () => { $('tasks-section').open = true; setExpanded(true); $('tasks-section').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+$('tasks-section').addEventListener('toggle', () => $('task-status').setAttribute('aria-expanded', String($('tasks-section').open)));
 for (const tab of document.querySelectorAll('[data-tab]')) {
   tab.addEventListener('click', () => setPanel(tab.dataset.tab));
   tab.addEventListener('keydown', event => {
