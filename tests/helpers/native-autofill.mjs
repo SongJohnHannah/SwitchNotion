@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 export const autofillId = n => 'aaaaaaaa-aaaa-4aaa-8aaa-' + String(n).padStart(12, '0');
-export const autofillIds = Object.fromEntries(['space', 'user', 'collection', 'workflow', 'parent', 'first', 'second', 'unselected', 'body1', 'body2'].map((name, n) => [name, autofillId(n + 1)]));
+export const autofillIds = Object.fromEntries(['space', 'user', 'collection', 'workflow', 'parent', 'first', 'second', 'unselected', 'body1', 'body2', 'view'].map((name, n) => [name, autofillId(n + 1)]));
 export function autofillFixture() {
   const ids = autofillIds, calls = [], records = new Map();
   const put = (table, id, value) => records.set(table + ':' + id, { id, space_id: ids.space, alive: true, version: 1, ...value });
@@ -19,12 +19,15 @@ export function autofillFixture() {
     put('block', body, { type: 'text', parent_table: 'block', parent_id: row, properties: { title: [[label + '的正文。']] } });
   }
   put('block', ids.unselected, { type: 'page', parent_table: 'collection', parent_id: ids.collection, properties: { title: [['must-not-read-unselected']] } });
+  put('user_root', ids.user, { space_view_pointers: [{ table: 'space_view', id: ids.view, spaceId: ids.space }] });
+  put('space_view', ids.view, { parent_table: 'user_root', parent_id: ids.user, settings: { ai_prompts: {} } });
+  put('space', ids.space, { settings: {} });
   let role = 'editor', behavior = 'ok';
   const api = async (endpoint, payload, options) => {
     calls.push({ endpoint, payload: structuredClone(payload) });
     if (options.spaceId !== ids.space) throw Error('Wrong API workspace');
     if (endpoint === 'getRecordValues') return { results: payload.requests.map(p => {
-      if (p.spaceId !== ids.space) throw Error('Missing pointer workspace');
+      if (p.table !== 'user_root' && p.spaceId !== ids.space) throw Error('Missing pointer workspace');
       const value = records.get(p.table + ':' + p.id); return value ? { role, value: structuredClone(value) } : {};
     }) };
     if (endpoint !== 'saveTransactionsFanout') throw Error('Unexpected API: ' + endpoint);

@@ -98,7 +98,9 @@ test('database readers may read a source while child pages and linked relation t
   const original = f.store.api;
   f.store.api = async (...args) => {
     const response = await original(...args);
-    if (args[0] === 'getRecordValues') response.results.forEach(record => { if (record.value?.id !== f.aiId) record.role = 'reader'; });
+    if (args[0] === 'getRecordValues') response.results.forEach((record, index) => {
+      if (args[1]?.requests?.[index]?.table === 'block' && record.value?.id !== f.aiId) record.role = 'reader';
+    });
     return response;
   };
   await generateAiBlock(f);
