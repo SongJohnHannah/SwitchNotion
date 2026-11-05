@@ -15,6 +15,12 @@ const response = (value, status = 200) => new Response(JSON.stringify(value), { 
 const plainText = text => typeof text === 'string' ? text : Array.isArray(text)
   ? text.map(span => Array.isArray(span) && typeof span[0] === 'string' ? span[0] : '').join('') : '';
 const textFrom = content => (content || []).filter(c => c.type === 'text').map(c => plainText(c.text)).join('\n');
+// A chat-only entry to the isolated build wizard. The message stays local; the
+// wizard still requires its own preview and confirmation before writing.
+const buildPrompt = text => {
+  const match = /^[/／](?:ai)?建库(?:[\s:：]+([\s\S]*))?$/i.exec(text.trim());
+  return match ? (match[1] || '').trim() : null;
+};
 const userText = entity => entity.user_prompt_text ?? entity.text?.map(span => span[0]).join('') ?? '';
 const conversationTitle = text => {
   const value = text.trim().replace(/(?:sk-|ntn_|secret_)[A-Za-z0-9_-]{12,}/g, '[密钥已隐藏]').replace(/https?:\/\/\S+/g, '[页面链接]').replace(/\s+/g, ' ');
@@ -132,6 +138,7 @@ class AgentMock {
       this.log({ type: 'native-selection-rejected', reason: error.selectionReason || 'invalid_selection', selectionType: ['blocks', 'text'].includes(selection?.type) ? selection.type : 'other', previewCharacters: typeof selection?.text === 'string' ? selection.text.length : null, pointerCount: Array.isArray(selection?.value) ? selection.value.length : null });
     }
     const promptText = textFrom(content);
+    const build = this.onDatabaseBuild && content.every(part => part.type === 'text') ? buildPrompt(promptText) : null;
     const user = this.entity(t, 'user_message', { text: [[selectionDisplay(promptText, selectedContext)]], ...(selectedContext?.selection || selectedContext?.annotations?.length ? { user_prompt_text: promptText } : {}), files: clone(content.filter(part => part.type === 'file')), is_current_user: true, render_on_user_side: true, user_message_kind: 'direct', client_message_id: clientMessageId, ...(t.thread.created_by_id ? { sender_actor_kind: 'user', sender_actor_id: t.thread.created_by_id } : {}), ...(selectedContext ? { thread_context: selectedContext } : {}) });
     t.attachments ||= {};
     t.attachmentScopes ||= {};
@@ -167,6 +174,21 @@ class AgentMock {
     const run = async () => {
       let web;
       try {
+        if (build !== null) {
+          this.log({ type: 'database-build-trigger', promptCharacters: build.length, hasPage: !!turn.nativeContext.page_id });
+          assistant.content[0].text = '正在打开 AI 建库向导…';
+          this.emit(t, [{ op: 'put', entity: assistant }]);
+          let message;
+          try {
+            await this.onDatabaseBuild({ prompt: build, pageId: turn.nativeContext.page_id, spaceId: t.thread.space_id, userId: meta.userId || t.thread.created_by_id });
+            message = build ? '已打开 AI 建库向导，并在“描述需求”中填好了内容。请核对后点击“生成预览”。' : '已打开 AI 建库向导。请描述要创建的数据库，再点击“生成预览”。';
+          } catch (error) {
+            assistant.content[0].text = '建库向导打开失败：' + (error?.message || '请从 NotionSwitch 菜单重试。');
+            finish('failed'); return;
+          }
+          assistant.content[0].text = message;
+          finish('completed'); return;
+        }
         if (selectionError) throw selectionError;
         const config = this.provider?.config(modelSelection) || { mode: 'mock' };
         if (config.mode === 'mock') { timer = setTimeout(tick, this.delayMs); return; }

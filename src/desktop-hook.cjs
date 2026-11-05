@@ -44,7 +44,7 @@ const { NativeAutofillStore } = require('./native-autofill-store.cjs');
 const { createAutofillJobs, isLocalId: isLocalAutofillId } = require('./native-autofill-jobs.cjs');
 const { createNativeBuildService } = require('./native-build-service.cjs');
 const { NativeBuildStore } = require('./native-database-build-store.cjs');
-const { setupDatabaseWizard, wizardEntryScript } = require('./database-wizard-window.cjs');
+const { setupDatabaseWizard } = require('./database-wizard-window.cjs');
 const { NativeSpeech, loopbackCsp } = require('./speech/native.cjs');
 const { isMeetingSummary, offlineSummaryResponse } = require('./speech/summary.cjs');
 const { MeetingNativeBridge } = require('./meeting-summary-native.cjs');
@@ -114,6 +114,7 @@ const transfer = new AiTransfer({ memory, agent: mock.agent, native: mock, appro
 const databaseBuild = createNativeBuildService({ root, provider, log,
   storeFactory: (info, meta) => new NativeBuildStore({ native: meetingBridge.forRequest(meta.request, meta.session, info.spaceId) }) });
 const databaseWizard = setupDatabaseWizard({ root, provider, bridge: meetingBridge, createWindow: createAuxiliaryWindow, app, ipcMain, Menu, MenuItem, shell });
+mock.agent.onDatabaseBuild = ({ prompt, pageId }) => databaseWizard.open({ pageId: uuid(pageId) || undefined, prompt });
 const nativeWriter = new NativeWriter({ root, provider, log,
   hasRecord: id => mock.hasRecord(id) || databaseBuild.owns({ threadId: id }),
   storeFactory: (info, meta) => meetingBridge.forRequest(meta.request, meta.session, info.spaceId) });
@@ -142,13 +143,6 @@ const endpoints = new Set(['runWriter', 'undoAgentServiceTurn', 'runInferenceTra
 function isNotion(hostname) { return hostname === 'notion.so' || hostname.endsWith('.notion.so') || hostname === 'notion.com' || hostname.endsWith('.notion.com'); }
 async function route(request, passthrough, ses) {
   const url = new URL(request.url), endpoint = url.pathname.match(/\/api\/v\d+\/([^/]+)/)?.[1] || url.pathname.split('/').pop();
-  if (isNotion(url.hostname) && url.pathname === '/_notion-switch/database-wizard/open' && typeof databaseWizard !== 'undefined') {
-    if (request.method !== 'POST' || request.headers.get('x-notion-switch-ui') !== 'database-wizard-v1') return json({ ok: false }, 403);
-    try {
-      const text = await request.text(); if (text.length > 4096) throw Error('请求过长。');
-      const input = JSON.parse(text); await databaseWizard.open({ session: ses, pageId: uuid(input?.pageId) }); return json({ ok: true });
-    } catch (error) { return json({ ok: false, message: /^Notion /.test(error.message || '') ? error.message : '建库向导打开失败，请从应用菜单重试。' }, 400); }
-  }
   if (isNotion(url.hostname) && typeof localInlineDocuments !== 'undefined') {
     if (url.pathname.startsWith(inlineDocumentUploadPrefix)) return localInlineDocuments.post(request);
     if (url.pathname.startsWith(inlineDocumentReferencePrefix)) return localInlineDocuments.download(request);
@@ -430,7 +424,6 @@ app.on('web-contents-created', (_event, contents) => {
   contents.on('did-fail-load', (_event, code, description, url, mainFrame) => { if (mainFrame) log({ type: 'load-failed', code, description, origin: (() => { try { return new URL(url).origin; } catch { return 'unknown'; } })() }); });
   contents.on('did-finish-load', () => { let origin; try { origin = new URL(contents.getURL()).origin; } catch { origin = 'unknown'; } log({ type: 'page-loaded', origin }); });
   contents.on('did-finish-load', () => {
-    try { const url = new URL(contents.getURL()); if (url.protocol === 'https:' && isNotion(url.hostname)) void contents.executeJavaScript(wizardEntryScript).catch(() => {}); } catch {}
     if (macFileDownloads) try { const url = new URL(contents.getURL()); if (url.protocol === 'https:' && isNotion(url.hostname)) void contents.executeJavaScript(macFileDownloads.downloadScript).catch(() => {}); } catch {}
   });
 });

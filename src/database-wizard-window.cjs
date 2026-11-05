@@ -4,7 +4,7 @@ const { uuid } = require('./native-context.cjs');
 const { DatabaseWizard } = require('./database-wizard.cjs');
 function setupDatabaseWizard({ root, provider, bridge, createWindow, app, ipcMain, Menu, MenuItem, shell }) {
   const service = new DatabaseWizard({ root, provider }), file = path.join(__dirname, 'database-wizard', 'index.html'), url = pathToFileURL(file).href;
-  let window, native, controller, initialParent, opening = false;
+  let window, native, controller, initialParent, initialPrompt = '', opening = false;
   const getNative = async ({ session, pageId } = {}) => {
     const signal = AbortSignal.timeout(15000);
     if (uuid(pageId)) {
@@ -20,7 +20,15 @@ function setupDatabaseWizard({ root, provider, bridge, createWindow, app, ipcMai
     if (opening) return; opening = true;
     try {
     await app.whenReady();
-    if (window && !window.isDestroyed()) { window.show(); window.focus(); return; }
+    initialPrompt = typeof options.prompt === 'string' ? options.prompt.slice(0, 12000) : '';
+    if (window && !window.isDestroyed()) {
+      window.show(); window.focus();
+      if (initialPrompt) {
+        const send = () => { try { window?.webContents.send('notion-switch:database-wizard-prefill', initialPrompt); } catch {} };
+        if (window.webContents.isLoadingMainFrame()) window.webContents.once('did-finish-load', send); else send();
+      }
+      return;
+    }
     native = await getNative(options); initialParent = uuid(options.pageId); controller = new AbortController();
     window = createWindow({ width: 880, height: 780, minWidth: 720, minHeight: 640, title: 'AI 建库向导', autoHideMenuBar: true, show: false,
       webPreferences: { preload: path.join(__dirname, 'database-wizard-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, partition: 'notion-switch-database-wizard' } });
@@ -38,7 +46,7 @@ function setupDatabaseWizard({ root, provider, bridge, createWindow, app, ipcMai
         const space = await store.api('getRecordValues', { requests: [{ table: 'space', id: store.spaceId, spaceId: store.spaceId }] }, { signal, spaceId: store.spaceId });
         let entry = space.results?.[0]; for (let n = 0; n < 3 && entry && !entry.value?.id; n++) entry = entry.value;
         const name = entry?.value?.name;
-        return { ok: true, result: { ...service.state(store), workspaceTitle: typeof name === 'string' ? name.slice(0, 300) : '所选工作区', initialParent: initialParent ? 'https://www.notion.so/' + initialParent.replaceAll('-', '') : '' } };
+        return { ok: true, result: { ...service.state(store), workspaceTitle: typeof name === 'string' ? name.slice(0, 300) : '所选工作区', initialParent: initialParent ? 'https://www.notion.so/' + initialParent.replaceAll('-', '') : '', prompt: initialPrompt } };
       }
       if (action === 'open') {
         const job = service.find(input, store); if (job.status !== 'verified') throw Error('数据库尚未创建。');
@@ -59,7 +67,4 @@ function setupDatabaseWizard({ root, provider, bridge, createWindow, app, ipcMai
   app.on('before-quit', () => { controller?.abort(); service.close(); });
   return { open, service };
 }
-// One client-side entry on both page and Home surfaces. Creation remains in
-// the isolated, sender-checked wizard; the web page can only open that window.
-const wizardEntryScript = `(()=>{if(document.getElementById('notion-switch-database-entry')||/\\/(?:login|signup|auth)(?:\\/|$)/.test(location.pathname))return;const button=document.createElement('button');button.id='notion-switch-database-entry';button.textContent='AI 建库';button.title='预览字段并选择布局后创建数据库';Object.assign(button.style,{position:'fixed',right:'88px',bottom:'20px',zIndex:'1000',font:'13px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif',padding:'8px 12px',border:'1px solid rgba(128,128,128,.3)',borderRadius:'7px',background:'var(--c-bacPri,#fff)',color:'var(--c-texPri,#333)',cursor:'pointer',boxShadow:'0 2px 8px rgba(0,0,0,.08)'});button.onclick=async()=>{button.disabled=true;try{const match=location.pathname.match(/([a-f0-9]{32}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})(?:\\/)?$/i);const response=await fetch('/_notion-switch/database-wizard/open',{method:'POST',headers:{'content-type':'application/json','x-notion-switch-ui':'database-wizard-v1'},body:JSON.stringify({pageId:match?.[1]})});const result=await response.json();if(!result.ok){button.textContent=result.message||'请先打开工作区页面';setTimeout(()=>button.textContent='AI 建库',6000)}}catch{button.textContent='打开失败，请从应用菜单重试'}finally{button.disabled=false}};document.body.append(button)})()`;
-module.exports = { setupDatabaseWizard, wizardEntryScript };
+module.exports = { setupDatabaseWizard };
