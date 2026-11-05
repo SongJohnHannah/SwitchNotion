@@ -44,7 +44,9 @@ class OllamaService {
     // Windows may reserve the default port at boot; OLLAMA_HOST moves this
     // instance to a port outside the excluded ranges without touching others.
     try {
-      const child = this.spawnImpl(executable, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true, env: { ...this.env, OLLAMA_HOST: '127.0.0.1:' + this.startPort } });
+      // A detached server must not inherit the app runtime directory as its
+      // working directory, or it keeps that directory locked after the app quits.
+      const child = this.spawnImpl(executable, ['serve'], { cwd: path.dirname(executable), detached: true, stdio: 'ignore', windowsHide: true, env: { ...this.env, OLLAMA_HOST: '127.0.0.1:' + this.startPort } });
       child.unref?.();
     } catch (error) { throw Error('无法启动本机 Ollama：' + error.message); }
     const deadline = Date.now() + this.timeoutMs;

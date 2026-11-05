@@ -84,6 +84,7 @@ test('Ollama starts on the fallback port when the default port is unavailable', 
     assert.equal(await service.ensure(), 'http://127.0.0.1:21434');
     assert.equal(spawned.length, 1); assert.equal(spawned[0].file, executable);
     assert.deepEqual(spawned[0].args, ['serve']); assert.equal(spawned[0].options.detached, true);
+    assert.equal(spawned[0].options.cwd, directory);
     assert.equal(spawned[0].options.env.OLLAMA_HOST, '127.0.0.1:21434');
     assert.equal(await service.ensure(), 'http://127.0.0.1:21434'); assert.equal(spawned.length, 1);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
