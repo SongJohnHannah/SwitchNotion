@@ -8,6 +8,7 @@ const { initializeRuntime, disableBuiltinUpdates } = require('./runtime-bootstra
 const root = initializeRuntime({ app, dialog, platform });
 if (!root) return;
 disableBuiltinUpdates(root);
+require('./app-branding.cjs').installAppBranding(require('electron'));
 const { NativeMock, json } = require('./native-mock.cjs');
 const { NativeWriter } = require('./native-writer.cjs');
 const { createInlineReferenceReader } = require('./inline-references.cjs');

@@ -59,7 +59,7 @@ function patchModule(module, id, options) {
   if (record.kind === 'availability') {
     const feature = node('feature').name, context = node('context').name;
     if (!feature || !context) throw Error('Missing feature bindings');
-    insert(node('insertBefore').start, `if(${feature}==="ai_usage")return{type:"available",limit:{type:"per_use",amount:"unlimited"}};if(${feature}==="ai_model_selection")return{type:"available",limit:{type:"none"}};` +
+    insert(node('insertBefore').start, `if(${feature}==="ai_usage")return{type:"available",limit:{type:"per_use",amount:"unlimited"}};if(${feature}==="ai_model_selection")return{type:"available",limit:{type:"none"}};if(${feature}==="dashboard_view")return{type:"available",limit:{type:"none"}};` +
       (options.localSpeechEnabled ? `if(${feature}==="ai_meeting_notes"&&${context}.data.space?.isTranscriptionEnabled?.()!==false)return{type:"available",limit:{type:"cumulative",total:"unlimited",current:${context}.data.current??0}};` : ''));
   }
   if (record.kind === 'models') replace(node('replace'), 'true');

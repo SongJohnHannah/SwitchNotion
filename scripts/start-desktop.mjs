@@ -10,6 +10,7 @@ import { launchLock } from './launch-lock.mjs';
 import platformModule from '../src/platform/index.cjs';
 
 const platform = platformModule.createDesktopPlatform();
+const launchStatus = message => { if (process.env.NOTION_SWITCH_LAUNCHER_UI === '1') console.log('NOTION_SWITCH_STATUS:' + message); };
 platform.requireCapability('launchRuntime');
 // 代理只在需要时启动：按系统代理开关决定 Notion 走代理还是直连。
 function systemProxyEnabled() {
@@ -46,10 +47,12 @@ if (anotherInstance) throw Error('另一个实例已经启动，请退出后重�
 // Only the standalone start command accepts an installation path. When this
 // module is imported by a launcher, its arguments belong to that launcher.
 const directStart = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+launchStatus('正在准备运行文件；首次启动或同步更新可能需要几分钟…');
 const prepared = prepare(directStart ? process.argv[2] : undefined, { force: process.env.NOTION_SWITCH_FORCE_UPDATE === '1' });
 console.log(JSON.stringify(prepared));
 if (process.env.NOTION_SWITCH_CLIENT_UPDATE === '1' && prepared.adapterHash !== adapterHash(project)) throw Error('最新代码尚未接入，已保留此前运行版本。');
 function launch() {
+ launchStatus('正在打开 NotionSwitch 窗口…');
  if (macRuntime && process.env.NOTION_SWITCH_MAC_LAUNCHER) return macRuntime.launchMacApplication({
   helper: process.env.NOTION_SWITCH_MAC_LAUNCHER, appRoot: platform.runtimeLayout(runtime).appRoot, root: stateRoot,
   env: { ...process.env, NOTION_SWITCH_PROJECT: path.resolve(import.meta.dirname, '..'),
@@ -71,8 +74,12 @@ if (accelerator.read(stateRoot).autoIp) {
   try { await createRequire(import.meta.url)('../src/notion-ip-probe.cjs').refresh(stateRoot); } catch {}
 }
 let child = launch(), runtimeRestored = false;
-const validationTimeout = platform.id === 'darwin' ? 45000 : undefined;
+const launcherUi = process.env.NOTION_SWITCH_LAUNCHER_UI === '1';
+const validationTimeout = platform.id === 'darwin' || launcherUi ? 45000 : undefined;
+let lastStartupObservation;
 const checkStartup = pid => waitForRuntime({ root: stateRoot, pid, timeoutMs: validationTimeout,
+  requireVisibleWindow: launcherUi,
+  onObservation: observation => { const value = JSON.stringify(observation); if (value !== lastStartupObservation) { lastStartupObservation = value; console.log(JSON.stringify({ startupCheck: observation })); } },
   ...(macRuntimeHealthFetch ? { fetchImpl: macRuntimeHealthFetch({ pid }) } : {}) });
 if (prepared.pendingValidation) {
   // macOS can take longer to restore tabs after a freshly signed bundle swap.
@@ -95,7 +102,7 @@ if (prepared.pendingValidation) {
     if (!await checkStartup(child.pid)) throw Error('上一个原型版本也未能启动，请打开配置或查看启动结果。');
   }
 }
-else if (process.env.NOTION_SWITCH_CLIENT_UPDATE === '1' && !await checkStartup(child.pid)) throw Error('更新后的应用未通过启动检查。');
+else if ((process.env.NOTION_SWITCH_CLIENT_UPDATE === '1' || launcherUi) && !await checkStartup(child.pid)) throw Error('应用尚未显示可用窗口，请查看启动日志后重试。');
 const { ProviderRouter } = createRequire(import.meta.url)('../src/provider.cjs');
 console.log(JSON.stringify({ launched: true, pid: child.pid, mode: new ProviderRouter({ root: stateRoot }).status().mode, runtimeRestored, originalInstallationModified: false }));
 if (runtimeRestored && process.env.NOTION_SWITCH_CLIENT_UPDATE === '1') process.exitCode = 1;

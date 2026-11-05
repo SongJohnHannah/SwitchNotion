@@ -104,6 +104,11 @@ function createMacRuntime({ execFileSync, fsImpl = fs }) {
       const set = (key, value) => plist(file, [Object.hasOwn(info, key) ? '-replace' : '-insert', key, '-string', value]);
       set('CFBundleDisplayName', 'SwitchNotion');
       set('CFBundleIdentifier', 'com.notionswitch.desktop');
+      const brandIcon = path.join(__dirname, '..', 'app-icon.icns');
+      if (fsImpl.existsSync(brandIcon)) {
+        fsImpl.copyFileSync(brandIcon, path.join(layout.resources, 'SwitchNotion.icns'));
+        set('CFBundleIconFile', 'SwitchNotion.icns');
+      }
       for (const item of fsImpl.readdirSync(layout.resources, { withFileTypes: true })) {
         if (!item.isDirectory() || !item.name.endsWith('.lproj')) continue;
         const strings = path.join(layout.resources, item.name, 'InfoPlist.strings');

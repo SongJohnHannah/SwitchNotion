@@ -139,7 +139,7 @@ function fixture(t) {
   return { root, source, sourceProject: project, platform, calls, install, failSign: () => { failSign = true; } };
 }
 
-test('M1 launch prepares a separate bundle, updates ASAR integrity and identity, preserves icon and signs before promotion', t => {
+test('M1 launch prepares a separate bundle, updates ASAR integrity, identity and personal icon and signs before promotion', t => {
   const f = fixture(t), original = fs.readFileSync(f.source.archive), beforePlist = fs.readFileSync(path.join(f.source.appRoot, 'Contents/Info.plist'));
   const result = prepareRuntime({ ...f, source: f.source.appRoot });
   const staged = f.platform.runtimeLayout(path.join(f.root, 'runtime'));
@@ -148,7 +148,7 @@ test('M1 launch prepares a separate bundle, updates ASAR integrity and identity,
   assert.equal(path.basename(staged.appRoot), 'SwitchNotion.app');
   assert.equal(info.CFBundleDisplayName, 'SwitchNotion'); assert.equal(info.CFBundleName, 'Notion'); assert.equal(info.CFBundleIdentifier, 'com.notionswitch.desktop');
   assert.match(fs.readFileSync(path.join(staged.resources, 'zh_CN.lproj/InfoPlist.strings'), 'utf8'), /CFBundleName" = "SwitchNotion"/);
-  assert.equal(info.CFBundleIconFile, 'electron.icns'); assert.equal(info.CFBundleURLTypes, undefined);
+  assert.equal(info.CFBundleIconFile, 'SwitchNotion.icns'); assert.equal(info.CFBundleURLTypes, undefined);
   assert.equal(fs.existsSync(path.join(staged.resources, 'app-update.yml')), false);
   assert.equal(fs.existsSync(path.join(f.source.resources, 'app-update.yml')), true);
   assert.equal(info.ElectronAsarIntegrity['Resources/app.asar'].hash, runtimeModule.headerHash(fs.readFileSync(staged.archive)));

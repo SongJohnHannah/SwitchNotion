@@ -36,12 +36,21 @@ export function prepareRootLaunchers({ sourceProject = project, host = process.p
     const built = path.join(staging, 'Switch Notion.exe');
     if (compile) compile(built);
     else execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'scripts/compile-launcher.ps1'), '-Source', path.join(root, 'scripts/windows-launcher.cs'), '-Destination', built], { windowsHide: true, stdio: 'pipe', timeout: 30000 });
-    assertDistributionFiles(staging, [built], keys);
+    const settings = path.join(staging, 'NotionSwitch 配置.exe');
+    if (compile) compile(settings);
+    else execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'scripts/compile-launcher.ps1'), '-Source', path.join(root, 'scripts/windows-launcher.cs'), '-Destination', settings], { windowsHide: true, stdio: 'pipe', timeout: 30000 });
+    const windows = [built, settings];
+    for (const name of ['SwitchNotion.exe', 'NotionSwitch.exe']) { const file = path.join(staging, name); fs.copyFileSync(built, file); windows.push(file); }
+    const update = path.join(staging, 'NotionSwitch 更新.exe'); fs.copyFileSync(settings, update); windows.push(update);
+    assertDistributionFiles(staging, windows, keys);
     fs.mkdirSync(path.join(root, 'bin'), { recursive: true }); fs.mkdirSync(path.join(root, 'licenses'), { recursive: true });
     if (!fs.existsSync(path.join(root, 'bin/node.exe'))) fs.copyFileSync(nodeExecutable, path.join(root, 'bin/node.exe'));
     if (path.resolve(nodeLicense) !== path.join(root, 'licenses/NODE-LICENSE.txt')) fs.copyFileSync(nodeLicense, path.join(root, 'licenses/NODE-LICENSE.txt'));
-    if (fs.existsSync(exe)) fs.renameSync(exe, path.join(staging, 'previous.exe'));
-    try { fs.renameSync(built, exe); } catch (error) { if (fs.existsSync(path.join(staging, 'previous.exe'))) fs.renameSync(path.join(staging, 'previous.exe'), exe); throw error; }
+    for (const file of windows) {
+      const target = path.join(root, path.basename(file)), previous = path.join(staging, 'previous-' + path.basename(file)); safe(target);
+      if (fs.existsSync(target)) fs.renameSync(target, previous);
+      try { fs.renameSync(file, target); } catch (error) { if (fs.existsSync(previous)) fs.renameSync(previous, target); throw error; }
+    }
   }
   if (fs.existsSync(app)) fs.renameSync(app, path.join(staging, 'previous.app'));
   try { fs.renameSync(prepared.app, app); } catch (error) { if (fs.existsSync(path.join(staging, 'previous.app'))) fs.renameSync(path.join(staging, 'previous.app'), app); throw error; }

@@ -2,6 +2,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { app, BrowserWindow, ipcMain, Menu, MenuItem, Tray, shell, nativeImage, dialog } = require('electron');
 const { SettingsService } = require('./settings-service.cjs');
+const { icons, appImage } = require('./app-branding.cjs');
 const { LoginService } = require('./login-state.cjs');
 const { UpdateService } = require('./update-service.cjs');
 const { createDesktopPlatform } = require('./platform/index.cjs');
@@ -71,7 +72,7 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
     if (window && !window.isDestroyed()) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); return; }
     constructingSettings = true;
     try {
-      window = new BrowserWindow({ width: 1080, height: 760, minWidth: 880, minHeight: 640, title: 'NotionSwitch 配置', backgroundColor: '#f6f8fb', show: false, autoHideMenuBar: true,
+      window = new BrowserWindow({ width: 1080, height: 760, minWidth: 880, minHeight: 640, title: 'NotionSwitch 配置', icon: icons.settings, backgroundColor: '#f6f8fb', show: false, autoHideMenuBar: true,
         webPreferences: { preload: path.join(__dirname, 'settings-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, partition: 'notion-switch-settings', additionalArguments: [marker], spellcheck: false } });
       settingsContents.add(window.webContents);
     } finally { constructingSettings = false; }
@@ -118,10 +119,8 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
   };
   app.whenReady().then(async () => {
     const menu = Menu.getApplicationMenu(); if (menu) Menu.setApplicationMenu(menu);
-    try {
-      const icon = platform.id === 'darwin'
-        ? nativeImage.createFromPath(path.join(__dirname, 'settings', 'notion-tray.png')).resize({ width: 18, height: 18 })
-        : await app.getFileIcon(process.execPath);
+    if (platform.id === 'win32') try {
+      const icon = appImage(nativeImage, 'settings', 32);
       tray = new Tray(icon);
       tray.setToolTip('Switch Notion · 快捷收集与配置');
       tray.setContextMenu(Menu.buildFromTemplate([{ label: '快捷收集', click: () => void collection.open() }, { label: '收集任务与选项', click: () => void collection.open(true) }, { label: '打开 NotionSwitch 配置', click: () => void open() }, { label: '一键启动 Notion', click: () => void openNotion() }, { type: 'separator' }, { label: '退出 NotionSwitch', click: () => app.quit() }]));

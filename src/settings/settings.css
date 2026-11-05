@@ -5,3 +5,4 @@ p{font-size:13px}.button{font-size:13px}.workspace-title{font-size:15px}.workspa
 #speech-card .form-actions{flex-wrap:wrap}#speech-transcript{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:280px;overflow:auto}
 #client-updates-card{margin-bottom:18px}
 :root #speech-progress{display:block;width:100%;height:8px;margin-top:10px;accent-color:#327eed}
+.brand-logo{width:44px;height:44px;object-fit:contain;flex-shrink:0}

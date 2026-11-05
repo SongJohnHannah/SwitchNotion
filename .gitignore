@@ -53,6 +53,10 @@ __pycache__/
 *.pyc
 .DS_Store
 /Switch Notion.exe
+/SwitchNotion.exe
+/NotionSwitch.exe
+/NotionSwitch 配置.exe
+/NotionSwitch 更新.exe
 /Switch Notion.app/
 /bin/
 /licenses/NODE-LICENSE.txt

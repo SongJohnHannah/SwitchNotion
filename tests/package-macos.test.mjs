@@ -9,7 +9,7 @@ import { verifyPackagedImagePreview } from './helpers/packaged-image-preview.mjs
 import { verifyPackagedReferences, verifyPackagedInlineReferences, verifyPackagedAiBlockSources, verifyPackagedFormulaPreview, verifyPackagedAutofill, verifyPackagedDatabaseBuild, verifyPackagedInstructionSelection, verifyPackagedConversationScope, verifyPackagedWebSources, verifyPackagedResearchScope, verifyPackagedNativeWebResearch } from './helpers/packaged-references.mjs';
 const project = path.resolve(import.meta.dirname, '..');
 
-test('Mac package is relocatable, reuses Notion icon and preserves double-click executable bits without bundling private data', async t => {
+test('Mac package is relocatable, carries the personal icon and preserves double-click executable bits without bundling private data', async t => {
   const dist = path.join(project, 'dist'); fs.mkdirSync(dist, { recursive: true });
   const base = fs.mkdtempSync(path.join(dist, 'test-mac-package-'));
   t.after(() => { assert.equal(path.dirname(base), dist); fs.rmSync(base, { recursive: true, force: true }); });

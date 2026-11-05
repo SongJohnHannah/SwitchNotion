@@ -12,3 +12,4 @@ dialog{width:min(660px,calc(100vw - 40px));max-height:calc(100vh - 40px);border:
 @media(max-width:440px){.options-grid{grid-template-columns:1fr}.capture-actions{gap:7px}.capture-actions>.secondary{padding:8px 10px}.compact-footer{align-items:flex-start}.compact-footer>span{padding-top:9px}.destination-actions>button{flex:1}.setting-group>.row{flex-wrap:wrap}.setting-group>.row>input{flex-basis:100%}}
 
 @media(max-width:520px){.accounts{grid-template-columns:1fr}.favorites{grid-template-columns:1fr}.type-options{grid-template-columns:repeat(2,1fr)}}
+.brand-logo{width:34px;height:34px;object-fit:contain;flex-shrink:0}

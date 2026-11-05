@@ -7,7 +7,8 @@ const { adaptInlineDocuments, isInlineDocumentCandidate } = require('./compat/in
 const macClient = process.platform === 'darwin' ? require('./compat/macos-client.cjs') : null;
 const macSpeech = process.platform === 'darwin' ? require('./compat/macos-speech.cjs') : null;
 // This local provider uses the native chat controls independently of Notion credits.
-// Keep workspace restriction checks above this insertion, and all other features intact.
+// Keep workspace restriction checks above this insertion. Dashboard layout is
+// enabled only in this isolated desktop client; server authorization is unchanged.
 // Both reviewed releases contain the same 811656 availability module.
 const reviewedAssets = {
   '95271-b60a0efc9a0c9841.js': '09d2a5234723e209d284f85effa8901af5a32b8ef79ed45bdd2dd361bd9ccccc',
@@ -65,7 +66,7 @@ function adaptClient(source, asset, { localSpeechEnabled = false, audioEndpoint,
   const matches = [...source.matchAll(anchor)];
   if (matches.length !== 1) throw Error('Unsupported native availability module');
   const speech = localSpeechEnabled ? 'if(u==="ai_meeting_notes"&&n.data.space?.isTranscriptionEnabled?.()!==false)return{type:"available",limit:{type:"cumulative",total:"unlimited",current:n.data.current??0}};' : '';
-  return source.replace(matches[0][0], 'if(u==="ai_usage")return{type:"available",limit:{type:"per_use",amount:"unlimited"}};if(u==="ai_model_selection")return{type:"available",limit:{type:"none"}};' + speech + matches[0][0]);
+  return source.replace(matches[0][0], 'if(u==="ai_usage")return{type:"available",limit:{type:"per_use",amount:"unlimited"}};if(u==="ai_model_selection")return{type:"available",limit:{type:"none"}};if(u==="dashboard_view")return{type:"available",limit:{type:"none"}};' + speech + matches[0][0]);
 }
 async function adaptClientAsync(source, asset, options = {}) {
   if (macClient?.isMacClientAsset(asset)) return adaptClient(source, asset, options);
