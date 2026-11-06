@@ -4,6 +4,27 @@ import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 const { appImage, icons, installAppBranding } = createRequire(import.meta.url)('../src/app-branding.cjs');
+const { createDesktopPlatform } = createRequire(import.meta.url)('../src/platform/index.cjs');
+
+test('startup and window details use a fresh branded taskbar identity instead of the cached prototype group', () => {
+  const app = new EventEmitter(), processIds = [];
+  app.whenReady = async () => {};
+  app.setAppUserModelId = id => processIds.push(id);
+  createDesktopPlatform({ id: 'win32' }).configureAppIdentity(app);
+  assert.deepEqual(processIds, ['com.switchnotion.desktop.bear'], 'Identity must be set before native startup can create a taskbar group');
+  app.setAppUserModelId('notion.id');
+  assert.equal(processIds.at(-1), 'com.switchnotion.desktop.bear', 'Later native identity updates must preserve the branded group');
+  const electron = { app, nativeImage: { createFromPath: file => ({ file }) } };
+  installAppBranding(electron, { platform: 'win32' });
+  for (const [title, expected] of [['工作区', 'com.switchnotion.desktop.bear'], ['NotionSwitch 配置', 'com.switchnotion.desktop.bear.settings']]) {
+    const window = new EventEmitter(); window.getTitle = () => title;
+    window.setAppDetails = details => { window.details = details; };
+    app.emit('browser-window-created', {}, window);
+    assert.equal(window.details.appId, expected);
+    window.setAppDetails({ appId: 'notion.switch.prototype' });
+    assert.equal(window.details.appId, expected);
+  }
+});
 
 test('both native and configuration trays retain their distinct personal icons after upstream icon updates', async () => {
   const app = new EventEmitter(), dock = [];

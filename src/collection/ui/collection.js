@@ -2,13 +2,13 @@
 const api = window.collection, $ = id => document.getElementById(id);
 let state, chosen, expanded = false, activePanel = 'destination', selectedJob, destinationResults = [], cursors = {}, searchTimer, refreshTimer, searchVersion = 0, pendingVision = null, visionResolver = null, templateType = '', checkingAccounts = false;
 const names = { paragraph: '正文', heading: '标题', quote: '引用', list: '列表', code: '代码', divider: '分隔', link: '链接', image: '图片', video: '视频', audio: '音频' };
-const statuses = { queued: '等待中', reading: '识别中', downloading: '下载中', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需登录／检查完整性', completed: '已保存', partial: '待补全', failed: '失败', cancelled: '已停止', interrupted: '可继续' };
+const statuses = { queued: '等待中', reading: '识别中', downloading: '下载中', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需检查原网页', completed: '已保存', partial: '处理未完成', failed: '失败', cancelled: '已停止', interrupted: '可继续' };
 const active = ['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving'];
 function taskStatus() {
   const processing = state.jobs.filter(job => active.includes(job.status)).length;
   const attention = state.jobs.filter(job => !active.includes(job.status) && job.status !== 'completed').length;
   const completed = state.jobs.length - processing - attention;
-  const text = [processing ? '处理中 ' + processing : '', attention ? '待补全 ' + attention : '', completed ? '已完成 ' + completed : ''].filter(Boolean).join(' · ');
+  const text = [processing ? '处理中 ' + processing : '', attention ? '未完成 ' + attention : '', completed ? '已完成 ' + completed : ''].filter(Boolean).join(' · ');
   return { text, tone: attention ? 'attention' : processing ? 'busy' : 'done' };
 }
 const element = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };

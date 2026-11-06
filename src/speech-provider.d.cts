@@ -39,6 +39,14 @@ export interface SpeechOptions {
   idleMs?: number;
   timeoutMs?: number;
 }
+export interface SpeechRecognitionResult {
+  text: string;
+  segments?: { start: number; end: number; text: string }[];
+  language?: string;
+  contextText?: string;
+  elapsedMs?: number;
+}
+export type SpeechResultObserver = (result: SpeechRecognitionResult) => void | Promise<void>;
 export class SpeechProvider {
   constructor(options: SpeechOptions);
   runtime: LocalSpeechRuntime | null;
@@ -47,13 +55,14 @@ export class SpeechProvider {
   configure(): Promise<LocalSpeechRuntime>;
   probe(options?: { signal?: AbortSignal }): Promise<SpeechStatus>;
   /** 16 kHz mono Float32 little-endian PCM, normalized [-1, 1], at most 60 s. */
-  transcribe(options: { pcm: Buffer; language?: SpeechLanguage; context?: string; signal?: AbortSignal }): Promise<string>;
+  transcribe(options: { pcm: Buffer; language?: SpeechLanguage; context?: string; signal?: AbortSignal; onResult?: SpeechResultObserver }): Promise<string>;
   /** Reliable context is scoped by the caller to the same meeting and audio source. */
-  transcribeDetailed(options: { pcm: Buffer; language?: SpeechLanguage; context?: string; signal?: AbortSignal }):
+  transcribeDetailed(options: { pcm: Buffer; language?: SpeechLanguage; context?: string; signal?: AbortSignal; onResult?: SpeechResultObserver }):
     Promise<{ text: string; context: string; language?: string }>;
   /** PCM16 / Float32 WAV, up to 10 minutes and 128 MiB; progress is 0..1. */
   transcribeWav(options: { wav: Buffer; language?: SpeechLanguage; signal?: AbortSignal;
-    chunkSeconds?: number; onProgress?: (fraction: number) => void }): Promise<string>;
+    chunkSeconds?: number; onProgress?: (fraction: number) => void;
+    onResult?: (result: SpeechRecognitionResult & { start: number; duration: number }) => void | Promise<void> }): Promise<string>;
   transcribeRecording(options: { audio: Buffer; signal?: AbortSignal }): Promise<string>;
   retain(): void;
   release(): void;

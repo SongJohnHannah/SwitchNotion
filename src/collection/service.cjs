@@ -11,6 +11,7 @@ const { OllamaService } = require('./ollama.cjs');
 const { MediaOcr } = require('../mediaocr.cjs');
 const { CollectionNotion } = require('./notion.cjs');
 const { CollectionExtraction } = require('./extraction.cjs');
+const { extractionReadiness } = require('./extraction-readiness.cjs');
 const { parseInputs, describeLocal, checkLocal, localDocument, isLikelyVideoInput } = require('./local-media.cjs');
 const { clearCompleted, ownedExport } = require('./history.cjs');
 const { loadLibrary, saveLibrary, resolveTemplate, normalizeType } = require('./summary-templates.cjs');
@@ -22,7 +23,7 @@ const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destinatio
 const safeError = error => {
   const text = String(error?.message || '操作未完成，请检查连接后重试。');
   if (/(?:sk-|ntn_|secret_)[\w-]{8}|Bearer\s|Cookie\s*[:=]/i.test(text)) return '连接或处理失败，请在配置中检查后重试。';
-  return /^[\u3400-\u9fff]|^(Notion|DeepSeek|媒体|收集|资源|目标|此|本地|请选择|请先|无法|没有|下载)/.test(text) ? text.slice(0, 500) : '操作未完成，请检查网络、登录与组件状态后重试。';
+  return /^[\u3400-\u9fff]|^(Notion|DeepSeek|媒体|收集|资源|目标|此|本地|请选择|请先|无法|没有|下载)/.test(text) ? text.slice(0, 500) : '操作未完成，请检查网络与组件状态后重试。';
 };
 class CollectionService extends EventEmitter {
   constructor({ root, downloadsDirectory = path.join(os.homedir(), 'Downloads'), speech, provider, binaries, browser, media, notion, extraction } = {}) {
@@ -56,6 +57,16 @@ class CollectionService extends EventEmitter {
         if (job.localSource) { if (!path.isAbsolute(job.localSource.path) || !/^[a-f\d]{64}$/.test(job.localSource.signature)) continue; }
         else extractUrls(job.url);
         if (activeStates.has(job.status)) { job.status = 'interrupted'; job.message = '上次运行已中断，已保留文件和写入进度，可继续。'; }
+        if (job.document && job.extraction?.text && job.options.extraction.mode !== 'off') {
+          const pending = extractionReadiness(job, layoutNodes(selectedNodes(job.document, job.options, job.selectedIds), job.layout));
+          if (pending) {
+            job.extraction = pending; delete job.classification; delete job.extractionWork; job.message = pending.error;
+            const legacy = '媒体下载未完成，请在收集浏览器中登录并确认原始内容可播放。';
+            const corrected = '媒体下载未完成；旧版本未记录实际失败原因，请重试下载。';
+            for (const resource of Object.values(job.resources || {})) if (resource.error === legacy) resource.error = corrected;
+            job.warnings = (job.warnings || []).map(warning => warning.replace('尚待补全：', '处理未完成：').replace(legacy, corrected));
+          }
+        }
         this.jobs.set(job.id, job);
         if (job.status === 'completed' && !this.settings.keepHistory) this.forgetCompleted(job);
       } catch { this.lastError = '部分任务记录无法读取，原文件已保留。'; }
@@ -158,7 +169,11 @@ class CollectionService extends EventEmitter {
       job.status = 'reading'; progress('正在识别链接中的正文、图片、视频和音频…');
       job.document = await this.browser.inspect(job.url, { signal, progress }); job.warnings = [...job.document.warnings]; save();
     }
-    if ((job.document.requiresLogin || job.document.incomplete) && !job.allowPartial) { job.status = 'needs_login'; progress('尚未取得完整内容，请登录或在原网页展开正文后重新读取；也可手动保存已获取的部分。'); return; }
+    if ((job.document.requiresLogin || job.document.incomplete) && !job.allowPartial) {
+      job.status = 'needs_login';
+      progress(job.document.requiresLogin ? '原站提示账号访问限制或人工验证，请在收集浏览器中处理后重新读取；也可手动保存已获取的部分。' : '原网页正文尚未完整获取，请确认页面已加载或展开正文后重新读取；也可手动保存已获取的部分。');
+      return;
+    }
     if (job.previewOnly) { job.status = 'awaiting_selection'; progress('已识别内容，请选择要保存的项目与位置。'); return; }
     if (!job.options.destination) throw Error('请先选择保存位置。');
     const selected = layoutNodes(selectedNodes(job.document, job.options, job.selectedIds), job.layout);
@@ -168,17 +183,21 @@ class CollectionService extends EventEmitter {
     await this.processMedia(job, selected, limit, save, progress, signal);
     if (job.options.extraction.mode !== 'off') {
       job.status = 'processing'; save();
-      try { job.extraction = await this.extractor.run(job, selected, { signal, progress, save }); }
+      const pending = extractionReadiness(job, selected);
+      if (pending) { job.extraction = pending; delete job.classification; delete job.extractionWork; }
+      else try { job.extraction = await this.extractor.run(job, selected, { signal, progress, save }); }
       catch (error) { signal.throwIfAborted(); job.extraction = { error: safeError(error) }; } save();
     }
     const failures = selected.filter(node => mediaKinds.has(node.kind) && (job.resources[node.id]?.error || job.analyses[node.id]?.errors?.length));
-    job.warnings = [...job.document.warnings, ...failures.map(node => `素材 ${selected.indexOf(node) + 1} 尚待补全：${job.resources[node.id]?.error || job.analyses[node.id].errors.join('；')}`)];
+    job.warnings = [...job.document.warnings, ...failures.map(node => `素材 ${selected.indexOf(node) + 1} 处理未完成：${job.resources[node.id]?.error || job.analyses[node.id].errors.join('；')}`)];
     if (job.extraction?.error) job.warnings.push('内容提取待完成：' + job.extraction.error);
     job.status = 'saving'; progress('正在按原文顺序保存到 Notion，并核验内容…');
     await this.notion.write(job, selected, save, signal);
     if (job.options.keepLocal) this.exportLocal(job, selected);
     job.status = failures.length || job.document.incomplete || job.extraction?.error ? 'partial' : 'completed';
-    job.message = job.status === 'completed' ? '已保存到 Notion，正文和媒体顺序已核验。' : '已保存获取到的内容；有未完成项目，可补登录或配置后重试。'; save();
+    job.message = job.status === 'completed' ? '已保存到 Notion，正文和媒体顺序已核验。' :
+      job.extraction?.deferred ? '已保存已获取的内容；' + job.extraction.error :
+      '已保存已获取的内容；' + (failures.length ? '部分素材下载、识别或上传未完成，请查看具体原因后重试。' : job.extraction?.error ? 'AI 总结未完成，请查看具体原因后重试。' : '原网页内容尚未完整获取，请检查原网页后重试。'); save();
     if (job.status === 'completed' && !job.options.keepLocal) this.releaseWorkingFiles(job);
     this.emit('finished', { id: job.id, title: job.document.title, status: job.status, url: job.page?.url, pageId: job.page?.id });
     if (job.status === 'completed') {

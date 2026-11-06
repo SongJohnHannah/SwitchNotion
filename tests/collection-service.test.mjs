@@ -30,6 +30,48 @@ function fixture(t, extra = {}) {
 }
 async function idle(service) { for (let n = 0; n < 400; n++) { if (!service.running && !service.queue.length) return; await sleep(5); } throw Error('collection test did not settle'); }
 
+test('failed video download defers summary despite a page title and recovers on the same page', async t => {
+  let fail = true, summaries = 0;
+  const document = normalizeDocument({ title: 'Jensen Huang interview', url: 'https://www.youtube.com/watch?v=fixture', nodes: [
+    { kind: 'heading', text: 'Jensen Huang interview', level: 1 }, { kind: 'video', url: 'https://www.youtube.com/watch?v=fixture' }] });
+  const f = fixture(t, { document, media: { acquire: async (node, directory) => {
+    if (fail) throw Error('下载失败：HTTP 502');
+    fs.mkdirSync(directory, { recursive: true }); const file = path.join(directory, 'original.mp4'); fs.writeFileSync(file, 'video'); return { path: file, kind: node.kind, audio: true, duration: 1 };
+  } }, extraction: { run: async job => { summaries++; assert.equal(job.analyses[document.nodes[1].id].transcript.text, '原始语音逐字稿'); return { name: '访谈', text: '有逐字稿依据的总结' }; } } });
+  f.service.settings = preferences({ extraction: { mode: 'auto' }, vision: false }, f.service.settings);
+  await f.service.create({ input: document.url }); await idle(f.service);
+  const job = [...f.service.jobs.values()][0];
+  assert.equal(summaries, 0, 'a failed download must not call the summarizer with just the title');
+  assert.equal(job.status, 'partial'); assert.equal(job.extraction.deferred, true);
+  assert.doesNotMatch(job.message, /登录/); assert.match(job.message, /下载/);
+  const page = job.page.id; fail = false; f.service.retry(job.id); await idle(f.service);
+  assert.equal(job.status, 'completed'); assert.equal(summaries, 1); assert.equal(job.page.id, page);
+});
+
+test('failed transcription defers summary even if video frames and webpage text are available', async t => {
+  let fail = true, summaries = 0;
+  const f = fixture(t, { media: { transcript: async () => { if (fail) throw Error('本地转写进程中断'); return { text: '完整逐字稿' }; } },
+    extraction: { run: async () => { summaries++; return { text: '完整总结', name: '访谈' }; } } });
+  f.service.settings = preferences({ extraction: { mode: 'auto' } }, f.service.settings);
+  await f.service.create({ input: 'https://example.com/article' }); await idle(f.service);
+  const job = [...f.service.jobs.values()][0]; assert.equal(summaries, 0); assert.equal(job.extraction.stage, 'transcript');
+  const downloads = f.calls.filter(call => call.startsWith('download:')).length;
+  fail = false; f.service.retry(job.id); await idle(f.service);
+  assert.equal(job.status, 'completed'); assert.equal(summaries, 1);
+  assert.equal(f.calls.filter(call => call.startsWith('download:')).length, downloads);
+});
+
+test('restoring an old failed video task suppresses its metadata-only summary classification', async t => {
+  const f = fixture(t, { media: { acquire: async () => { throw Error('媒体下载未完成，请在收集浏览器中登录并确认原始内容可播放。'); } } });
+  await f.service.create({ input: 'https://example.com/article' }); await idle(f.service);
+  const job = [...f.service.jobs.values()][0]; job.options.extraction.mode = 'auto';
+  job.extraction = { name: '通用总结', text: '没有实际内容的旧总结' }; job.classification = { type: '通用', title: '资料内容概览' }; f.service.save(job);
+  const restored = new CollectionService({ root: f.root, binaries: { status: () => ({}) }, browser: {}, media: {}, notion: {} }); t.after(() => restored.close());
+  const recovered = restored.jobs.get(job.id); assert.equal(recovered.extraction.deferred, true); assert.equal(recovered.extraction.text, undefined);
+  assert.equal(recovered.classification, undefined); assert.doesNotMatch(recovered.message, /登录/);
+  assert.ok(recovered.warnings.every(warning => !warning.includes('登录')));
+});
+
 test('account checks are passive by default, require an explicit boolean for live verification, and leave the queue alone', async t => {
   const f = fixture(t), checks = [];
   f.service.browser.accounts = async (_signal, options) => { checks.push(options.verify); return [{ id: 'bilibili', state: options.verify ? 'valid' : 'deferred' }]; };

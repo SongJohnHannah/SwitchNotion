@@ -28,10 +28,10 @@ class BackendContract(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.profile('darwin', 'x86_64')
 
-    def configure(self, selected, supported=None, **extra):
+    def configure(self, selected, supported=None, backend_version='4.8.5', **extra):
         model = types.SimpleNamespace(model=types.SimpleNamespace(is_multilingual=True))
         constructor = Mock(return_value=model)
-        ct2 = types.SimpleNamespace(get_supported_compute_types=Mock(return_value=supported or {'int8', 'float16'}))
+        ct2 = types.SimpleNamespace(__version__=backend_version, get_supported_compute_types=Mock(return_value=supported or {'int8', 'float16'}))
         modules = {'ctranslate2': ct2, 'faster_whisper': types.SimpleNamespace(WhisperModel=constructor),
                    'faster_whisper.vad': types.SimpleNamespace(get_vad_model=Mock())}
         with patch.object(backend, 'profile', return_value=selected), patch.dict(sys.modules, modules), \
@@ -57,6 +57,11 @@ class BackendContract(unittest.TestCase):
         self.assertEqual(constructor.call_args.kwargs['device'], 'cuda')
         self.assertEqual(status['computeType'], 'float16')
         ct2.get_supported_compute_types.assert_called_once_with('cuda')
+
+    def test_windows_rejects_gpu_backends_without_the_validated_fp16_fixes(self):
+        for version in ['4.8.1', '4.8.3', '4.8.4']:
+            with self.subTest(version=version), self.assertRaisesRegex(RuntimeError, '4.8.5'):
+                self.configure(self.profile('win32', 'AMD64'), backend_version=version)
 
     def test_copied_dll_or_cuda_configuration_cannot_run_on_m1(self):
         for extra in ({'dllDirectory': 'C:\\cuda'}, {'device': 'cuda'}, {'architecture': 'x64'}):

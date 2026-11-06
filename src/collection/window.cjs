@@ -73,7 +73,7 @@ function setupCollection({ root, speech, createWindow, openSettings, platform })
   service.on('settings', register);
   service.on('finished', info => {
     if (!Notification.isSupported()) return;
-    const notice = new Notification({ title: info.status === 'completed' ? '已收集到 Notion' : '内容已保存，部分项目待补全', body: info.title.slice(0, 120), silent: true });
+    const notice = new Notification({ title: info.status === 'completed' ? '已收集到 Notion' : '内容已保存，部分处理未完成', body: info.title.slice(0, 120), silent: true });
     notice.on('click', () => { if (info.status === 'completed' && /^[a-f\d-]{36}$/i.test(info.pageId)) void shell.openExternal('https://www.notion.so/' + info.pageId.replaceAll('-', '')); else void open(true); }); notice.show();
   });
   app.whenReady().then(register).catch(() => {});

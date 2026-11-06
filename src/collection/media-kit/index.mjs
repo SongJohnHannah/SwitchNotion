@@ -57,16 +57,21 @@ export class MediaKit {
             return { ok: false, method: "none", files: [], error: `URL 被安全规则拦截: ${resolvedCheck}`, durationMs: Date.now() - start };
         }
         await fs.promises.mkdir(outputDir, { recursive: true });
-        // Resolve browserBaseUrl: ensure Chrome CDP is running
+        // Public downloads do not need a browser or an authenticated session.
         let browserBaseUrl = this.config.browserBaseUrl;
-        if (browserBaseUrl) {
-            const cdpPort = parseInt(new URL(browserBaseUrl).port || "9333", 10);
-            const ready = await ensureChromeRunning(cdpPort, this.config);
-            if (!ready) {
+        let browserChecked = false;
+        const ensureBrowser = async () => {
+            if (browserChecked || !browserBaseUrl) return browserBaseUrl;
+            browserChecked = true;
+            try {
+                const cdpPort = parseInt(new URL(browserBaseUrl).port || "9333", 10);
+                if (!await ensureChromeRunning(cdpPort, this.config)) browserBaseUrl = undefined;
+            } catch {
                 browserBaseUrl = undefined;
-                logWarn("[media-kit] Chrome CDP not available; browser fallback disabled");
             }
-        }
+            if (!browserBaseUrl) logWarn("[media-kit] Chrome CDP not available; browser fallback disabled");
+            return browserBaseUrl;
+        };
         // mediaType=audio: extract audio directly via yt-dlp
         const isAudioRequest = mediaType === "audio" || extractAudio;
         const isTextRequest = mediaType === "text";
@@ -83,7 +88,7 @@ export class MediaKit {
         const proxyUrl = this.config.proxyUrl || undefined;
         // Route A: Audio extraction (yt-dlp -x)
         if (isAudioRequest) {
-            const ytdlpResult = await ytdlpDownload(params, { browserBaseUrl });
+            const ytdlpResult = await ytdlpDownload(params, { getBrowserBaseUrl: ensureBrowser });
             if (ytdlpResult.ok) {
                 await this.postProcess(ytdlpResult, { extractAudioTrack, transcribe });
                 return ytdlpResult;
@@ -96,31 +101,41 @@ export class MediaKit {
         }
         // Route B: Chinese video platforms → videodl (CDP + yt-dlp)
         if (wantsVideo && isChineseVideoDomain(url)) {
+            const direct = await ytdlpDownload(params, { getBrowserBaseUrl: ensureBrowser });
+            if (direct.ok && direct.files?.some(file => file.type === 'video')) {
+                await this.postProcess(direct, { extractAudioTrack, transcribe });
+                return direct;
+            }
+            await ensureBrowser();
             const result = await videoDlDownload(params, { browserBaseUrl, proxyUrl });
-            if (result.ok)
+            if (result.ok && result.files?.some(file => file.type === 'video')) {
                 await this.postProcess(result, { extractAudioTrack, transcribe });
+            } else {
+                result.ok = false;
+                result.error = [direct.error, result.error].filter(Boolean).join('; ');
+            }
             return result;
         }
         // Route C: CDP-first domains (X, Instagram) → yt-dlp first, CDP fallback
         if (wantsVideo && isCdpFirstDomain(url)) {
-            const ytdlpResult = await ytdlpDownload(params, { browserBaseUrl });
-            if (ytdlpResult.ok) {
+            const ytdlpResult = await ytdlpDownload(params, { getBrowserBaseUrl: ensureBrowser });
+            if (ytdlpResult.ok && ytdlpResult.files?.some(file => file.type === 'video')) {
                 await this.postProcess(ytdlpResult, { extractAudioTrack, transcribe });
                 return ytdlpResult;
             }
-            if (browserBaseUrl) {
-                const cdpResult = await cdpScrape({ url, outputDir, browserBaseUrl, downloadImages: true, downloadVideos: true, downloadText: true });
-                if (cdpResult.ok)
+            if (await ensureBrowser()) {
+                const cdpResult = await cdpScrape({ url, outputDir, browserBaseUrl, downloadImages: false, downloadVideos: true, downloadText: false });
+                if (cdpResult.ok && cdpResult.files?.some(file => file.type === 'video'))
                     return cdpResult;
             }
             return {
                 ok: false, method: "none", files: [],
-                error: `yt-dlp 和浏览器 CDP 都无法处理 ${url}。可能是页面需要登录，请先在 Chrome 中登录`,
+                error: ytdlpResult.error || '下载器和浏览器均未取得视频文件。',
                 durationMs: Date.now() - start,
             };
         }
         // Route D: Text/image on any site → CDP scrape
-        if (browserBaseUrl) {
+        if (!wantsVideo && await ensureBrowser()) {
             const cdpResult = await cdpScrape({
                 url, outputDir, browserBaseUrl,
                 downloadImages: !isTextRequest,
@@ -132,19 +147,19 @@ export class MediaKit {
         }
         // Route E: Video on unknown/overseas sites → yt-dlp
         if (wantsVideo) {
-            const ytdlpResult = await ytdlpDownload(params, { browserBaseUrl });
-            if (ytdlpResult.ok) {
+            const ytdlpResult = await ytdlpDownload(params, { getBrowserBaseUrl: ensureBrowser });
+            if (ytdlpResult.ok && ytdlpResult.files?.some(file => file.type === 'video')) {
                 await this.postProcess(ytdlpResult, { extractAudioTrack, transcribe });
                 return ytdlpResult;
             }
-            if (browserBaseUrl) {
-                const cdpResult = await cdpScrape({ url, outputDir, browserBaseUrl, downloadImages: true, downloadVideos: true, downloadText: true });
-                if (cdpResult.ok)
+            if (await ensureBrowser()) {
+                const cdpResult = await cdpScrape({ url, outputDir, browserBaseUrl, downloadImages: false, downloadVideos: true, downloadText: false });
+                if (cdpResult.ok && cdpResult.files?.some(file => file.type === 'video'))
                     return cdpResult;
             }
             return {
                 ok: false, method: "none", files: [],
-                error: `Download failed for ${url}: yt-dlp and CDP both returned no content`,
+                error: ytdlpResult.error || '下载器和浏览器均未取得视频文件。',
                 durationMs: Date.now() - start,
             };
         }

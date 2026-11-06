@@ -43,7 +43,7 @@ function renderDocument(document, nodes, resources, analyses = {}, warnings = []
     if (!mediaKinds.has(node.kind)) { result.push(...textBlocks(node)); slots[node.id] = { start: positions[node.id], count: result.length - positions[node.id] }; continue; }
     const resource = resources[node.id];
     if (resource?.error || !resource?.uploads?.length || resource.uploads.some(u => !u.uploaded)) {
-      result.push(paragraph(`【${node.kind === 'image' ? '图片' : node.kind === 'video' ? '视频' : '音频'} ${index + 1} 待补全】${resource?.error || '尚未下载或上传'}${node.caption ? ' · ' + node.caption : ''}`)); slots[node.id] = { start: positions[node.id], count: 1, placeholder: true }; continue;
+      result.push(paragraph(`【${node.kind === 'image' ? '图片' : node.kind === 'video' ? '视频' : '音频'} ${index + 1} 处理未完成】${resource?.error || '尚未下载或上传'}${node.caption ? ' · ' + node.caption : ''}`)); slots[node.id] = { start: positions[node.id], count: 1, placeholder: true }; continue;
     }
     for (const [part, upload] of resource.uploads.entries()) result.push({ object: 'block', type: node.kind,
       [node.kind]: { type: 'file_upload', file_upload: { id: upload.id }, caption: textSpans((node.caption || '') + (resource.uploads.length > 1 ? ` · ${part + 1}/${resource.uploads.length}` : '')) } });

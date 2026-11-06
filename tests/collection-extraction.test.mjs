@@ -9,6 +9,29 @@ const { parseInputs, describeLocal, checkLocal } = require('../src/collection/lo
 const { preferences, normalizeDocument, layoutNodes } = require('../src/collection/model.cjs');
 const { CollectionExtraction } = require('../src/collection/extraction.cjs');
 const { renderDocument } = require('../src/collection/notion.cjs');
+
+test('video metadata and expand controls cannot reach classification or summary before media evidence exists', async () => {
+  const engine = new CollectionExtraction({ provider: { config: () => assert.fail('incomplete sources must not reach the provider') } });
+  const doc = normalizeDocument({ url: 'https://www.youtube.com/watch?v=fixture', nodes: [
+    { kind: 'paragraph', text: '…更多' }, { kind: 'video', url: 'https://www.youtube.com/watch?v=fixture' }] });
+  const node = doc.nodes[1], job = { options: preferences(), document: doc, resources: {}, analyses: {} };
+  assert.equal((await engine.run(job, doc.nodes)).stage, 'download');
+  job.resources[node.id] = { asset: { path: '/video.mp4', audio: true } };
+  job.analyses[node.id] = { vision: { text: '只有采样画面' } };
+  assert.equal((await engine.run(job, doc.nodes)).stage, 'transcript');
+  job.analyses[node.id] = { transcript: { text: '', note: '未识别到清晰语音。' } };
+  assert.equal((await engine.run(job, doc.nodes)).stage, 'evidence');
+});
+
+test('a stored transcript with a valid prefix and degenerate punctuation cannot be summarized', async () => {
+  const engine = new CollectionExtraction({ provider: { config: () => assert.fail('corrupt transcripts must not reach summary') } });
+  const doc = normalizeDocument({ url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video' }] });
+  const id = doc.nodes[0].id;
+  const job = { options: preferences(), document: doc, resources: { [id]: { asset: { path: '/video.mp4', audio: true } } },
+    analyses: { [id]: { transcript: { text: 'First part was recognizable.\n' + '!'.repeat(224) } } } };
+  const result = await engine.run(job, doc.nodes);
+  assert.equal(result.deferred, true); assert.equal(result.stage, 'transcript-quality');
+});
 test('one input accepts Windows, Mac and file URLs with spaces, alongside web links', () => {
   assert.deepEqual(parseInputs('"D:\\媒体 资料\\片段.mp4"\nhttps://example.com/article\nfile:///C:/Users/me/My%20Audio.m4a', { platform: 'win32', home: 'C:\\Users\\me' }), [
     { kind: 'local', path: 'D:\\媒体 资料\\片段.mp4' }, { kind: 'web', url: 'https://example.com/article' }, { kind: 'local', path: 'C:\\Users\\me\\My Audio.m4a' }]);

@@ -19,9 +19,9 @@ const YTDLP_TIMEOUT_MS = 2_280_000;
 const YTDLP_MAX_BUFFER = 10 * 1024 * 1024;
 const DEFAULT_OUTPUT_DIR = "/mnt/d/Download";
 const YTDLP_RETRYABLE_ERRORS = [
-    "http error 403", "sign in", "captcha", "unable to", "not found",
+    "http error 403", "sign in", "captcha",
     "login required", "private video", "members-only", "age-restricted",
-    "geo-restricted", "http error 429", "rate limit", "temporary ban",
+    "http error 429", "rate limit", "temporary ban",
     "access denied", "cloudflare", "please wait", "verify you are human",
     "fresh cookies", "cookies",
 ];
@@ -54,17 +54,32 @@ function isYtdlpRetryableError(stderr) {
     const lower = stderr.toLowerCase();
     return YTDLP_RETRYABLE_ERRORS.some((p) => lower.includes(p));
 }
+function isYoutube(url) {
+    return /(^|\.)(?:youtube\.com|youtube-nocookie\.com|youtu\.be)$/i.test(new URL(url).hostname);
+}
+function failureReason(stderr) {
+    const lines = String(stderr || '').trim().split(/\r?\n/).filter(Boolean);
+    const errors = lines.filter(line => /\bERROR\b/.test(line));
+    return (errors.length ? errors : lines).slice(-2).join(' ').slice(-700);
+}
 async function runYtdlp(params) {
-    const bin = resolveYtdlpBin();
+    let bin;
+    try { bin = resolveYtdlpBin(); }
+    catch (error) { return { success: false, files: [], stderr: error.message }; }
     const baseDir = params.outputDir?.trim() || DEFAULT_OUTPUT_DIR;
     const dateSubDir = new Date().toISOString().slice(0, 10);
     const folderName = params.title ? safeFilename(params.title, 100) : "%(title)s";
     const targetDir = path.join(baseDir, dateSubDir, folderName);
     const args = [
-        "--no-warnings", "--encoding", "utf-8", "--socket-timeout", "20", "--retries", "2", "--fragment-retries", "2", "--concurrent-fragments", "4", "--abort-on-unavailable-fragments", "--no-playlist", "--prefer-free-formats",
+        "--ignore-config", "--no-warnings", "--encoding", "utf-8", "--socket-timeout", "20", "--retries", "2", "--fragment-retries", "2", "--concurrent-fragments", "4", "--abort-on-unavailable-fragments", "--no-playlist", "--prefer-free-formats",
         "-o", path.join(targetDir, "media.%(ext)s"),
         "--print", "after_move:filepath",
     ];
+    if (isYoutube(params.url)) {
+        const node = process.versions.electron ? resolveBin('node') : process.execPath;
+        if (node) args.push('--js-runtimes', 'node:' + node);
+        if (params.youtubeClientFallback) args.push('--extractor-args', 'youtube:player_client=default,web_embedded');
+    }
     if (process.env.MEDIAKIT_PROXY_URL)
         args.push("--proxy", process.env.MEDIAKIT_PROXY_URL);
     if (params.cookieFilePath)
@@ -94,7 +109,7 @@ async function runYtdlp(params) {
         if (error.code === "ETIMEDOUT" || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
             throw new Error(`yt-dlp process error: ${error.code}`, { cause: err });
         }
-        return { success: false, files: [], stderr: error.stderr?.toString() ?? "" };
+        return { success: false, files: [], stderr: failureReason(error.stderr?.toString() || error.message || String(error.code || '下载器未返回视频文件')) };
     }
 }
 export async function ytdlpDownload(params, options) {
@@ -117,30 +132,27 @@ export async function ytdlpDownload(params, options) {
             durationMs: Date.now() - start,
         };
     }
-    const initialCookie = await getCookiesFile(options?.browserBaseUrl, params.url);
-    let result;
-    try {
-        result = await runYtdlp({ ...params, cookieFilePath: initialCookie || params.cookieFilePath });
-    }
-    finally {
-        if (initialCookie)
-            try {
-                fs.unlinkSync(initialCookie);
-            }
-            catch { }
+    const failures = [];
+    const attempt = async (settings, stage) => {
+        const value = await runYtdlp(settings);
+        if (!value.success) failures.push({ stage, error: value.stderr });
+        return value;
+    };
+    let result = await attempt(params, '公开下载');
+    if (!result.success && isYoutube(params.url) && /the page needs to be reloaded/i.test(result.stderr)) {
+        result = await attempt({ ...params, youtubeClientFallback: true }, '公开下载重试');
     }
     if (result.success) {
         await compressIfNeeded(result.files);
         return { ok: true, method: "ytdlp", files: result.files, durationMs: Date.now() - start };
     }
     if (isYtdlpRetryableError(result.stderr)) {
-        const cookieFilePath = await getCookiesFile(options?.browserBaseUrl, params.url);
+        const browserBaseUrl = options?.getBrowserBaseUrl ? await options.getBrowserBaseUrl() : options?.browserBaseUrl;
+        const cookieFilePath = await getCookiesFile(browserBaseUrl, params.url);
         if (cookieFilePath) {
-            result = await runYtdlp({ ...params, cookieFilePath });
             try {
-                fs.unlinkSync(cookieFilePath);
-            }
-            catch { /* ignore */ }
+                result = await attempt({ ...params, cookieFilePath, youtubeClientFallback: isYoutube(params.url) }, '账号会话重试');
+            } finally { try { fs.unlinkSync(cookieFilePath); } catch { /* ignore */ } }
             if (result.success) {
                 await compressIfNeeded(result.files);
                 return { ok: true, method: "ytdlp", files: result.files, durationMs: Date.now() - start };
@@ -150,7 +162,8 @@ export async function ytdlpDownload(params, options) {
     logWarn(`[ytdlp] Download failed for ${params.url}: ${result.stderr.slice(0, 300)}`);
     return {
         ok: false, method: "none", files: [],
-        error: `yt-dlp failed: ${result.stderr.slice(0, 500)}`,
+        error: `yt-dlp failed: ${failures.map(item => item.stage + '：' + item.error.slice(0, 220)).join('；')}`,
+        attempts: failures,
         durationMs: Date.now() - start,
     };
 }

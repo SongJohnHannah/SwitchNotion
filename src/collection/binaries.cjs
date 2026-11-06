@@ -4,6 +4,7 @@ const zlib = require('node:zlib');
 const { createHash, randomUUID } = require('node:crypto');
 const { pipeline } = require('node:stream/promises');
 const { download } = require('./network.cjs');
+const { run, workerEnvironment } = require('./process.cjs');
 const assets = {
   'win32-x64': {
     'yt-dlp': ['yt-dlp/yt-dlp', '2026.10.26', 'yt-dlp.exe', 'f5389d3698ecde4ef06f4e6b1ce0294fe9ac1396228c8990b8d3416d6d177a7d'],
@@ -24,18 +25,34 @@ function resolveBinary(name, directory, { platform = process.platform, env = pro
 }
 class CollectionBinaries {
   constructor({ root, platform = process.platform, arch = process.arch, downloadImpl = download } = {}) {
-    Object.assign(this, { platform, arch, downloadImpl }); this.directory = path.join(root, 'collection', 'bin');
+    Object.assign(this, { platform, arch, downloadImpl }); this.directory = path.join(root, 'collection', 'bin'); this.preparation = Promise.resolve();
   }
   status() { return { supported: !!assets[this.platform + '-' + this.arch], downloader: !!this.find('yt-dlp'), ffmpeg: !!this.find('ffmpeg') }; }
   find(name) { return resolveBinary(name, this.directory, { platform: this.platform }); }
-  async prepare({ signal, progress = () => {} } = {}) {
+  async version(file, signal) {
+    try { return (await run(file, ['--version'], { signal, timeout: 10000, env: workerEnvironment(this.directory) })).stdout.trim().match(/^\d{4}\.\d{2}\.\d{2}/)?.[0] || ''; }
+    catch { signal?.throwIfAborted(); return ''; }
+  }
+  async ensureDownloader(options = {}) {
+    this.downloaderReady ||= this.prepare({ ...options, downloaderOnly: true, standalone: true }).catch(error => { this.downloaderReady = null; throw error; });
+    return this.downloaderReady;
+  }
+  prepare(options = {}) {
+    const task = this.preparation.then(() => this.prepareAssets(options));
+    this.preparation = task.catch(() => {}); return task;
+  }
+  async prepareAssets({ signal, progress = () => {}, downloaderOnly = false, standalone = false } = {}) {
     const selected = assets[this.platform + '-' + this.arch]; if (!selected) throw Error('收集组件支持 Windows x64 和 Apple Silicon Mac。');
     fs.mkdirSync(this.directory, { recursive: true });
     for (const [name, [repository, version, filename, digest]] of Object.entries(selected)) {
+      if (downloaderOnly && name !== 'yt-dlp') continue;
       const output = path.join(this.directory, name === 'license' ? 'FFMPEG-LICENSE.txt' : name + (this.platform === 'win32' ? '.exe' : ''));
       if (name === 'license' && !fs.existsSync(path.join(this.directory, 'ffmpeg' + (this.platform === 'win32' ? '.exe' : '')))) continue;
       if (name === 'license' && fs.existsSync(output) && createHash('sha256').update(fs.readFileSync(output)).digest('hex') === digest) continue;
-      if (name !== 'license' && this.find(name)) continue;
+      if (name !== 'license') {
+        const existing = this.find(name);
+        if (existing && (name !== 'yt-dlp' || (!standalone || path.resolve(existing) === path.resolve(output)) && await this.version(existing, signal) >= version)) continue;
+      }
       progress('正在下载并校验 ' + name + '…');
       const temporary = path.join(this.directory, randomUUID() + '.download');
       const ready = output + '.' + randomUUID() + '.ready';

@@ -7,6 +7,7 @@ const { assertPublicUrl, resolveProxy } = require('./network.cjs');
 const { normalizeDocument, hash } = require('./model.cjs');
 const { WechatChannel, isWechatShare } = require('./wechat-channel.cjs');
 const { inspectAccount } = require('./account-status.cjs');
+const { downloadError } = require('./download-error.cjs');
 const sites = Object.freeze([
   { id: 'douyin', name: '抖音', url: 'https://www.douyin.com/' },
   { id: 'xiaohongshu', name: '小红书', url: 'https://www.xiaohongshu.com/explore' },
@@ -72,12 +73,16 @@ class CollectionBrowser {
     if (!target?.webSocketDebuggerUrl) throw Error('无法准备后台收集标签页。');
     return { tabId: target.id, wsUrl: target.webSocketDebuggerUrl };
   }
-  async ensure(signal) {
-    signal?.throwIfAborted(); const m = await mediaKit(), settings = this.getSettings();
+  async downloadConfig(signal) {
+    signal?.throwIfAborted(); const settings = this.getSettings();
     process.env.MEDIAKIT_BIN_DIR = this.binaries.directory;
     const config = { browserBaseUrl: this.endpoint, chromeUserDataDir: settings.browserProfile || path.join(this.root, 'collection', 'browser'),
       chromeExecutablePath: settings.browserExecutable || undefined, proxyUrl: await resolveProxy(settings.proxy) || undefined };
-    const ready = await m.ensureChromeRunning(settings.browserPort, config);
+    signal?.throwIfAborted(); return config;
+  }
+  async ensure(signal) {
+    const m = await mediaKit(), config = await this.downloadConfig(signal);
+    const ready = await m.ensureChromeRunning(Number(new URL(config.browserBaseUrl).port), config);
     signal?.throwIfAborted(); if (!ready) throw Error('收集浏览器未就绪，请安装 Chrome、Edge 或 Brave，或在设置中选择浏览器。');
     return { m, config };
   }
@@ -106,7 +111,7 @@ class CollectionBrowser {
       } catch (error) { if (!error.cdpCode) throw error; }
       await new Promise(resolve => setTimeout(resolve, 400));
     }
-    throw Error('网页正文尚未加载完成，请在收集浏览器中确认页面或登录后重试。');
+    throw Error('网页正文尚未加载完成，请在收集浏览器中检查页面、网络或代理后重试。');
   }
   async login(site, signal) {
     const url = sites.find(s => s.id === site)?.url || site; await assertPublicUrl(url);
@@ -205,16 +210,16 @@ class CollectionBrowser {
         const id = new URL(doc.url).pathname.match(/^\/(?:explore|discovery\/item)\/([a-f\d]{24})(?:\/|$)/i)?.[1];
         if (id) for (const node of doc.nodes) if (node.platform === 'xiaohongshu') node.contentId = hash('xiaohongshu:' + id.toLowerCase() + ':' + new URL(node.url).pathname);
       }
-      if (!doc.nodes.length && !doc.incomplete) throw Error('没有读取到正文，请检查登录状态并在原网页确认内容可见。');
+      if (!doc.nodes.length && !doc.incomplete) throw Error('没有读取到正文，请确认原网页加载成功且内容可见。');
       return doc;
     } finally { await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); }
   }
   async downloadMedia(node, directory, signal) {
-    const { m, config } = await this.ensure(signal);
+    const m = await mediaKit(), config = await this.downloadConfig(signal);
     const kit = new m.MediaKit({ ...config, outputDir: directory });
     const result = await kit.download({ url: node.url, outputDir: directory, mediaType: node.kind, transcribe: false, format: 'best' });
     signal?.throwIfAborted();
-    if (!result.ok || !result.files.some(f => f.type === node.kind)) throw Error('媒体下载未完成，请检查账号权限或网站登录状态。');
+    if (!result.ok || !result.files?.some(f => f.type === node.kind)) throw downloadError(result);
     const file = result.files.find(f => f.type === node.kind);
     const base = fs.realpathSync(directory), real = fs.realpathSync(file.path), relative = path.relative(base, real);
     if (relative.startsWith('..') || path.isAbsolute(relative) || !fs.statSync(real).isFile()) throw Error('下载结果不在当前任务目录。');

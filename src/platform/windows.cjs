@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { taskbarIds } = require('./windows-identity.cjs');
 
 const reviewedBuilds = Object.freeze({
   '7.40.0': 'afb4684fa08d12d7ccd3c89e2ad195de7047859d437e721689a5cbfc69403549',
@@ -26,7 +27,7 @@ function processMatchesExecutable(pid, executable, execFileSync) {
   } catch {}
   return null;
 }
-function windows({ env, home, execFileSync, registry }) {
+function windows({ env, home, execFileSync, registry, fs }) {
   const layout = directory => {
     const appRoot = path.resolve(directory), resources = path.join(appRoot, 'resources');
     return { appRoot, executable: path.join(appRoot, 'Notion.exe'), resources, archive: path.join(resources, 'app.asar') };
@@ -48,11 +49,21 @@ function windows({ env, home, execFileSync, registry }) {
     nodeName: /^(?:node|node\.exe)$/i,
     launchOptions: { windowsHide: true },
     stageInstallation({ source, target, copy }) { copy(source.appRoot, target.appRoot); },
-    finalizeRuntime() {},
+    finalizeRuntime(layout) {
+      // Shell and Chromium window-class fallbacks also read the executable's
+      // icon. Updating BrowserWindow.setIcon alone leaves those as Notion.
+      // This runs only on the staged isolated copy, before it is promoted.
+      const icon = path.join(layout.resources, 'notion-switch', 'app-icon.ico');
+      if (!fs.existsSync(icon)) return;
+      execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+        path.join(__dirname, 'windows-icon.ps1'), '-Executable', layout.executable, '-Icon', icon],
+      { windowsHide: true, stdio: 'pipe', timeout: 30000 });
+    },
     configureAppIdentity(app) {
       if (typeof app.setAppUserModelId !== 'function') return;
       const set = app.setAppUserModelId.bind(app);
-      app.setAppUserModelId = () => set('notion.switch.prototype');
+      app.setAppUserModelId = () => set(taskbarIds.main);
+      app.setAppUserModelId();
     }
   };
 }

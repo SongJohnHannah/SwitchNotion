@@ -1,9 +1,11 @@
 const fs = require('node:fs');
+const { transcriptQualityIssue } = require('../speech/transcript-quality.cjs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { download } = require('./network.cjs');
 const { run, workerEnvironment, nodeExecutable } = require('./process.cjs');
 const { mediaKinds, atomicJson, hash } = require('./model.cjs');
+const { downloadError } = require('./download-error.cjs');
 function clock(value) { const match = String(value).match(/(\d+):(\d+):(\d+(?:\.\d+)?)/); return match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) : 0; }
 const inputArgs = file => ['-protocol_whitelist', 'file,pipe,crypto,data', '-format_whitelist', 'mov,matroska,webm,avi,asf,mpeg,mpegts,aac,ac3,aiff,wav,ogg,flac,mp3,gif,apng,png_pipe,jpeg_pipe,webp_pipe,bmp_pipe,tiff_pipe,image2,image2pipe,hevc,h264', '-i', file];
 const localVisionProfile = Object.freeze({ endpoint: 'http://127.0.0.1:11434/api/chat', model: 'qwen3.8-27b-vl:latest' });
@@ -56,7 +58,8 @@ class CollectionMedia {
       const actualExtension = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/avif': 'avif', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'video/mp4': 'mp4', 'video/webm': 'webm' }[result.contentType];
       if (actualExtension && path.extname(file) !== '.' + actualExtension) { const renamed = path.join(directory, 'original.' + actualExtension); fs.renameSync(file, renamed); file = renamed; }
     } else {
-      const { config } = await this.browser.ensure(signal);
+      await this.binaries.ensureDownloader?.({ signal, progress });
+      const config = await this.browser.downloadConfig(signal);
       const credentials = path.join(directory, '.credentials'); fs.mkdirSync(credentials, { recursive: true, mode: 0o700 });
       let response;
       try { response = await run(nodeExecutable(this.root), [path.join(__dirname, 'download-worker.mjs')], { signal, detached: true,
@@ -64,7 +67,7 @@ class CollectionMedia {
       finally { for (const name of fs.readdirSync(credentials)) if (/^switch-notion-cookies-[a-zA-Z0-9.-]+\.txt$/.test(name)) { const candidate = path.join(credentials, name); if (fs.lstatSync(candidate).isFile()) fs.unlinkSync(candidate); } }
       const result = JSON.parse(response.stdout);
       file = result.files?.find(f => f.type === node.kind)?.path;
-      if (!result.ok || !file) throw Error('媒体下载未完成，请在收集浏览器中登录并确认原始内容可播放。');
+      if (!result.ok || !file) throw downloadError(result);
     }
     const real = fs.realpathSync(file), relative = path.relative(fs.realpathSync(directory), real);
     if (relative.startsWith('..') || path.isAbsolute(relative) || !fs.statSync(real).isFile()) throw Error('下载结果不在当前任务目录。');
@@ -122,49 +125,53 @@ class CollectionMedia {
     }
     throw Error('媒体分段后仍超过附件限制，原始文件已保留。');
   }
-  async transcript(asset, { signal, progress = () => {} } = {}) {
+  async transcript(asset, { signal, progress = () => {}, directory = path.dirname(asset.path) } = {}) {
     if (!asset.audio && asset.kind !== 'audio') return { text: '', note: '此媒体没有音轨。' };
     if (!this.speech) throw Error('本地转写引擎未配置，请在 Switch Notion 的离线语音中检测并准备。');
-    const file = path.join(path.dirname(asset.path), 'transcript-progress.json'), stat = fs.statSync(asset.path);
+    if (!path.isAbsolute(directory)) throw Error('转写记录目录须为绝对路径。');
+    fs.mkdirSync(directory, { recursive: true });
+    const file = path.join(directory, 'transcript-progress.json'), stat = fs.statSync(asset.path);
     const identity = hash(JSON.stringify([asset.bytes || stat.size, stat.mtimeMs, asset.duration, this.speech.status?.().model || 'configured', 'minute-checkpoints-10s-inference']));
     let checkpoint = { identity, chunks: {} };
     try { const saved = JSON.parse(fs.readFileSync(file, 'utf8')); if (saved.identity === identity && saved.chunks && typeof saved.chunks === 'object') checkpoint = saved; } catch {}
     this.speech.retain?.();
-    const backend = { cpu: null, usedCpu: checkpoint.backend === 'cpu' };
+    const device = this.speech.status?.().device, label = device === 'cuda' ? 'NVIDIA GPU' : '本机 CPU';
+    const record = event => fs.appendFileSync(path.join(directory, 'transcript-events.jsonl'), JSON.stringify({ at: new Date().toISOString(), device, model: this.speech.status?.().model, ...event }) + '\n');
     try {
-      if (backend.usedCpu) backend.cpu = await this.makeCpuSpeech();
-      await (backend.cpu || this.speech).probe({ signal });
+      await this.speech.probe({ signal });
       for (let start = 0; start < asset.duration; start += 60) {
-      if (typeof checkpoint.chunks[start] === 'string') continue;
-      progress(`正在生成逐字稿：${Math.floor(start / 60)} / ${Math.ceil(asset.duration / 60)} 分钟`);
-      const wav = path.join(path.dirname(asset.path), 'speech-' + start + '.wav');
+      if (typeof checkpoint.chunks[start] === 'string') {
+        if (!transcriptQualityIssue(checkpoint.chunks[start])) continue;
+        record({ event: 'invalid-checkpoint', start, text: checkpoint.chunks[start] });
+      }
+      progress(`正在生成逐字稿（${label}）：${Math.floor(start / 60)} / ${Math.ceil(asset.duration / 60)} 分钟`);
+      const wav = path.join(directory, 'speech-' + start + '.wav');
       try {
         await run(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', '-ss', String(start), ...inputArgs(asset.path), '-t', '60', '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-y', wav], { signal });
-        const text = await this.transcribeChunk(fs.readFileSync(wav), { signal, progress, onProgress: value => progress(`正在生成逐字稿${backend.usedCpu ? '（本机 CPU）' : ''}：${Math.floor((start + Math.min(60, asset.duration - start) * value) / asset.duration * 100)}% · ${Math.floor(start / 60)} / ${Math.ceil(asset.duration / 60)} 分钟`) }, backend);
-        checkpoint.chunks[start] = text.trim(); if (backend.usedCpu) checkpoint.backend = 'cpu'; atomicJson(file, checkpoint);
+        const text = await this.transcribeChunk(fs.readFileSync(wav), { signal, progress,
+          onResult: result => record({ ...result, start: start + (result.start || 0) }),
+          onProgress: value => progress(`正在生成逐字稿（${label}）：${Math.floor((start + Math.min(60, asset.duration - start) * value) / asset.duration * 100)}% · ${Math.floor(start / 60)} / ${Math.ceil(asset.duration / 60)} 分钟`) });
+        record({ event: 'minute-result', start, text });
+        if (transcriptQualityIssue(text)) throw Error('逐字稿出现异常重复标点，已保留原始记录并暂停处理。');
+        checkpoint.chunks[start] = text.trim(); checkpoint.backend = device; checkpoint.chunkBackends ||= {}; checkpoint.chunkBackends[start] = device; atomicJson(file, checkpoint);
       } finally { try { fs.unlinkSync(wav); } catch {} }
       }
-    } finally { this.speech.release?.(); backend.cpu?.close(); }
+    } finally { this.speech.release?.(); }
     const paragraphs = Object.entries(checkpoint.chunks).sort(([a], [b]) => Number(a) - Number(b)).map(([, text]) => text).filter(Boolean);
-    return { text: paragraphs.join('\n\n'), note: !paragraphs.length ? '未识别到清晰语音。' : backend.usedCpu ? '本地 GPU 转写中断后，已使用本机 CPU 离线补全。' : '' };
+    return { text: paragraphs.join('\n\n'), note: !paragraphs.length ? '未识别到清晰语音。' : '', device };
   }
-  async makeCpuSpeech() {
-    const runtime = await this.speech.configure();
-    const { SpeechProvider } = require('../speech/provider.cjs'), { createSpeechPlatform } = require('../speech/platform.cjs');
-    return new SpeechProvider({ root: this.root, platform: createSpeechPlatform({ device: 'cpu', model: runtime.model }), timeoutMs: 600000,
-      runtime: { ...runtime, device: 'cpu', computeType: 'int8', dllDirectory: null, dllDirectories: [] } });
-  }
-  async transcribeChunk(wav, { signal, progress = () => {}, onProgress = () => {} }, backend = {}) {
-    const options = { wav, language: 'auto', chunkSeconds: 10, signal, onProgress };
+  async transcribeChunk(wav, { signal, progress = () => {}, onProgress = () => {}, onResult = () => {} }) {
     for (let attempt = 0; attempt < 2; attempt++) {
-      try { return await (backend.cpu || this.speech).transcribeWav(options); }
+      try { return await this.speech.transcribeWav({ wav, language: 'auto', chunkSeconds: 10, signal, onProgress,
+        onResult: result => onResult({ ...result, attempt: attempt + 1 }) }); }
       catch (error) {
         signal?.throwIfAborted();
-        if (!/进程已退出|无法向离线|转写超时/.test(error.message)) throw error;
-        if (!attempt) { progress('本地转写引擎已中断，正在恢复当前音频段…'); continue; }
-        if (backend.cpu || this.speech.status?.().device !== 'cuda') throw error;
-        progress('GPU 转写再次中断，正在使用本机 CPU 离线补全…'); backend.cpu = await this.makeCpuSpeech(); backend.usedCpu = true;
-        return backend.cpu.transcribeWav(options);
+        onResult({ event: 'error', attempt: attempt + 1, error: error.message, code: error.code || null, workerExit: this.speech.status?.().lastWorkerExit || null });
+        if (error.code !== 'SPEECH_UNRELIABLE' && !/进程已退出|无法向离线|转写超时/.test(error.message)) throw error;
+        if (!attempt) { progress('本地转写引擎中断或结果异常，正在恢复当前音频段…'); continue; }
+        if (error.code === 'SPEECH_UNRELIABLE') throw Error('转写连续出现异常重复标点，已保留进度和原始识别记录；AI 总结已暂停。', { cause: error });
+        if (this.speech.status?.().device !== 'cuda') throw error;
+        throw Error('GPU 转写连续中断，已保留进度并停止自动处理；请检查 GPU 运行库后重试。' + error.message, { cause: error });
       }
     }
   }

@@ -10,6 +10,17 @@ import time
 DLL_HANDLES = []
 
 
+def require_cuda_backend(selected, version):
+    if selected['device'] != 'cuda':
+        return
+    try:
+        parts = tuple(int(part) for part in version.split('.')[:3])
+    except (ValueError, AttributeError):
+        parts = ()
+    if parts < (4, 8, 5):
+        raise RuntimeError('GPU transcription requires CTranslate2 4.8.5 or newer; prepare the local speech environment again')
+
+
 def profile():
     machine = platform.machine().lower()
     # Python 3.11 platform.machine() on Windows reads PROCESSOR_* variables,
@@ -35,6 +46,7 @@ def model_directory(directory):
 
 def discover(root, model_id='medium'):
     selected = profile()
+    require_cuda_backend(selected, importlib.metadata.version('ctranslate2'))
     from faster_whisper.utils import download_model
     model = root / ('speech/faster-whisper-' + model_id)
     if not (model / 'model.bin').is_file():
@@ -76,6 +88,7 @@ def configure(runtime):
     elif directories:
         raise RuntimeError('Windows DLL paths cannot be used on macOS')
     import ctranslate2
+    require_cuda_backend(selected, ctranslate2.__version__)
     if selected['computeType'] not in ctranslate2.get_supported_compute_types(selected['device']):
         raise RuntimeError('Requested compute backend unavailable')
     from faster_whisper import WhisperModel

@@ -3,6 +3,7 @@ const { spawn } = require('node:child_process');
 const { discover, worker } = require('./discovery.cjs');
 const { createSpeechPlatform } = require('./platform.cjs');
 const { decodeWav, validatePcm } = require('./wav.cjs');
+const { transcriptQualityIssue } = require('./transcript-quality.cjs');
 class SpeechProvider {
   constructor({ root, runtime, model = runtime?.model || 'medium',
     platform = createSpeechPlatform({ model }), spawnImpl = spawn, discoverImpl = discover, idleMs = 20000, timeoutMs = 120000 } = {}) {
@@ -16,7 +17,7 @@ class SpeechProvider {
   status() {
     return { ...this.platform.profile, protocolVersion: 1, configured: !!this.runtime,
       ready: this.checked, loaded: !!this.child && this.checked, busy: !!this.current,
-      lastFailure: this.lastFailure, languages: ['auto', 'zh', 'en'] };
+      lastFailure: this.lastFailure, lastWorkerExit: this.lastWorkerExit || null, languages: ['auto', 'zh', 'en'] };
   }
   async configure() {
     this.platform.requireSupported();
@@ -51,8 +52,8 @@ class SpeechProvider {
           message.ok ? job.finish(null, message.result) : job.finish(Error('本机离线转写失败，请在配置中重新检测。'));
         }
       });
-      const ended = () => { if (this.child === child) { this.child = null; this.checked = false; } if (this.current?.child === child) this.current.finish(this.exitError()); };
-      child.on('error', ended); child.on('exit', ended);
+      const ended = (code, signal, spawnError) => { if (this.child === child) { this.child = null; this.checked = false; } if (this.current?.child === child) this.current.finish(this.exitError(code, signal, spawnError)); };
+      child.on('error', error => ended(null, null, error)); child.on('exit', ended);
       const configured = await this.exchange(child, 'configure', { protocolVersion: 1, runtime });
       if (configured?.protocolVersion !== 1 || ['provider', 'model', 'platform', 'architecture', 'device', 'computeType']
         .some(key => configured[key] !== this.platform.profile[key])) throw Error('本机语音进程版本或平台不匹配，请重新检测。');
@@ -66,9 +67,11 @@ class SpeechProvider {
     const lines = this.stderrTail.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     return lines.slice(-2).join(' ').slice(-240);
   }
-  exitError() {
+  exitError(code = null, signal = null, spawnError) {
     const detail = this.detail();
-    const error = Error('离线转写进程已退出。' + (detail ? ' ' + detail : ''));
+    const hexCode = Number.isInteger(code) ? '0x' + (code >>> 0).toString(16).padStart(8, '0') : null;
+    this.lastWorkerExit = { code, hexCode, signal, ...(spawnError?.code ? { spawnCode: spawnError.code } : {}) };
+    const error = Error('离线转写进程已退出。' + (hexCode ? '退出码：' + hexCode + '。' : signal ? '信号：' + signal + '。' : '') + (detail ? ' ' + detail : ''));
     this.lastFailure = error.message;
     return error;
   }
@@ -86,20 +89,33 @@ class SpeechProvider {
       catch { this.fail(child, Error('离线转写进程不可用。')); }
     });
   }
-  request(type, fields, signal) {
+  request(type, fields, signal, onResult) {
     const epoch = this.epoch;
     const run = async () => {
       signal?.throwIfAborted(); if (epoch !== this.epoch) throw Error('离线转写已停止。');
-      try { await this.start(); signal?.throwIfAborted(); return await this.exchange(this.child, type, fields, signal); }
+      try {
+        await this.start(); signal?.throwIfAborted();
+        const result = await this.exchange(this.child, type, fields, signal);
+        if (type === 'transcribe' || type === 'transcribe_recording') {
+          await onResult?.(result);
+          const issue = transcriptQualityIssue(result?.text);
+          if (issue) {
+            const error = Object.assign(Error(issue), { code: 'SPEECH_UNRELIABLE' });
+            if (this.child) this.fail(this.child, error);
+            throw error;
+          }
+        }
+        return result;
+      }
       finally { this.scheduleRelease(); }
     };
     const next = this.queue.then(run); this.queue = next.catch(() => {}); return next;
   }
   async probe({ signal } = {}) { await this.request('probe', {}, signal); return this.status(); }
-  async transcribeDetailed({ pcm, language = 'auto', context = '', signal }) {
+  async transcribeDetailed({ pcm, language = 'auto', context = '', signal, onResult }) {
     validatePcm(pcm); if (!['auto', 'zh', 'en'].includes(language)) throw Error('请选择自动识别、中文或英文。');
     if (typeof context !== 'string' || context.length > 400 || /[\u0000-\u0008]/.test(context)) throw Error('音频上下文格式无效。');
-    const result = await this.request('transcribe', { audio: pcm.toString('base64'), language, context }, signal);
+    const result = await this.request('transcribe', { audio: pcm.toString('base64'), language, context }, signal, onResult);
     if (typeof result?.text !== 'string') throw Error('本机离线转写没有返回文字。');
     return { text: result.text, context: typeof result.contextText === 'string' ? result.contextText.slice(-120) : '', language: result.language };
   }
@@ -109,10 +125,11 @@ class SpeechProvider {
     const result = await this.request('transcribe_recording', { audio: audio.toString('base64') }, signal);
     if (typeof result?.text !== 'string') throw Error('本机离线转写没有返回文字。'); return result.text;
   }
-  async transcribeWav({ wav, language = 'auto', signal, onProgress = () => {}, chunkSeconds = 30 }) {
+  async transcribeWav({ wav, language = 'auto', signal, onProgress = () => {}, onResult, chunkSeconds = 30 }) {
     if (!Number.isInteger(chunkSeconds) || chunkSeconds < 1 || chunkSeconds > 30) throw Error('语音分段须为 1 到 30 秒。');
     const { pcm } = decodeWav(wav), texts = [], limit = chunkSeconds * 16000 * 4; this.retain();
-    try { for (let at = 0; at < pcm.length; at += limit) { texts.push(await this.transcribe({ pcm: pcm.subarray(at, Math.min(pcm.length, at + limit)), language, signal })); onProgress(Math.min(1, (at + limit) / pcm.length)); } return texts.filter(Boolean).join('\n'); }
+    try { for (let at = 0; at < pcm.length; at += limit) { texts.push(await this.transcribe({ pcm: pcm.subarray(at, Math.min(pcm.length, at + limit)), language, signal,
+      onResult: onResult && (result => onResult({ ...result, start: at / 64000, duration: Math.min(limit, pcm.length - at) / 64000 })) })); onProgress(Math.min(1, (at + limit) / pcm.length)); } return texts.filter(Boolean).join('\n'); }
     finally { this.release(); }
   }
   retain() { this.leases++; clearTimeout(this.idle); }

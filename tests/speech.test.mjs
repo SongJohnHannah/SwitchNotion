@@ -14,9 +14,12 @@ test('media WAV requests bound each backend segment without dropping or repeatin
   const f = fixture(t, (message, child) => { if (Buffer.from(message.audio, 'base64').length > 10 * 16000 * 4) { queueMicrotask(() => child.emit('exit', 1)); return true; } });
   const audio = pcm(31), header = Buffer.alloc(44);
   header.write('RIFF'); header.writeUInt32LE(audio.length + 36, 4); header.write('WAVEfmt ', 8); header.writeUInt32LE(16, 16); header.writeUInt16LE(3, 20); header.writeUInt16LE(1, 22); header.writeUInt32LE(16000, 24); header.writeUInt32LE(64000, 28); header.writeUInt16LE(4, 32); header.writeUInt16LE(32, 34); header.write('data', 36); header.writeUInt32LE(audio.length, 40);
-  await f.provider.transcribeWav({ wav: Buffer.concat([header, audio]), chunkSeconds: 10 });
+  const results = [];
+  await f.provider.transcribeWav({ wav: Buffer.concat([header, audio]), chunkSeconds: 10, onResult: result => results.push(result) });
   const chunks = f.requests.filter(request => request.type === 'transcribe').map(request => Buffer.from(request.audio, 'base64'));
   assert.deepEqual(chunks.map(chunk => chunk.length / 64000), [10, 10, 10, 1]); assert.deepEqual(Buffer.concat(chunks), audio);
+  assert.deepEqual(results.map(result => [result.start, result.duration]), [[0, 10], [10, 10], [20, 10], [30, 1]]);
+  assert.ok(results.every(result => result.text === '中英文识别结果'));
   await assert.rejects(f.provider.transcribeWav({ wav: Buffer.concat([header, audio]), chunkSeconds: 0 }), /分段/);
 });
 function fixture(t, customize = () => {}) {
@@ -55,6 +58,31 @@ test('stopping an in-flight transcript terminates its own worker and a later req
   await delay(5); abort.abort(Error('fixture cancellation'));
   await assert.rejects(task, /fixture cancellation/); assert.equal(f.children[0].killed, true);
   assert.equal(await f.provider.transcribe({ pcm: pcm() }), '中英文识别结果'); assert.equal(f.children.length, 2);
+});
+
+test('native GPU crashes preserve the Windows exit code in the diagnostic status', async t => {
+  const f = fixture(t, (_message, child) => { queueMicrotask(() => child.emit('exit', 3221226505, null)); return true; });
+  await f.provider.probe();
+  await assert.rejects(f.provider.transcribe({ pcm: pcm() }), /0xc0000409/i);
+  assert.equal(f.provider.status().lastWorkerExit.code, 3221226505);
+  assert.equal(f.provider.status().lastWorkerExit.hexCode, '0xc0000409');
+});
+
+test('degenerate decoder output is recorded before rejection and its worker is discarded', async t => {
+  const raw = { text: 'A valid prefix.\n' + '!'.repeat(224), segments: [{ start: 0, end: 1, text: '!'.repeat(224) }] };
+  let calls = 0; const recorded = [];
+  const f = fixture(t, (_message, _child, respond) => { if (++calls === 1) { respond(raw); return true; } });
+  await assert.rejects(f.provider.transcribe({ pcm: pcm(), onResult: result => recorded.push(result) }), error => error.code === 'SPEECH_UNRELIABLE');
+  assert.deepEqual(recorded, [raw]);
+  assert.equal(f.children[0].killed, true);
+  assert.equal(await f.provider.transcribe({ pcm: pcm() }), '中英文识别结果');
+  assert.equal(f.children.length, 2);
+});
+
+test('ordinary expressive punctuation and repeated spoken words remain intact', async t => {
+  const text = 'Really?! Yes!!! 好的！Go, go, go!';
+  const f = fixture(t, (_message, _child, respond) => { respond({ text }); return true; });
+  assert.equal(await f.provider.transcribe({ pcm: pcm() }), text);
 });
 test('invalid PCM and language are rejected before starting a Python process', async t => {
   const f = fixture(t); const invalid = pcm(); invalid.writeFloatLE(NaN, 0);

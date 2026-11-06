@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { taskbarIds } = require('./platform/windows-identity.cjs');
 const icons = { main: path.join(__dirname, 'app-icon.png'), settings: path.join(__dirname, 'settings', 'app-icon.png') };
 const branded = new WeakSet(), installed = new WeakMap();
 
@@ -43,7 +44,7 @@ function installAppBranding(electron, { moduleLoader = require('node:module'), p
     const kind = /配置/.test(window.getTitle?.() || '') ? 'settings' : 'main';
     if (platform === 'win32' && window.setAppDetails) {
       const setDetails = window.setAppDetails.bind(window);
-      const details = { appId: kind === 'settings' ? 'notion.switch.prototype.settings' : 'notion.switch.prototype',
+      const details = { appId: taskbarIds[kind],
         appIconPath: icons[kind].replace(/\.png$/, '.ico'), appIconIndex: 0 };
       if (typeof project === 'string' && path.isAbsolute(project)) {
         details.relaunchCommand = '"' + path.join(project, kind === 'settings' ? 'NotionSwitch 配置.exe' : 'SwitchNotion.exe') + '"';
