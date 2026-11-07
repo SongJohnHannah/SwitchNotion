@@ -7,8 +7,10 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 const require = createRequire(import.meta.url);
 const { CollectionService } = require('../src/collection/service.cjs');
+const { CollectionMedia } = require('../src/collection/media.cjs');
 const { normalizeDocument, preferences } = require('../src/collection/model.cjs');
 const { renderDocument } = require('../src/collection/notion.cjs');
+const { transcribeGpuFile } = require('../src/speech/windows-operator/module/src/speech/gpu-file.cjs');
 const parent = path.resolve(import.meta.dirname, '../.notion-switch');
 function fixture(t, extra = {}) {
   fs.mkdirSync(parent, { recursive: true }); const root = fs.mkdtempSync(path.join(parent, 'test-collection-'));
@@ -59,6 +61,37 @@ test('failed transcription defers summary even if video frames and webpage text 
   fail = false; f.service.retry(job.id); await idle(f.service);
   assert.equal(job.status, 'completed'); assert.equal(summaries, 1);
   assert.equal(f.calls.filter(call => call.startsWith('download:')).length, downloads);
+});
+
+test('a music-only video completes collection and uses the frames for its summary', async t => {
+  const document = normalizeDocument({ title: '纯音乐视频', url: 'https://example.com/music',
+    nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
+  const node = document.nodes[0];
+  const f = fixture(t, { document, extraction: { run: async job => {
+    const { transcript, vision } = job.analyses[node.id];
+    assert.equal(transcript.text, '');
+    assert.equal(transcript.note, '未识别到清晰语音。');
+    assert.equal(transcript.operator.complete, true);
+    assert.equal(vision.text, '画面识别结果');
+    return { text: '基于画面的总结' };
+  } } });
+  const media = new CollectionMedia({ operator: { transcribeFile: ({ source, language, signal }) => transcribeGpuFile({
+    source, language, signal, root: f.root, outputDirectory: path.join(f.root, 'transcription'),
+    ffmpeg: process.execPath, runtime: { model: 'large-v3-turbo', pythonExecutable: process.execPath, modelDirectory: f.root },
+    executeImpl: async (_file, args) => fs.writeFileSync(args.at(-1), Buffer.alloc(16000 * 2)),
+    providerFactory: () => ({ status: () => ({ device: 'cuda' }), retain() {}, probe: async () => {}, close() {},
+      request: async (_kind, _fields, _signal, record) => {
+        const result = { text: '', segments: [] };
+        record(result);
+        return result;
+      } })
+  }) } });
+  f.service.media.transcript = media.transcript.bind(media);
+  await f.service.create({ input: document.url, options: { extraction: { mode: 'auto' } } });
+  await idle(f.service);
+  const job = [...f.service.jobs.values()][0];
+  assert.equal(job.status, 'completed', job.warnings.join('\n'));
+  assert.equal(job.extraction.text, '基于画面的总结');
 });
 
 test('upgrading a legacy successful transcript preserves its history but a new operator failure pauses summary', async t => {

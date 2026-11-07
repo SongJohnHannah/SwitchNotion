@@ -129,7 +129,8 @@ async function transcribeGpuFile({ source, outputDirectory, root, ffmpeg, runtim
     if (completedSamples !== prepared.totalSamples || checkpoint.parts.length !== seenChunks || checkpoint.parts.reduce((sum, part) => sum + part.samples, 0) !== prepared.totalSamples) throw Error('逐字稿未覆盖整片音频样本。');
     checkpoint.totalSamples = prepared.totalSamples; checkpoint.totalChunks = seenChunks; await writeAtomicJson(checkpointFile, checkpoint);
     const text = checkpoint.parts.map(part => part.text.trim()).filter(Boolean).join('\n');
-    if (!text || transcriptQualityIssue(text)) throw Error('完整逐字稿未通过内容检查。');
+    // A fully processed track can contain no speech, for example when it is music-only.
+    if (transcriptQualityIssue(text)) throw Error('完整逐字稿未通过内容检查。');
     const transcriptFile = path.join(outputDirectory, 'transcript.txt'); fs.writeFileSync(transcriptFile, text + '\n', { flush: true });
     const events = fs.readFileSync(eventsFile, 'utf8').trim().split('\n').map(JSON.parse), errors = events.filter(event => event.event === 'error');
     timing.completed = now(); timing.endToEndSeconds = seconds(timing.coldTaskStarted, timing.completed);
