@@ -6,6 +6,9 @@
 *.ico binary
 # Preserve reviewed upstream bytes and license text exactly.
 src/vendor/** -text -whitespace
+src/speech/windows-operator/** -text -whitespace
+assets/windows-gpu-native/** -text -whitespace
+integrations/**/*.diff -whitespace
 tests/fixtures/mac-ai/*.pdf binary
 tests/fixtures/mac-ai/*.docx binary
 tests/fixtures/mac-ai/*.xlsx binary

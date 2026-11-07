@@ -34,8 +34,9 @@ function decodeWav(input) {
   }
   return { pcm, sampleRate: rate, duration: count / rate };
 }
-function validatePcm(pcm) {
-  if (!Buffer.isBuffer(pcm) || !pcm.length || pcm.length % 4 || pcm.length > rate * 4 * 60) throw Error('音频须为 16kHz、单声道 Float32 LE PCM，单段不超过 60 秒。');
+function validatePcm(pcm, maximumSeconds = 60) {
+  if (!Number.isInteger(maximumSeconds) || maximumSeconds < 1 || maximumSeconds > 240) throw Error('音频分段上限无效。');
+  if (!Buffer.isBuffer(pcm) || !pcm.length || pcm.length % 4 || pcm.length > rate * 4 * maximumSeconds) throw Error(`音频须为 16kHz、单声道 Float32 LE PCM，单段不超过 ${maximumSeconds} 秒。`);
   for (let at = 0; at < pcm.length; at += 4) { const v = pcm.readFloatLE(at); if (!Number.isFinite(v) || Math.abs(v) > 1.01) throw Error('音频采样格式无效。'); }
 }
 module.exports = { decodeWav, validatePcm, sampleRate: rate };

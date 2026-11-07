@@ -27,6 +27,7 @@ class RecognitionPolicy(unittest.TestCase):
         self.assertTrue(options['multilingual'])
         self.assertIsNone(options['language'])
         self.assertEqual(options['task'], 'transcribe')
+        self.assertEqual(options['beam_size'], 5)
         self.assertEqual(options['temperature'], [0, .2, .4])
         self.assertTrue(options['vad_filter'])
         self.assertIsNone(options['initial_prompt'])

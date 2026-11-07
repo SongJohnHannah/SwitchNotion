@@ -1,0 +1,1436 @@
+--- a/core.py
++++ b/core.py
+@@ -3,18 +3,16 @@
+ """
+ 
+ import json
+-import shutil
+-import subprocess
++import hashlib
+ import time
+ import threading
+-import queue as _queue_mod
+ from pathlib import Path
+-from concurrent.futures import ThreadPoolExecutor, as_completed
++from gpu_operator import OperatorBridge, OperatorCancelled, OperatorError
+ 
+ # ─── 配置 ───
+ 
+-WHISPER_MODEL = "large-v3"
+-AVAILABLE_MODELS = ["medium", "large-v3"]
++WHISPER_MODEL = "large-v3-turbo"
++AVAILABLE_MODELS = [WHISPER_MODEL]
+ VIDEO_EXTENSIONS = {
+     '.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv',
+ }
+@@ -24,16 +22,9 @@
+ MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+ PORT = 3066
+ STATE_FILE = Path(__file__).parent / 'transcriber_state.json'
+-CHUNK_SECONDS = 600  # 每段10分钟
+-LONG_CHUNK_SECONDS = 900  # 短视频用更长切片
+-SHORT_VIDEO_THRESHOLD = 1800  # 30分钟以下算短视频
+-TARGET_INSTANCES = 2  # 实测（60 分钟音频/6 块）：1 实例 28.7x / 6.84GB，2 实例 32.6x / 12.54GB，2 实例快 13.5%
+-BATCH_SIZE = 8  # 与 16 同速但显存/带宽占用更低。注意崩溃时机随机（1~8 次推理调用之间），与批大小无关，调参消不掉
+-TRANSCRIBE_MODES = {
+-    'fast': {'label': '快速', 'beam_size': 1},
+-    'standard': {'label': '标准', 'beam_size': 3},
+-    'accurate': {'label': '高精度', 'beam_size': 5},
+-}
++CHUNK_SECONDS = 30  # 由统一算子控制，UI 不再覆盖已验收策略
++TARGET_INSTANCES = 1
++TRANSCRIBE_MODES = {'stable': {'label': 'Turbo 稳定 GPU', 'beam_size': 1}}
+ 
+ # ─── 全局状态 ───
+ 
+@@ -49,9 +40,9 @@
+     'done': [],
+     'errors': [],
+     'overwrite': False,
+-    'transcribe_mode': 'standard',
++    'transcribe_mode': 'stable',
+     'add_ipa': False,
+-    'chunk_mode': 'auto',
++    'chunk_mode': 'operator',
+     'manual_chunk_seconds': 5,
+     'start_time': 0,
+     'elapsed_per_video': [],
+@@ -61,7 +52,13 @@
+     'chunk_policy': '',
+     'phase': '',  # extracting / transcribing
+     'model_instances': 0,
+-    'model_info': '',
++    'model_info': 'large-v3-turbo · Native30 · CUDA FP16',
++    'language': 'auto',
++    'operator_outputs': {},
++    'operator_output_directory': '',
++    'operator_description': None,
++    'operator_ready': False,
++    'last_operator_result': None,
+ }
+ 
+ # 启动、恢复、取消与 worker 收尾共用锁，避免旧任务退出时覆盖新任务。
+@@ -77,78 +74,27 @@
+     if state['cancel_requested']:
+         raise TranscriptionCancelled()
+ 
+-# ─── 模型池 ───
+-
+-_model_pool = []
+-_model_queue = _queue_mod.Queue()
+-_model_ready = False
+-_load_generation = 0  # 递增编号，用于取消过时的加载
++# ─── 统一独立 GPU 算子 ───
++
++_model_ready = False  # 兼容状态接口：仅指入口资源就绪，不代表已加载/测试 GPU 模型。
+ 
+ 
+ def init_models():
+-    """加载多个模型实例，每个包装为批处理推理管线"""
+-    global _model_ready, _load_generation
+-    my_gen = _load_generation
+-    from faster_whisper import WhisperModel, BatchedInferencePipeline
+-    import torch
+-    device = "cuda" if torch.cuda.is_available() else "cpu"
+-    compute_type = "float16" if device == "cuda" else "int8"
+-    target = 1 if device == "cpu" else TARGET_INSTANCES
+-
+-    if device == "cuda":
+-        # 先建立 torch 的 CUDA 上下文，让 cuBLAS/cuDNN 由 torch 统一加载，
+-        # 避免 ctranslate2 自行加载时与 torch 的 cuDNN 子 DLL 版本冲突
+-        torch.zeros(1, device="cuda")
+-        torch.cuda.synchronize()
+-
+-    print(f"  加载 faster-whisper ({WHISPER_MODEL}, {device}, {compute_type}, batch={BATCH_SIZE}), 目标 {target} 实例")
+-
+-    loaded = 0
+-    for i in range(target):
+-        if _load_generation != my_gen:
+-            print(f"  ⏹ 加载被新请求中断")
+-            break
+-        try:
+-            # 串行加载：先用 CPU 加载到 RAM，转到 GPU 后再加载下一个
+-            # 避免两个模型同时展开到 RAM 导致 mkl_malloc OOM
+-            m = WhisperModel(WHISPER_MODEL, device=device, compute_type=compute_type)
+-            if _load_generation != my_gen:
+-                print(f"  ⏹ 加载被新请求中断")
+-                break
+-            # 加载成功后立刻清理 CPU 缓存，释放 RAM 给下一个实例
+-            import gc; gc.collect()
+-            pipe = BatchedInferencePipeline(m)
+-            _model_pool.append(pipe)
+-            _model_queue.put(pipe)
+-            loaded += 1
+-            print(f"  ✅ 实例 {loaded}/{target} 就绪")
+-        except Exception as e:
+-            print(f"  ⚠️ 实例 {loaded+1} 加载失败: {e}")
+-            break
+-
+-    _model_ready = True
+-    state['model_instances'] = loaded
+-    state['model_info'] = f"{WHISPER_MODEL} × {loaded} (batch={BATCH_SIZE})"
+-    return loaded
++    """只调用 describe 检查资源；不会导入旧 GPU 框架或载入模型。"""
++    global _model_ready
++    state['operator_ready'] = _model_ready = False
++    description = OperatorBridge().describe()
++    if description.get('resourcesReady') is False:
++        raise OperatorError('统一 GPU 算子资源不完整')
++    state['operator_description'] = description
++    state['operator_ready'] = _model_ready = True
++    state['model_instances'] = 0
++    return 1
+ 
+ 
+ def switch_model(model_name: str):
+-    """清空模型池并加载新模型"""
+-    global WHISPER_MODEL, _model_pool, _model_queue, _model_ready, _load_generation
+-    _load_generation += 1  # 使正在进行的旧加载失效
+-    _model_pool.clear()
+-    # 清空队列
+-    while not _model_queue.empty():
+-        try:
+-            _model_queue.get_nowait()
+-        except Exception:
+-            break
+-    _model_ready = False
+-    WHISPER_MODEL = model_name
+-    import gc, torch
+-    gc.collect()
+-    if torch.cuda.is_available():
+-        torch.cuda.empty_cache()
++    if model_name != WHISPER_MODEL:
++        raise RuntimeError('当前使用统一 Turbo 稳定 GPU 方案，不能切回旧模型池')
+     return init_models()
+ 
+ 
+@@ -236,11 +182,10 @@
+ 
+ 
+ def format_ts(seconds):
+-    seconds = float(seconds)
+-    h = int(seconds // 3600)
+-    m = int((seconds % 3600) // 60)
+-    s = int(seconds % 60)
+-    ms = int((seconds % 1) * 1000)
++    milliseconds = max(0, round(float(seconds) * 1000))
++    seconds, ms = divmod(milliseconds, 1000)
++    minutes, s = divmod(seconds, 60)
++    h, m = divmod(minutes, 60)
+     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+ 
+ 
+@@ -263,13 +208,6 @@
+     return items
+ 
+ 
+-def choose_chunk_seconds(duration: float) -> tuple[int, str]:
+-    """根据视频时长选择切片大小（16GB 显存下切片不再受显存约束）"""
+-    if duration > 0 and duration <= SHORT_VIDEO_THRESHOLD:
+-        return LONG_CHUNK_SECONDS, f'短视频，{LONG_CHUNK_SECONDS // 60}分钟切片'
+-    return CHUNK_SECONDS, f'{CHUNK_SECONDS // 60}分钟切片'
+-
+-
+ def get_output_paths(video_path: str):
+     src = Path(video_path)
+     out_dir = Path(state['output_dir'])
+@@ -289,207 +227,71 @@
+ 
+ # ─── 转写 ───
+ 
+-def _do_transcribe(m, chunk_path, chunk_index, chunk_seconds):
+-    """核心转写逻辑：VAD 过滤 + 批处理并行解码"""
+-    offset = chunk_index * chunk_seconds
+-    mode = TRANSCRIBE_MODES.get(state.get('transcribe_mode', 'standard'), TRANSCRIBE_MODES['standard'])
+-    segments_iter, info = m.transcribe(
+-        str(chunk_path),
+-        language=None,
+-        beam_size=mode['beam_size'],
+-        vad_filter=True,
+-        batch_size=BATCH_SIZE,
+-        # BatchedInferencePipeline 默认丢弃时间轴，字幕需要显式开启
+-        without_timestamps=False,
+-    )
+-    segs = []
+-    texts = []
+-    for seg in segments_iter:
+-        segs.append({
+-            'start': seg.start + offset,
+-            'end': seg.end + offset,
+-            'text': seg.text.strip(),
+-        })
+-        texts.append(seg.text.strip())
+-    return segs, texts
+-
+-
+-def transcribe_chunk(chunk_path, chunk_index, chunk_seconds):
+-    """转写单个 chunk"""
++def operator_output_path(video_path, txt_path):
++    src = Path(video_path).resolve()
++    identity = hashlib.sha256(str(src).encode('utf-8')).hexdigest()[:10]
++    return Path(txt_path).parent / f'.gpu-operator_{src.stem}-{identity}'
++
++
++def transcribe_one(video_path: str, *, language=None):
++    """Queue/UI and offline callers share this one GPU-only entry point."""
+     _check_cancelled()
+-    m = _model_queue.get()
++    src = Path(video_path).resolve()
++    txt_path, srt_path = get_output_paths(str(src))
++    txt_path = txt_path.resolve()
++    srt_path = srt_path.resolve()
++    txt_path.parent.mkdir(parents=True, exist_ok=True)
++    output = operator_output_path(src, txt_path)
++    output.mkdir(parents=True, exist_ok=True)
++    selected_language = language or state.get('language', 'auto')
++    if selected_language not in ('auto', 'en', 'zh'):
++        raise RuntimeError('无效的转写语言')
++    state['operator_output_directory'] = str(output)
++    state.setdefault('operator_outputs', {})[str(src)] = str(output)
++    state['phase'] = 'preparing'
++    state['chunk_current'] = state['chunk_total'] = 0
++    state['chunk_seconds'] = CHUNK_SECONDS
++    state['chunk_policy'] = '统一 Turbo 稳定 GPU 算子（Native30）'
++    save_state()
++
++    def progress(event):
++        value = event.get('progress', event)
++        if not isinstance(value, dict):
++            return
++        state['phase'] = value.get('phase') or 'transcribing'
++        if isinstance(value.get('totalChunks'), int):
++            state['chunk_total'] = value['totalChunks']
++        if isinstance(value.get('index'), int):
++            state['chunk_current'] = value['index'] + 1
++        elif isinstance(value.get('completedChunks'), int):
++            state['chunk_current'] = value['completedChunks']
++
+     try:
+-        _check_cancelled()
+-        segs, texts = _do_transcribe(m, chunk_path, chunk_index, chunk_seconds)
+-    finally:
+-        _model_queue.put(m)
+-    return chunk_index, segs, ' '.join(texts)
+-
+-
+-def transcribe_one(video_path: str):
+-    """分块并行转写，支持单视频内断点续传"""
++        result = OperatorBridge().transcribe(src, output, language=selected_language,
++                                             on_progress=progress,
++                                             is_cancelled=lambda: state['cancel_requested'])
++    except OperatorCancelled as error:
++        raise TranscriptionCancelled(str(error)) from error
+     _check_cancelled()
+-    src = Path(video_path)
+-    txt_path, srt_path = get_output_paths(video_path)
+-    txt_path.parent.mkdir(parents=True, exist_ok=True)
+-
+-    chunk_dir = txt_path.parent / f'.chunks_{src.stem}'
+-    progress_file = chunk_dir / '_progress.json'
+-
+-    # 检查是否有未完成的分块进度
+-    if progress_file.exists():
+-        completed = set(int(x) for x in json.loads(progress_file.read_text('utf-8')).get('done', []))
+-    else:
+-        completed = set()
+-
+-    # 根据视频时长和当前模型/显存选 chunk 大小；断点续传沿用原设置，避免时间轴错位
+-    probe = subprocess.run([
+-        'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+-        '-of', 'default=noprint_wrappers=1:nokey=1', str(src),
+-    ], capture_output=True, text=True)
+-    try:
+-        duration = float(probe.stdout.strip())
+-    except (ValueError, AttributeError):
+-        duration = 0
+-
+-    if progress_file.exists():
+-        progress_data = json.loads(progress_file.read_text('utf-8'))
+-        chunk_seconds = int(progress_data.get('chunk_seconds') or CHUNK_SECONDS)
+-        chunk_policy = progress_data.get('chunk_policy', '沿用断点续传切片设置')
+-    else:
+-        if state.get('chunk_mode') == 'manual':
+-            try:
+-                mins = max(1, min(10, int(state.get('manual_chunk_seconds', 5))))
+-            except (TypeError, ValueError):
+-                mins = 5
+-            chunk_seconds = mins * 60
+-            chunk_policy = f'手动设置，{mins}分钟切片'
+-        else:
+-            chunk_seconds, chunk_policy = choose_chunk_seconds(duration)
+-
+-    state['chunk_seconds'] = chunk_seconds
+-    state['chunk_policy'] = chunk_policy
+-
+-    # 如果没有已完成分块，先提取音频并切块（一步到位，不写中间文件）
+-    if not completed:
+-        chunk_dir.mkdir(parents=True, exist_ok=True)
+-        state['phase'] = 'extracting'
+-        state['chunk_current'] = 0
+-        state['chunk_total'] = 0
+-        save_state()
+-
+-        r = subprocess.run([
+-            'ffmpeg', '-y', '-i', str(src),
+-            '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1',
+-            '-f', 'segment', '-segment_time', str(chunk_seconds),
+-            str(chunk_dir / '%04d.wav'),
+-        ], capture_output=True)
+-        if r.returncode != 0:
+-            raise RuntimeError(f"音频提取+切块失败: ffmpeg return {r.returncode}")
+-        progress_file.write_text(
+-            json.dumps({
+-                'done': [],
+-                'chunk_seconds': chunk_seconds,
+-                'chunk_policy': chunk_policy,
+-            }, ensure_ascii=False), 'utf-8')
+-
+-    chunks = sorted(
+-        [f for f in chunk_dir.iterdir() if f.suffix == '.wav' and f.name[:4].isdigit()],
+-        key=lambda f: int(f.stem)
+-    )
+-
+-    if not chunks:
+-        # Fallback: 直接用原文件转写（不切块）
+-        _check_cancelled()
+-        m = _model_queue.get()
+-        try:
+-            all_segments, all_texts = _do_transcribe(m, src, 0, 0)
+-        finally:
+-            _model_queue.put(m)
+-        txt_path.write_text(add_ipa_to_text(clean_text_join(all_texts)), 'utf-8')
+-        with open(srt_path, 'w', encoding='utf-8') as f:
+-            for idx, seg in enumerate(all_segments, 1):
+-                f.write(f"{idx}\n{format_ts(seg['start'])} --> {format_ts(seg['end'])}\n{seg['text']}\n\n")
+-        state['chunk_current'] = 1
+-        state['chunk_total'] = 1
+-        save_state()
+-        return
+-
+-    # chunk 结果按 index 存，最后按序合并
+-    chunk_results = {}
+-    state['phase'] = 'transcribing'
++    # Export exactly the operator text. IPA is an explicit user-selected derivative;
++    # the operator's original TXT, events and checkpoint remain untouched.
++    txt_path.write_text(add_ipa_to_text(result['text']), encoding='utf-8')
++    with srt_path.open('w', encoding='utf-8') as handle:
++        for index, segment in enumerate(result['segments'], 1):
++            handle.write(f"{index}\n{format_ts(segment['start'])} --> {format_ts(segment['end'])}\n{segment['text'].strip()}\n\n")
++    returned = {**result, 'operatorOutputDirectory': str(output),
++                'exportTranscriptFile': str(txt_path), 'exportSrtFile': str(srt_path)}
++    (output / 'transcriber-result.json').write_text(json.dumps(returned, ensure_ascii=False, indent=2), 'utf-8')
++    state['last_operator_result'] = {key: returned.get(key) for key in
++        ('complete', 'device', 'model', 'plan', 'operatorOutputDirectory', 'duration', 'totalSamples', 'transcriptSha256')}
++    state['phase'] = 'complete'
++    state['chunk_current'] = state['chunk_total']
+     save_state()
+-
+-    # 加载已完成的段
+-    for i in completed:
+-        txt_file = chunk_dir / f'{i:04d}.txt'
+-        seg_file = chunk_dir / f'{i:04d}.json'
+-        segs = []
+-        text = ''
+-        if txt_file.exists():
+-            text = txt_file.read_text('utf-8')
+-        if seg_file.exists():
+-            segs = json.loads(seg_file.read_text('utf-8'))
+-        chunk_results[i] = (text, segs)
+-
+-    # 找出待处理的 chunk
+-    pending = [(i, c) for i, c in enumerate(chunks) if i not in completed]
+-
+-    # 并行转写（每个线程从模型池获取独占实例）
+-    state['chunk_total'] = len(chunks)
+-    state['chunk_current'] = len(completed)
+-    save_state()
+-    with ThreadPoolExecutor(max_workers=max(1, min(len(_model_pool), _model_queue.qsize()))) as pool:
+-        futures = {pool.submit(transcribe_chunk, chunk, i, chunk_seconds): i for i, chunk in pending}
+-
+-        for fut in as_completed(futures):
+-            try:
+-                idx, segs, text = fut.result()
+-            except TranscriptionCancelled:
+-                continue
+-
+-            # 保存段结果
+-            (chunk_dir / f'{idx:04d}.txt').write_text(text, 'utf-8')
+-            (chunk_dir / f'{idx:04d}.json').write_text(
+-                json.dumps(segs, ensure_ascii=False), 'utf-8')
+-            chunk_results[idx] = (text, segs)
+-
+-            # 更新进度
+-            completed.add(idx)
+-            progress_file.write_text(
+-                json.dumps({
+-                    'done': sorted(completed),
+-                    'chunk_seconds': chunk_seconds,
+-                    'chunk_policy': chunk_policy,
+-                }, ensure_ascii=False), 'utf-8')
+-
+-            state['chunk_current'] = len(completed)
+-            state['chunk_total'] = len(chunks)
+-            save_state()
+-
+-    _check_cancelled()
+-
+-    # 按序合并所有段
+-    all_texts = []
+-    all_segments = []
+-    for i in sorted(chunk_results.keys()):
+-        text, segs = chunk_results[i]
+-        if text:
+-            all_texts.append(text)
+-        all_segments.extend(segs)
+-
+-    # 合并最终结果（txt 做安全边界清理；srt 保持原时间轴，不改动）
+-    txt_path.write_text(add_ipa_to_text(clean_text_join(all_texts)), 'utf-8')
+-    with open(srt_path, 'w', encoding='utf-8') as f:
+-        for idx, seg in enumerate(all_segments, 1):
+-            f.write(f"{idx}\n{format_ts(seg['start'])} --> {format_ts(seg['end'])}\n{seg['text']}\n\n")
+-
+-    # 清理临时文件
+-    shutil.rmtree(chunk_dir, ignore_errors=True)
++    return returned
+ 
+ 
+ def worker():
+-    # 防止其他入口意外重复调用 worker；模型池仍可并行处理单个视频的分块。
++    # One file queue and the shared operator GPU lease prevent overlapping jobs.
+     if not _worker_lock.acquire(blocking=False):
+         return
+     import traceback
+@@ -510,7 +312,7 @@
+                 elapsed = time.time() - t0
+                 with task_lock:
+                     state['elapsed_per_video'].append(elapsed)
+-                    state['done'].append({'video': video_path, 'name': item['name'], 'status': 'ok', 'elapsed': round(elapsed, 1)})
++                    state['done'].append({'video': video_path, 'name': item['name'], 'status': 'ok', 'elapsed': round(elapsed, 1), 'operator_output_directory': state.get('operator_output_directory', '')})
+             except TranscriptionCancelled:
+                 break
+             except Exception as e:
+@@ -526,13 +328,14 @@
+                 save_state()
+     finally:
+         with task_lock:
+-            if state['cancel_requested']:
+-                state['queue'] = []
+             state['transcribing'] = False
+             state['current_video'] = ''
+             # 保留取消标记供页面显示；启动下一次任务时清除。
+             try:
+-                STATE_FILE.unlink(missing_ok=True)
++                if state['queue']:
++                    save_state()  # cancellation retains pending files and operator checkpoints
++                else:
++                    STATE_FILE.unlink(missing_ok=True)
+             finally:
+                 _worker_lock.release()
+ 
+@@ -545,10 +348,12 @@
+         'video_dir': state['video_dir'],
+         'output_dir': state['output_dir'],
+         'overwrite': state['overwrite'],
+-        'transcribe_mode': state.get('transcribe_mode', 'standard'),
++        'transcribe_mode': 'stable',
+         'add_ipa': state.get('add_ipa', False),
+-        'chunk_mode': state.get('chunk_mode', 'auto'),
+-        'manual_chunk_seconds': state.get('manual_chunk_seconds', 5),
++        'chunk_mode': 'operator',
++        'manual_chunk_seconds': 30,
++        'language': state.get('language', 'auto'),
++        'operator_outputs': state.get('operator_outputs', {}),
+         'queue': state['queue'],
+         'done': state['done'],
+         'errors': state['errors'],
+@@ -573,10 +378,12 @@
+             'video_dir': data.get('video_dir', ''),
+             'output_dir': data.get('output_dir', ''),
+             'overwrite': data.get('overwrite', False),
+-            'transcribe_mode': data.get('transcribe_mode', 'standard'),
++            'transcribe_mode': 'stable',
+             'add_ipa': data.get('add_ipa', False),
+-            'chunk_mode': data.get('chunk_mode', 'auto'),
+-            'manual_chunk_seconds': data.get('manual_chunk_seconds', 5),
++            'chunk_mode': 'operator',
++            'manual_chunk_seconds': 30,
++            'language': data.get('language', 'auto'),
++            'operator_outputs': data.get('operator_outputs', {}),
+             'queue': remaining,
+             'done': data.get('done', []),
+             'errors': data.get('errors', []),
+--- a/app.py
++++ b/app.py
+@@ -20,7 +20,7 @@
+     init_models, switch_model, scan_media, get_output_paths,
+     worker, save_state, load_state,
+ )
+-import core  # 通过模块引用访问可变变量（_model_ready, _model_pool, WHISPER_MODEL 等）
++import core  # Queue state and the standalone operator model label.
+ 
+ app = Flask(__name__, template_folder=str(Path(__file__).parent / 'templates'))
+ 
+@@ -48,6 +48,7 @@
+         'cancel_requested': state['cancel_requested'],
+         'chunk_mode': state.get('chunk_mode', 'auto'),
+         'manual_chunk_seconds': state.get('manual_chunk_seconds', 5),
++        'language': state.get('language', 'auto'),
+     }
+ 
+ 
+@@ -59,10 +60,12 @@
+         state['video_dir'] = saved['video_dir']
+         state['output_dir'] = saved['output_dir'] or saved['video_dir']
+         state['overwrite'] = saved['overwrite']
+-        state['transcribe_mode'] = saved.get('transcribe_mode', 'standard')
++        state['transcribe_mode'] = 'stable'
+         state['add_ipa'] = saved.get('add_ipa', False)
+-        state['chunk_mode'] = saved.get('chunk_mode', 'auto')
+-        state['manual_chunk_seconds'] = saved.get('manual_chunk_seconds', 5)
++        state['chunk_mode'] = 'operator'
++        state['manual_chunk_seconds'] = 30
++        state['language'] = saved.get('language', 'auto')
++        state['operator_outputs'] = saved.get('operator_outputs', {})
+         state['queue'] = saved['queue']
+         state['total'] = saved['total']
+         state['current_index'] = saved.get('current_index', saved['total'] - len(saved['queue']))
+@@ -104,23 +107,31 @@
+         return jsonify({'status': 'discarded'})
+ 
+ 
+-_system_info = None
++_descriptor_thread = None
+ 
+ 
+ @app.route('/api/system')
+ def api_system():
+-    global _system_info
+-    if _system_info is None:
+-        import torch
+-        _system_info = {
+-            'cuda': torch.cuda.is_available(),
+-            'torch_version': torch.__version__,
+-        }
+-        if _system_info['cuda']:
+-            _system_info['gpu_name'] = torch.cuda.get_device_name(0)
+-            props = torch.cuda.get_device_properties(0)
+-            _system_info['gpu_vram'] = round(props.total_memory / 1024 / 1024)
+-    return jsonify({**_system_info, 'model_info': state.get('model_info', ''), 'model_instances': state.get('model_instances', 0), 'model_name': core.WHISPER_MODEL})
++    error = None
++    if state.get('operator_description') is None:
++        try:
++            init_models()  # describe reads static resources, never imports Torch or loads a GPU model.
++        except Exception as failure:
++            error = str(failure)
++            state['operator_ready'] = False
++    last = state.get('last_operator_result') or {}
++    return jsonify({'device_required': 'cuda', 'resources_ready': state.get('operator_ready', False),
++                    'gpu_verified': last.get('complete') is True and last.get('device') == 'cuda',
++                    'gpu_probe_performed': False, 'operator': state.get('operator_description'),
++                    'last_result': last, 'error': error, 'model_name': core.WHISPER_MODEL,
++                    'model_info': state.get('model_info', ''), 'cpu_fallback': False})
++
++
++@app.route('/api/model_status')
++def api_model_status():
++    return jsonify({'loading': bool(_descriptor_thread and _descriptor_thread.is_alive()),
++                    'ready': state.get('operator_ready', False), 'resources_only': True,
++                    'instances': 0, 'target': 1, 'model_name': core.WHISPER_MODEL})
+ 
+ 
+ @app.route('/api/shutdown', methods=['POST'])
+@@ -174,17 +185,17 @@
+         videos = d.get('videos', [])
+         if not videos:
+             return jsonify({'error': '请选择音视频文件'}), 400
++        language = d.get('language', 'auto')
++        if language not in ('auto', 'en', 'zh'):
++            return jsonify({'error': '无效的转写语言'}), 400
+         state['video_dir'] = d.get('video_dir') or state['video_dir']
+         state['output_dir'] = d.get('output_dir') or state['video_dir']
+         state['overwrite'] = d.get('overwrite', False)
+-        mode = d.get('transcribe_mode', 'standard')
+-        state['transcribe_mode'] = mode if mode in TRANSCRIBE_MODES else 'standard'
++        state['transcribe_mode'] = 'stable'
++        state['language'] = language
+         state['add_ipa'] = bool(d.get('add_ipa', False))
+-        state['chunk_mode'] = d.get('chunk_mode', 'auto')
+-        try:
+-            state['manual_chunk_seconds'] = max(1, min(10, int(d.get('manual_chunk_seconds', 5))))
+-        except (TypeError, ValueError):
+-            state['manual_chunk_seconds'] = 5
++        state['chunk_mode'] = 'operator'
++        state['manual_chunk_seconds'] = 30
+ 
+         queue = []
+         skipped = []
+@@ -247,8 +258,11 @@
+         'chunk_seconds': state.get('chunk_seconds', 0),
+         'chunk_policy': state.get('chunk_policy', ''),
+         'phase': state.get('phase', ''),
+-        'transcribe_mode': state.get('transcribe_mode', 'standard'),
+-        'transcribe_mode_label': TRANSCRIBE_MODES.get(state.get('transcribe_mode', 'standard'), TRANSCRIBE_MODES['standard'])['label'],
++        'transcribe_mode': 'stable',
++        'transcribe_mode_label': TRANSCRIBE_MODES['stable']['label'],
++        'operator_output_directory': state.get('operator_output_directory', ''),
++        'operator_outputs': state.get('operator_outputs', {}),
++        'last_operator_result': state.get('last_operator_result'),
+         'add_ipa': state.get('add_ipa', False),
+         'chunk_mode': state.get('chunk_mode', 'auto'),
+         'manual_chunk_seconds': state.get('manual_chunk_seconds', 5),
+@@ -335,20 +349,21 @@
+     print(f"  http://localhost:{PORT}")
+     print("=" * 50)
+ 
+-    # 启动时预加载模型
+-    print("\n  加载模型中（首次需下载，请耐心等待）...")
++    # Only check the standalone entry point; GPU model initialization happens during a job.
++    print("\n  检查统一 GPU 算子资源（不预载模型）...")
+ 
+     def _preload():
+         try:
+             n = init_models()
+             if n > 0:
+-                print(f"  ✅ {n} 个模型实例就绪\n")
++                print("  ✅ 统一 GPU 算子资源就绪；任务启动时验证 GPU\n")
+             else:
+-                print("  ❌ 模型加载失败\n")
++                print("  ❌ GPU 算子资源检查失败\n")
+         except Exception as e:
+-            print(f"  ❌ 模型加载失败: {e}\n")
++            print(f"  ❌ GPU 算子资源检查失败: {e}\n")
+ 
+     t = threading.Thread(target=_preload, daemon=True)
++    _descriptor_thread = t
+     t.start()
+ 
+     # supervisor.py 重启本进程时设置此变量：崩溃后自动续跑。
+@@ -359,17 +374,6 @@
+             print(f"  🔄 检测到未完成任务，自动续传 {len(saved['queue'])} 个\n")
+             _resume_from(saved)
+ 
+-    # 模型加载状态 API
+-    @app.route('/api/model_status')
+-    def api_model_status():
+-        return jsonify({
+-            'loading': t.is_alive(),
+-            'ready': core._model_ready,
+-            'instances': len(core._model_pool),
+-            'model_name': core.WHISPER_MODEL,
+-            'target': TARGET_INSTANCES,
+-        })
+-
+     webbrowser.open(f'http://localhost:{PORT}')
+ 
+     from waitress import serve
+--- /dev/null
++++ b/gpu_operator.py
+@@ -0,0 +1,146 @@
++"""UTF-8 JSONL client for the shared, GPU-only standalone operator."""
++import json
++import os
++import queue
++import re
++import subprocess
++import threading
++import time
++from collections import deque
++from pathlib import Path
++
++
++DEFAULT_BUNDLE = Path(r'D:\迅雷下载\notionSwitch\GPU转写算子')
++
++
++class OperatorError(RuntimeError):
++    pass
++
++
++class OperatorCancelled(OperatorError):
++    """The operator stopped; its completed checkpoint parts remain on disk."""
++
++
++class OperatorBridge:
++    def __init__(self, bundle=None, *, command=None):
++        self.bundle = Path(bundle or os.environ.get('TRANSCRIBER_GPU_BUNDLE') or DEFAULT_BUNDLE).resolve()
++        # Explicit command injection is for a protocol fixture, never a UI option.
++        self._command = list(command) if command is not None else None
++
++    def _exchange(self, request, expected_event, on_progress=None, is_cancelled=None, timeout=None):
++        if is_cancelled and is_cancelled():
++            raise OperatorCancelled('转写已取消，独立算子检查点已保留')
++        command = self._command
++        if command is None:
++            node, script = self.bundle / 'bin/node.exe', self.bundle / 'bridge.mjs'
++            if not node.is_file() or not script.is_file():
++                raise OperatorError(f'独立 GPU 算子入口未就绪：{self.bundle}')
++            command = [str(node), str(script)]
++        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
++                                   stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace',
++                                   bufsize=1, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
++        stderr = deque(maxlen=30)
++        reader = threading.Thread(target=lambda: stderr.extend(process.stderr), daemon=True)
++        reader.start()
++        lines = queue.Queue()
++
++        def read_stdout():
++            try:
++                for line in process.stdout:
++                    lines.put(line)
++            finally:
++                lines.put(None)
++
++        stdout_reader = threading.Thread(target=read_stdout, daemon=True)
++        stdout_reader.start()
++        result, failure, failure_code = None, None, None
++        started, cancel_at = time.monotonic(), None
++        try:
++            process.stdin.write(json.dumps(request, ensure_ascii=False) + '\n')
++            process.stdin.flush()
++            if expected_event == 'description':
++                # A metadata query has no later cancel message. EOF also lets
++                # Node release its stdin handle and finish naturally.
++                process.stdin.close()
++            while True:
++                if is_cancelled and is_cancelled() and cancel_at is None:
++                    cancel_at = time.monotonic()
++                    try:
++                        process.stdin.write('{"type":"cancel"}\n')
++                        process.stdin.flush()
++                    except (BrokenPipeError, OSError, ValueError):
++                        pass
++                if cancel_at is not None and time.monotonic() - cancel_at > 30:
++                    raise OperatorCancelled('转写取消超时，已结束桥接进程；已完成检查点保留')
++                if timeout is not None and time.monotonic() - started > timeout:
++                    raise OperatorError('GPU 算子状态查询超时')
++                try:
++                    line = lines.get(timeout=.1)
++                except queue.Empty:
++                    continue
++                if line is None:
++                    break
++                try:
++                    event = json.loads(line)
++                except (ValueError, TypeError) as error:
++                    raise OperatorError('GPU 算子返回了无效 JSONL') from error
++                if event.get('event') == 'progress' and on_progress:
++                    on_progress(event)
++                elif event.get('event') == expected_event:
++                    result = event.get('result')
++                    process.stdin.close()
++                elif event.get('event') == 'error':
++                    failure = event.get('error') or event.get('message') or 'GPU 算子失败'
++                    failure_code = event.get('code')
++                    process.stdin.close()
++            code = process.wait()
++            reader.join(1)
++            if cancel_at is not None or failure_code == 'CANCELLED' or (is_cancelled and is_cancelled()):
++                raise OperatorCancelled('转写已取消，独立算子检查点已保留')
++            if code or failure:
++                detail = str(failure or ''.join(stderr).strip() or f'exit={code}')[-2000:]
++                raise OperatorError(f'GPU 算子失败：{detail}')
++            if not isinstance(result, dict):
++                raise OperatorError(f'GPU 算子缺少 {expected_event} 结果')
++            return result
++        finally:
++            if process.poll() is None:
++                if os.name == 'nt':
++                    # Only this client-owned bridge tree; never a broad python/node kill.
++                    subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
++                                   capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
++                else:
++                    process.terminate()
++                try:
++                    process.wait(timeout=5)
++                except subprocess.TimeoutExpired:
++                    process.kill()
++                    process.wait()
++            for stream in (process.stdin, process.stdout, process.stderr):
++                stream.close()
++            reader.join(1)
++            stdout_reader.join(1)
++
++    def transcribe(self, source, output_directory, *, language='auto', on_progress=None, is_cancelled=None):
++        if language not in ('auto', 'en', 'zh'):
++            raise OperatorError('无效的转写语言')
++        request = {'type': 'transcribe', 'source': str(Path(source).resolve()),
++                   'outputDirectory': str(Path(output_directory).resolve()), 'language': language}
++        profile = os.environ.get('TRANSCRIBER_GPU_PROFILE', 'winner')
++        experimental = os.environ.get('TRANSCRIBER_GPU_ALLOW_EXPERIMENTAL') == '1'
++        if not re.fullmatch(r'[A-Za-z0-9_.-]{1,120}', profile):
++            raise OperatorError('无效的 GPU 算子 profile')
++        if profile != 'winner' and not experimental:
++            raise OperatorError('实验 profile 仅在显式允许实验时可运行')
++        if profile != 'winner' or experimental:
++            request.update(profile=profile, allowExperimental=experimental)
++        result = self._exchange(request, 'result', on_progress, is_cancelled)
++        if result.get('complete') is not True or result.get('device') != 'cuda':
++            raise OperatorError('独立算子没有返回完整 CUDA 转写结果；不会回退 CPU')
++        if not isinstance(result.get('text'), str) or not isinstance(result.get('segments'), list):
++            raise OperatorError('GPU 算子返回缺少原文或完整时间段')
++        return result
++
++    def describe(self):
++        """Read static operator metadata; this request never loads a GPU model."""
++        return self._exchange({'type': 'describe'}, 'description', timeout=20)
+--- a/supervisor.py
++++ b/supervisor.py
+@@ -1,13 +1,9 @@
+-"""崩溃自愈启动器
++"""Web app supervisor. All ASR is delegated to the shared GPU operator.
+ 
+-背景：这张 RTX 2070 改卡（8GB→16GB，功耗墙 115W）在显存带宽负载下会随机触发
+-NVIDIA 驱动 TDR，把整个转写进程直接杀掉。存活次数在 1~8 次推理调用之间随机，
+-换 batch_size / 实例数 / CUDA 分配器都无法消除（已实测）。
+-
+-transcribe_one 已按分块落盘（.chunks_<名>/_progress.json），重启后会跳过已完成
+-分块继续。本脚本负责崩溃后自动重启，让长视频无人值守跑完。
+-
+-用法: python supervisor.py [目标脚本]，默认 app.py
++Restarting the web app restores its pending file queue. Completed operator
++checkpoint parts remain in .gpu-operator_<source>-<identity>; the old dual
++Torch/Whisper model pool is never loaded. A web-app restart is not evidence
++of a zero-recovery GPU run.
+ """
+ import os
+ import subprocess
+--- /dev/null
++++ b/transcribe_file.py
+@@ -0,0 +1,57 @@
++"""Offline adapter harness; the shared bundle owns all GPU inference and locking."""
++import argparse
++import json
++import signal
++import sys
++import time
++from pathlib import Path
++
++import core
++from gpu_operator import OperatorBridge
++
++
++def main(argv=None):
++    parser = argparse.ArgumentParser(description='统一 Turbo 稳定 GPU 逐字稿入口')
++    parser.add_argument('source', nargs='?', help='音视频完整路径')
++    parser.add_argument('--output-dir', help='导出的 TXT/SRT 及独立算子记录目录')
++    parser.add_argument('--language', choices=('auto', 'en', 'zh'), default='auto')
++    parser.add_argument('--describe', action='store_true', help='仅检查资源，不加载 GPU 模型')
++    args = parser.parse_args(argv)
++    if args.describe:
++        print(json.dumps({'event': 'description', 'result': OperatorBridge().describe()}, ensure_ascii=False))
++        return 0
++    if not args.source or not args.output_dir:
++        parser.error('转写需要 source 和 --output-dir')
++    source, output = Path(args.source).resolve(), Path(args.output_dir).resolve()
++    if not source.is_file():
++        parser.error('音视频文件不存在')
++    output.mkdir(parents=True, exist_ok=True)
++    # This CLI has its own state file so a benchmark cannot replace the web queue.
++    core.STATE_FILE = output / 'transcriber-cli-state.json'
++    core.state.update(video_dir=str(source.parent), output_dir=str(output), language=args.language,
++                      cancel_requested=False, transcribing=True, queue=[{'path': str(source), 'name': source.stem}],
++                      done=[], errors=[], total=1, current_index=0, operator_outputs={})
++    previous_handler = signal.getsignal(signal.SIGINT)
++    signal.signal(signal.SIGINT, lambda _number, _frame: core.state.update(cancel_requested=True))
++    before = time.perf_counter()
++    try:
++        result = core.transcribe_one(str(source), language=args.language)
++        core.state.update(queue=[], done=[{'video': str(source), 'status': 'ok'}], current_index=1)
++        core.save_state()
++        print(json.dumps({'event': 'result', 'result': result,
++                          'adapterWallSeconds': time.perf_counter() - before,
++                          'timingScope': 'adapter-call-includes-bridge-model-load-and-preprocessing'}, ensure_ascii=False))
++        return 0
++    except core.TranscriptionCancelled as error:
++        print(json.dumps({'event': 'error', 'code': 'CANCELLED', 'message': str(error)}, ensure_ascii=False), file=sys.stderr)
++        return 2
++    except Exception as error:
++        print(json.dumps({'event': 'error', 'code': 'OPERATOR_FAILURE', 'message': str(error)}, ensure_ascii=False), file=sys.stderr)
++        return 1
++    finally:
++        core.state['transcribing'] = False
++        signal.signal(signal.SIGINT, previous_handler)
++
++
++if __name__ == '__main__':
++    raise SystemExit(main())
+--- a/启动逐字稿.bat
++++ b/启动逐字稿.bat
+@@ -4,5 +4,11 @@
+ echo   Transcriber - http://localhost:3066
+ echo ==================================================
+ echo.
+-C:\Users\songf\.pyenv\pyenv-win\shims\python.bat "%~dp0supervisor.py"
++if not defined TRANSCRIBER_PYTHON set "TRANSCRIBER_PYTHON=C:\Users\songf\.pyenv\pyenv-win\versions\3.12.0\python.exe"
++if not exist "%TRANSCRIBER_PYTHON%" (
++  echo Python not found. Set TRANSCRIBER_PYTHON to the Python with Flask and waitress.
++  pause
++  exit /b 1
++)
++"%TRANSCRIBER_PYTHON%" -X utf8 "%~dp0supervisor.py"
+ pause
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -130,19 +130,19 @@
+ <div class="container">
+   <div class="header">
+     <h1>逐字稿生成器</h1>
+-    <p>选择音视频目录，批量生成中文逐字稿（Whisper AI 驱动）</p>
++    <p>选择音视频目录，使用统一 Turbo 稳定 GPU 算子生成逐字稿与字幕</p>
+   </div>
+ 
+   <!-- GPU 状态 -->
+   <div class="gpu-banner" id="gpuBanner">
+     <span class="gpu-dot"></span>
+-    <span id="gpuText">检测中...</span>
++    <span id="gpuText">检查算子入口资源...</span>
+   </div>
+ 
+   <!-- 模型加载状态 -->
+   <div class="gpu-banner" id="modelBanner" style="display:none; background:var(--blue-light); color:var(--blue)">
+     <span class="spinner"></span>
+-    <span id="modelText">模型加载中，请稍候...</span>
++    <span id="modelText">检查算子入口资源，不预载 GPU 模型...</span>
+   </div>
+ 
+   <!-- 设置 -->
+@@ -160,32 +160,12 @@
+     </div>
+     <div class="form-row" style="justify-content:flex-end; margin-top:4px;">
+       <span class="form-label">模型</span>
+-      <select class="form-input" id="modelSelect" onchange="switchModel(this.value)" style="max-width:150px;cursor:pointer"></select>
+-      <span class="form-label" style="min-width:60px">切片</span>
+-      <div style="display:flex;gap:8px;align-items:center;">
+-        <label style="font-size:13px;cursor:pointer;display:flex;align-items:center;gap:3px">
+-          <input type="radio" name="chunkMode" value="auto" checked onchange="toggleChunkMode()"> 自动
+-        </label>
+-        <label style="font-size:13px;cursor:pointer;display:flex;align-items:center;gap:3px">
+-          <input type="radio" name="chunkMode" value="manual" onchange="toggleChunkMode()"> 手动
+-        </label>
+-      </div>
+-      <select class="form-input" id="modeSelect" style="max-width:100px;cursor:pointer">
+-        <option value="fast">快速</option>
+-        <option value="standard" selected>标准</option>
+-        <option value="accurate">高精度</option>
+-      </select>
+-      <select class="form-input hidden" id="chunkMinutes" style="max-width:110px;cursor:pointer">
+-        <option value="1">1 分钟</option>
+-        <option value="2">2 分钟</option>
+-        <option value="3">3 分钟</option>
+-        <option value="4">4 分钟</option>
+-        <option value="5" selected>5 分钟</option>
+-        <option value="6">6 分钟</option>
+-        <option value="7">7 分钟</option>
+-        <option value="8">8 分钟</option>
+-        <option value="9">9 分钟</option>
+-        <option value="10">10 分钟</option>
++      <span id="modelSelect">large-v3-turbo · Native30 · CUDA FP16</span>
++      <span class="form-label" style="min-width:60px">语言</span>
++      <select class="form-input" id="languageSelect" style="max-width:120px;cursor:pointer">
++        <option value="auto" selected>自动识别</option>
++        <option value="en">英语</option>
++        <option value="zh">中文</option>
+       </select>
+       <button class="btn btn-primary" onclick="scanVideos()">扫描</button>
+     </div>
+@@ -379,12 +359,6 @@
+   $('selectCount').textContent = text;
+ }
+ 
+-function toggleChunkMode() {
+-  const isAuto = document.querySelector('input[name="chunkMode"]:checked').value === 'auto';
+-  $('modeSelect').classList.toggle('hidden', !isAuto);
+-  $('chunkMinutes').classList.toggle('hidden', isAuto);
+-}
+-
+ // ── Transcribe ──
+ async function startTranscribe() {
+   const selected = getSelected();
+@@ -411,10 +385,9 @@
+       video_dir: $('videoDir').value.trim(),
+       output_dir: $('outputDir').value.trim(),
+       overwrite: $('overwrite').checked,
+-      transcribe_mode: $('modeSelect').value,
++      transcribe_mode: 'stable',
+       add_ipa: $('addIpa').checked,
+-      chunk_mode: document.querySelector('input[name="chunkMode"]:checked').value,
+-      manual_chunk_seconds: Math.min(10, Math.max(1, parseInt($('chunkMinutes').value) || 5)),
++      language: $('languageSelect').value,
+     })
+   });
+   const data = await res.json();
+@@ -548,10 +521,7 @@
+ function trackRunningTask(info) {
+   $('videoDir').value = info.video_dir;
+   $('outputDir').value = info.output_dir || info.video_dir;
+-  const mode = info.chunk_mode || 'auto';
+-  document.querySelector(`input[name="chunkMode"][value="${mode}"]`).checked = true;
+-  $('chunkMinutes').value = info.manual_chunk_seconds || 5;
+-  toggleChunkMode();
++  $('languageSelect').value = info.language || 'auto';
+   isTranscribing = true;
+   $('progressCard').style.display = 'block';
+   $('btnGenerate').disabled = true;
+@@ -595,42 +565,28 @@
+     const res = await fetch('/api/system');
+     const info = await res.json();
+     const banner = $('gpuBanner');
+-    if (info.cuda) {
++    if (info.gpu_verified) {
+       banner.className = 'gpu-banner gpu-on';
+-      $('gpuText').textContent = `GPU 加速已启用: ${info.gpu_name} (${info.gpu_vram}MB)`;
++      $('gpuText').textContent = '统一 Turbo GPU 算子：最近任务已完成 CUDA 转写';
++    } else if (info.resources_ready) {
++      banner.className = 'gpu-banner';
++      $('gpuText').textContent = '统一 Turbo GPU 算子：入口资源就绪，任务启动时验证 GPU';
+     } else {
+       banner.className = 'gpu-banner gpu-off';
+-      $('gpuText').textContent = 'CPU 模式（未检测到 GPU）';
++      $('gpuText').textContent = info.error || 'GPU 算子入口未就绪，请检查统一算子目录';
+     }
+   } catch (e) {
+-    $('gpuText').textContent = '无法检测 GPU';
++    $('gpuText').textContent = '无法检查 GPU 算子入口';
+   }
+   // Load model list
+   try {
+     const res = await fetch('/api/models');
+     const data = await res.json();
+     const sel = $('modelSelect');
+-    sel.innerHTML = data.models.map(m =>
+-      `<option value="${m}" ${m === data.current ? 'selected' : ''}>${m}</option>`
+-    ).join('');
++    sel.textContent = `${data.current} · Native30 · CUDA FP16`;
+   } catch (e) {}
+   // Check model loading status
+   checkModel();
+-}
+-
+-async function switchModel(name) {
+-  if (isTranscribing) { alert('转写进行中，无法切换模型'); return; }
+-  $('modelBanner').style.display = 'flex';
+-  $('modelText').textContent = `正在切换到 ${name}...`;
+-  $('modelSelect').disabled = true;
+-  try {
+-    await fetch('/api/switch_model', {
+-      method: 'POST',
+-      headers: {'Content-Type':'application/json'},
+-      body: JSON.stringify({ model: name })
+-    });
+-    setTimeout(checkModel, 1000);
+-  } catch (e) {}
+ }
+ 
+ async function checkModel() {
+@@ -639,14 +595,9 @@
+     const info = await res.json();
+     if (info.ready) {
+       $('modelBanner').style.display = 'none';
+-      $('modelSelect').disabled = false;
+-      // 在 GPU 横幅追加模型实例信息
+-      const gpu = $('gpuText').textContent;
+-      const suffix = info.instances > 1 ? ` × ${info.instances} 实例` : '';
+-      $('gpuText').textContent = gpu + ` | ${info.model_name}${suffix}`;
+     } else if (info.loading) {
+       $('modelBanner').style.display = 'flex';
+-      $('modelText').textContent = `模型加载中 (${info.instances}/${info.target} 实例)...`;
++      $('modelText').textContent = '正在检查统一算子资源，不载入 GPU 模型...';
+       setTimeout(checkModel, 2000);
+     }
+   } catch (e) {}
+--- a/tests/test_task_lifecycle.py
++++ b/tests/test_task_lifecycle.py
+@@ -4,7 +4,6 @@
+ import threading
+ import unittest
+ from pathlib import Path
+-from types import SimpleNamespace
+ from unittest.mock import patch
+ 
+ import app as web
+@@ -96,24 +95,20 @@
+             finally:
+                 finished[index].set()
+ 
+-        def command(args, **kwargs):
+-            if args[0] == 'ffmpeg':
+-                Path(args[-1].replace('%04d', '0000')).touch()
+-            return SimpleNamespace(stdout='60', returncode=0)
+-
+-        def chunk(_path, index, _seconds):
++        def chunk(_path, _output, **_kwargs):
+             with calls_lock:
+                 call = len(chunk_calls)
+                 chunk_calls.append(call)
+             entered[call].set()
+             if not release[call].wait(3):
+                 raise RuntimeError('Test chunk timed out')
+-            return index, [{'start': 0, 'end': 1, 'text': 'Transcript'}], 'Transcript'
++            return {'complete': True, 'device': 'cuda', 'text': 'Transcript',
++                    'segments': [{'start': 0, 'end': 1, 'text': 'Transcript'}]}
+ 
+         with (patch.object(web, 'worker', side_effect=tracked_worker),
+               patch.object(web.threading, 'Thread', side_effect=tracked_thread),
+-              patch.object(core.subprocess, 'run', side_effect=command),
+-              patch.object(core, 'transcribe_chunk', side_effect=chunk)):
++              patch.object(core, 'OperatorBridge') as bridge):
++            bridge.return_value.transcribe.side_effect = chunk
+             try:
+                 with web.app.test_client() as client:
+                     self.assertEqual(client.post('/api/resume').status_code, 200)
+@@ -138,14 +133,10 @@
+         self.assertTrue(self.item_path.with_suffix('.srt').exists())
+ 
+     def test_same_filename_succeeds_with_a_single_worker(self):
+-        def command(args, **kwargs):
+-            if args[0] == 'ffmpeg':
+-                Path(args[-1].replace('%04d', '0000')).touch()
+-            return SimpleNamespace(stdout='60', returncode=0)
+-
+         core.state.update(transcribing=True, queue=[self.item], total=1)
+-        with (patch.object(core.subprocess, 'run', side_effect=command),
+-              patch.object(core, 'transcribe_chunk', return_value=(0, [], 'Transcript'))):
++        with patch.object(core, 'OperatorBridge') as bridge:
++            bridge.return_value.transcribe.return_value = {
++                'complete': True, 'device': 'cuda', 'text': 'Transcript', 'segments': []}
+             self.run_worker()
+         self.assertEqual(self.worker_errors, [])
+         self.assertEqual(core.state['errors'], [])
+--- /dev/null
++++ b/tests/test_gpu_operator.py
+@@ -0,0 +1,135 @@
++import json
++import os
++import sys
++import tempfile
++import threading
++import unittest
++from pathlib import Path
++from unittest.mock import patch
++
++from gpu_operator import OperatorBridge, OperatorCancelled, OperatorError
++
++
++class OperatorBridgeTests(unittest.TestCase):
++    def setUp(self):
++        environment = patch.dict(os.environ, {'TRANSCRIBER_GPU_PROFILE': 'winner',
++                                             'TRANSCRIBER_GPU_ALLOW_EXPERIMENTAL': '0'})
++        environment.start()
++        self.addCleanup(environment.stop)
++        self.temp = tempfile.TemporaryDirectory(prefix='.operator-test-', dir=Path(__file__).parent)
++        self.addCleanup(self.temp.cleanup)
++        self.root = Path(self.temp.name).resolve()
++        self.fixture = self.root / 'bridge_fixture.py'
++
++    def bridge(self, code):
++        self.fixture.write_text(code, encoding='utf-8')
++        return OperatorBridge(self.root, command=[sys.executable, '-X', 'utf8', '-u', str(self.fixture)])
++
++    def test_transcription_uses_json_bridge_and_preserves_full_result(self):
++        bridge = self.bridge('''import json,sys
++request=json.loads(sys.stdin.readline())
++assert request['type']=='transcribe'
++assert request['language']=='en'
++assert request['source'].endswith('采访.mp4')
++print(json.dumps({'event':'progress','totalChunks':2,'index':0}),flush=True)
++print(json.dumps({'event':'result','result':{'complete':True,'device':'cuda','model':'large-v3-turbo','text':'Hello world.','segments':[{'start':0.2,'end':1.2,'text':'Hello world.'}],'transcriptFile':'raw.txt','checkpointFile':'checkpoint.json','eventsFile':'events.jsonl','totalSamples':32000,'duration':2,'transcriptSha256':'abc'}}),flush=True)
++''')
++        events = []
++        result = bridge.transcribe(self.root / '采访.mp4', self.root / 'operator', language='en', on_progress=events.append)
++        self.assertEqual(result['text'], 'Hello world.')
++        self.assertEqual(result['segments'], [{'start': 0.2, 'end': 1.2, 'text': 'Hello world.'}])
++        self.assertEqual(events[0]['totalChunks'], 2)
++
++    def test_cancel_is_cooperative_and_preserves_the_operator_checkpoint(self):
++        checkpoint = self.root / 'operator' / 'checkpoint.json'
++        cancelled = threading.Event()
++        bridge = self.bridge('''import json,sys,pathlib
++request=json.loads(sys.stdin.readline())
++p=pathlib.Path(request['outputDirectory'])/'checkpoint.json'
++p.parent.mkdir(parents=True,exist_ok=True)
++p.write_text('{"parts":[0]}',encoding='utf-8')
++print(json.dumps({'event':'progress','index':0}),flush=True)
++assert json.loads(sys.stdin.readline())=={'type':'cancel'}
++print(json.dumps({'event':'error','error':'cancelled'}),flush=True)
++sys.exit(2)
++''')
++        with self.assertRaises(OperatorCancelled):
++            bridge.transcribe(self.root / 'source.mp4', checkpoint.parent,
++                              on_progress=lambda _event: cancelled.set(), is_cancelled=cancelled.is_set)
++        self.assertEqual(json.loads(checkpoint.read_text('utf-8')), {'parts': [0]})
++
++    def test_describe_reads_bundle_metadata_without_loading_a_model(self):
++        bridge = self.bridge('''import json,sys
++assert json.loads(sys.stdin.readline())=={'type':'describe'}
++print(json.dumps({'event':'description','result':{'resourcesReady':True,'device':'cuda','model':'large-v3-turbo','gpuProbePerformed':False}}),flush=True)
++''')
++        result = bridge.describe()
++        self.assertTrue(result['resourcesReady'])
++        self.assertFalse(result['gpuProbePerformed'])
++
++    def test_describe_closes_input_after_request_so_bridge_can_exit(self):
++        bridge = self.bridge('''import json,sys
++assert json.loads(sys.stdin.readline())=={'type':'describe'}
++assert sys.stdin.read()==''
++print(json.dumps({'event':'description','result':{'resourcesReady':True}}),flush=True)
++''')
++        self.assertTrue(bridge.describe()['resourcesReady'])
++
++    def test_cpu_result_is_rejected_without_retry_or_fallback(self):
++        bridge = self.bridge('''import json,sys,pathlib
++request=json.loads(sys.stdin.readline())
++p=pathlib.Path(request['outputDirectory'])
++p.mkdir(parents=True,exist_ok=True)
++(p/'calls').write_text('one',encoding='utf-8')
++print(json.dumps({'event':'result','result':{'complete':True,'device':'cpu','text':'wrong','segments':[]}}),flush=True)
++''')
++        with self.assertRaisesRegex(OperatorError, 'CUDA'):
++            bridge.transcribe(self.root / 'source.mp4', self.root / 'output')
++        self.assertEqual((self.root / 'output/calls').read_text('utf-8'), 'one')
++
++    def test_result_followed_by_nonzero_exit_is_not_success(self):
++        bridge = self.bridge('''import json,sys
++json.loads(sys.stdin.readline())
++print(json.dumps({'event':'result','result':{'complete':True,'device':'cuda','text':'partial','segments':[]}}),flush=True)
++print(json.dumps({'event':'error','message':'GPU failed','code':'CUDA_ERROR'}),flush=True)
++sys.exit(1)
++''')
++        with self.assertRaisesRegex(OperatorError, 'GPU failed'):
++            bridge.transcribe(self.root / 'source.mp4', self.root / 'output')
++
++    def test_experimental_profile_requires_explicit_environment_opt_in(self):
++        bridge = self.bridge('''import json,sys
++request=json.loads(sys.stdin.readline())
++assert request['profile']=='native-test'
++assert request['allowExperimental'] is True
++print(json.dumps({'event':'result','result':{'complete':True,'device':'cuda','text':'ok','segments':[]}}),flush=True)
++''')
++        with patch.dict(os.environ, {'TRANSCRIBER_GPU_PROFILE': 'native-test',
++                                     'TRANSCRIBER_GPU_ALLOW_EXPERIMENTAL': '0'}):
++            with self.assertRaisesRegex(OperatorError, 'profile'):
++                bridge.transcribe(self.root / 'source.mp4', self.root / 'output')
++        with patch.dict(os.environ, {'TRANSCRIBER_GPU_PROFILE': 'native-test',
++                                     'TRANSCRIBER_GPU_ALLOW_EXPERIMENTAL': '1'}):
++            self.assertEqual(bridge.transcribe(self.root / 'source.mp4', self.root / 'output')['text'], 'ok')
++
++    def test_bridge_cancel_code_is_a_cancellation_not_a_failed_file(self):
++        bridge = self.bridge('''import json,sys
++json.loads(sys.stdin.readline())
++print(json.dumps({'event':'error','message':'cancelled','code':'CANCELLED'}),flush=True)
++sys.exit(2)
++''')
++        with self.assertRaises(OperatorCancelled):
++            bridge.transcribe(self.root / 'source.mp4', self.root / 'output')
++
++    def test_transcription_keeps_input_for_cancel_then_closes_it_after_result(self):
++        bridge = self.bridge('''import json,sys
++request=json.loads(sys.stdin.readline())
++assert request['type']=='transcribe'
++print(json.dumps({'event':'result','result':{'complete':True,'device':'cuda','text':'finished','segments':[]}}),flush=True)
++assert sys.stdin.read()==''
++''')
++        self.assertEqual(bridge.transcribe(self.root / 'source.mp4', self.root / 'output')['text'], 'finished')
++
++
++if __name__ == '__main__':
++    unittest.main()
+--- /dev/null
++++ b/tests/test_operator_integration.py
+@@ -0,0 +1,138 @@
++import copy
++import contextlib
++import io
++import json
++import tempfile
++import sys
++import unittest
++from pathlib import Path
++from unittest.mock import patch
++from gpu_operator import OperatorCancelled, OperatorError
++
++import core
++import app as web
++import transcribe_file as harness
++
++
++class OperatorIntegrationTests(unittest.TestCase):
++    def setUp(self):
++        self.saved = copy.deepcopy(core.state)
++        self.temp = tempfile.TemporaryDirectory(prefix='.integration-test-', dir=Path(__file__).parent)
++        self.addCleanup(self.temp.cleanup)
++        self.root = Path(self.temp.name).resolve()
++        self.source = self.root / '采访.mp4'
++        self.source.touch()
++        core.state.update(video_dir=str(self.root), output_dir=str(self.root), cancel_requested=False,
++                          add_ipa=False, language='auto', operator_outputs={})
++        self.state_patch = patch.object(core, 'STATE_FILE', self.root / 'state.json')
++        self.state_patch.start()
++        self.addCleanup(self.state_patch.stop)
++
++    def tearDown(self):
++        core.state.clear()
++        core.state.update(self.saved)
++
++    def test_single_file_exports_exact_operator_text_and_all_global_srt_times(self):
++        result = {'complete': True, 'device': 'cuda', 'model': 'large-v3-turbo',
++                  'text': 'Opening.\nFinal words.', 'duration': 65.5, 'totalSamples': 1048000,
++                  'segments': [{'start': .25, 'end': 1.5, 'text': 'Opening.'},
++                               {'start': 64.1, 'end': 65.5, 'text': 'Final words.'}],
++                  'transcriptFile': 'operator-raw.txt', 'checkpointFile': 'checkpoint.json',
++                  'eventsFile': 'raw-results.jsonl', 'transcriptSha256': 'hash'}
++        with patch.object(core, 'OperatorBridge') as bridge_class:
++            bridge_class.return_value.transcribe.return_value = result
++            returned = core.transcribe_one(str(self.source), language='en')
++            call = bridge_class.return_value.transcribe.call_args
++        self.assertEqual(call.kwargs['language'], 'en')
++        self.assertEqual(Path(call.args[0]), self.source)
++        self.assertTrue(Path(call.args[1]).name.startswith('.gpu-operator_采访'))
++        self.assertEqual(self.source.with_suffix('.txt').read_text('utf-8'), result['text'])
++        srt = self.source.with_suffix('.srt').read_text('utf-8')
++        self.assertIn('00:01:04,100 --> 00:01:05,500', srt)
++        self.assertIn('Final words.', srt)
++        self.assertEqual(returned['operatorOutputDirectory'], str(call.args[1]))
++        saved_result = Path(call.args[1]) / 'transcriber-result.json'
++        self.assertEqual(json.loads(saved_result.read_text('utf-8'))['checkpointFile'], 'checkpoint.json')
++
++    def test_status_does_not_import_gpu_framework_or_claim_resources_are_a_probe(self):
++        core.state['operator_description'] = {'resourcesReady': True, 'model': 'large-v3-turbo'}
++        core.state['operator_ready'] = True
++        core.state['last_operator_result'] = None
++        with patch.dict(sys.modules, {'torch': None, 'faster_whisper': None, 'ctranslate2': None}):
++            with web.app.test_client() as client:
++                response = client.get('/api/system')
++                model_response = client.get('/api/model_status')
++        self.assertEqual(response.status_code, 200)
++        self.assertTrue(response.json['resources_ready'])
++        self.assertFalse(response.json['gpu_verified'])
++        self.assertEqual(response.json['device_required'], 'cuda')
++        self.assertEqual(model_response.status_code, 200)
++        self.assertEqual(model_response.json['model_name'], 'large-v3-turbo')
++
++    def test_cancel_keeps_pending_file_state_and_never_exports_a_partial_txt(self):
++        item = {'path': str(self.source), 'name': self.source.stem}
++        core.state.update(transcribing=True, queue=[item], done=[], errors=[], total=1, current_index=0)
++
++        def cancel(_source, output, **_kwargs):
++            (output / 'checkpoint.json').write_text('{"parts":[0]}', 'utf-8')
++            core.state['cancel_requested'] = True
++            raise OperatorCancelled('cancelled')
++
++        with patch.object(core, 'OperatorBridge') as bridge:
++            bridge.return_value.transcribe.side_effect = cancel
++            core.worker()
++        self.assertFalse(core.state['transcribing'])
++        self.assertEqual(core.state['queue'], [item])
++        self.assertEqual(core.state['done'], [])
++        self.assertEqual(core.state['errors'], [])
++        self.assertFalse(self.source.with_suffix('.txt').exists())
++        saved = core.load_state()
++        self.assertEqual(saved['queue'], [item])
++        self.assertTrue((Path(saved['operator_outputs'][str(self.source)]) / 'checkpoint.json').exists())
++
++    def test_operator_failure_preserves_existing_export_and_does_not_create_srt(self):
++        self.source.with_suffix('.txt').write_text('existing', 'utf-8')
++        with patch.object(core, 'OperatorBridge') as bridge:
++            bridge.return_value.transcribe.side_effect = OperatorError('CUDA error')
++            with self.assertRaisesRegex(OperatorError, 'CUDA error'):
++                core.transcribe_one(str(self.source))
++        self.assertEqual(self.source.with_suffix('.txt').read_text('utf-8'), 'existing')
++        self.assertFalse(self.source.with_suffix('.srt').exists())
++
++    def test_ui_and_task_settings_use_turbo_stable_instead_of_old_beam_choices(self):
++        with web.app.test_client() as client:
++            html = client.get('/').get_data(as_text=True)
++            self.assertIn('统一 Turbo 稳定 GPU 算子', html)
++            self.assertNotIn('<option value="accurate">', html)
++            self.assertNotIn('CPU 模式', html)
++            with patch.object(web.threading, 'Thread'):
++                response = client.post('/api/transcribe', json={
++                    'videos': [{'path': str(self.source), 'name': self.source.stem}],
++                    'video_dir': str(self.root), 'output_dir': str(self.root),
++                    'transcribe_mode': 'accurate', 'chunk_mode': 'manual', 'language': 'en'})
++        self.assertEqual(response.status_code, 200)
++        self.assertEqual(core.state['transcribe_mode'], 'stable')
++        self.assertEqual(core.state['chunk_mode'], 'operator')
++        self.assertEqual(core.state['language'], 'en')
++
++    def test_offline_harness_exports_into_its_own_root_without_replacing_web_queue_state(self):
++        web_state = core.STATE_FILE
++        web_state.write_text('web-state-marker', 'utf-8')
++        output = self.root / 'fresh-harness-run'
++        stdout = io.StringIO()
++        with patch.object(core, 'OperatorBridge') as bridge, contextlib.redirect_stdout(stdout):
++            bridge.return_value.transcribe.return_value = {
++                'complete': True, 'device': 'cuda', 'text': 'Offline transcript.',
++                'segments': [{'start': .25, 'end': 1, 'text': 'Offline transcript.'}],
++                'model': 'large-v3-turbo'}
++            code = harness.main([str(self.source), '--output-dir', str(output), '--language', 'en'])
++        self.assertEqual(code, 0)
++        self.assertEqual(web_state.read_text('utf-8'), 'web-state-marker')
++        self.assertEqual((output / '采访.txt').read_text('utf-8'), 'Offline transcript.')
++        result = json.loads(stdout.getvalue())
++        self.assertEqual(result['event'], 'result')
++        self.assertIn('model-load', result['timingScope'])
++
++
++if __name__ == '__main__':
++    unittest.main()

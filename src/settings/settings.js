@@ -341,9 +341,19 @@ async function checkSpeech() {
   if (transcriptPending && api.transcriptState) void checkTranscript();
   const response = await api.speechStatus(); if (!response.ok) { result('speech-result', response.error, true); return; }
   const s = response.result;
-  $('speech-backend').textContent = `${s.engineName} · ${s.modelName} · ${s.hardwareLabel} · ${s.computeType}`;
-  $('speech-status').textContent = !s.supported ? '系统暂不支持' : s.ready ? '离线引擎就绪' : s.configured ? '已配置' : '尚未准备';
-  if (!speechDirty) { $('speech-enabled').checked = s.enabled; $('speech-model').value = s.model || 'medium'; $('speech-summary').checked = s.autoSummary !== false; $('speech-input-mode').value = ['microphone', 'system', 'meeting'].includes(s.inputMode) ? s.inputMode : 'meeting'; $('speech-attach-audio').checked = s.autoAttachAudio !== false; }
+  const presentation = window.speechPresentation(s), modelSelect = $('speech-model'), choices = JSON.stringify(presentation.models);
+  $('speech-backend').textContent = presentation.backend;
+  $('speech-status').textContent = presentation.badge;
+  if (modelSelect.dataset.choices !== choices) {
+    const selected = modelSelect.value;
+    modelSelect.replaceChildren(...presentation.models.map(model => { const option = document.createElement('option'); option.value = model.id; option.textContent = model.name; return option; }));
+    modelSelect.dataset.choices = choices;
+    modelSelect.value = presentation.models.some(model => model.id === selected) ? selected : presentation.model;
+  }
+  modelSelect.disabled = presentation.modelLocked || !s.supported || s.preparing || s.recording;
+  $('speech-model-help').textContent = presentation.modelHelp;
+  if (presentation.modelLocked) modelSelect.value = presentation.model;
+  if (!speechDirty) { $('speech-enabled').checked = s.enabled; modelSelect.value = presentation.model; $('speech-summary').checked = s.autoSummary !== false; $('speech-input-mode').value = ['microphone', 'system', 'meeting'].includes(s.inputMode) ? s.inputMode : 'meeting'; $('speech-attach-audio').checked = s.autoAttachAudio !== false; }
   const imports = s.audioImports;
   $('speech-audio-state').textContent = imports ? (imports.capturing ? '正在为会议保留待保存的音频。' : imports.active ? '正在后台保存会议音频，不影响录音收尾。' : '会议音频已保存 ' + imports.saved + ' 场 · 待处理 ' + imports.pending + ' 场') + (imports.lastError ? ' ' + imports.lastError : '') : '';
   $('retry-meeting-audio').hidden = !imports?.failed;
@@ -356,13 +366,14 @@ async function checkSpeech() {
     const speed = Number.isFinite(progress.bytesPerSecond) ? ` · ${size(Date.now() - progress.updatedAt > 3000 ? 0 : progress.bytesPerSecond)}/s` : '';
     result('speech-result', progress.message + amount + speed);
   }
-  $('speech-description').textContent = s.loaded ? `模型已载入 ${s.hardwareLabel}；空闲后自动释放，下一次使用会重新载入。` : s.configured ? `已发现本机 ${s.modelName} 模型，下一次使用时载入。` : '尚未准备；点击“检测并准备”会自动下载缺少的组件，首次需要联网。';
+  $('speech-description').textContent = presentation.description;
+  $('prepare-speech').textContent = presentation.modelLocked ? '检测内置算子' : '检测并准备';
   $('speech-native-state').textContent = s.nativeMeetingAdapter ? '保存后重新打开 Notion 页面生效。' : '离线引擎可独立测试；原生速记接入尚未启用。';
   $('speech-enabled').disabled = !s.nativeMeetingAdapter; $('save-speech').disabled = !s.nativeMeetingAdapter;
   $('save-speech').dataset.unavailable = String(!s.nativeMeetingAdapter);
 }
 $('prepare-speech').addEventListener('click', () => operation($('speech-card'), async () => {
-  result('speech-result', '正在查找所选模型并检测当前系统的离线引擎…');
+  result('speech-result', '正在检测当前语音算子与录音运行环境…');
   const r = await api.prepareSpeech(); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) await checkSpeech();
 }));
 speechRecorder = new window.SpeechRecorder(api, value => {

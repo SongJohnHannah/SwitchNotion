@@ -11,7 +11,7 @@ export interface LocalSpeechRuntime {
   platform?: 'win32' | 'darwin';
   architecture?: 'x64' | 'arm64';
   device?: 'cuda' | 'cpu';
-  computeType?: 'float16' | 'int8';
+  computeType?: 'float16' | 'float32' | 'int8_float16' | 'int8';
   cpuThreads?: number;
 }
 export interface SpeechStatus {
@@ -21,7 +21,7 @@ export interface SpeechStatus {
   platform: string;
   architecture: string;
   device: 'cuda' | 'cpu';
-  computeType: 'float16' | 'int8';
+  computeType: 'float16' | 'float32' | 'int8_float16' | 'int8';
   hardwareLabel: string;
   offline: true;
   supported: boolean;
@@ -66,6 +66,36 @@ export class SpeechProvider {
   transcribeRecording(options: { audio: Buffer; signal?: AbortSignal }): Promise<string>;
   retain(): void;
   release(): void;
-  close(): void;
+  close(): Promise<void>;
 }
 export function decodeWav(wav: Buffer): { pcm: Buffer; sampleRate: number; duration: number };
+export interface GpuFilePlan {
+  id: string;
+  computeType: 'float16' | 'float32' | 'int8_float16';
+  allocator: 'cub_caching' | 'cuda_malloc_async';
+  fp16Gemm: boolean;
+  chunkSeconds: 10 | 20 | 30 | 60 | 90 | 120 | 240;
+  resetEveryChunks: number;
+  runtimeVariant: 'bundled' | 'pinned-cudnn' | 'sm75-native' | 'sm75-native-gpuops' | 'sm75-native-fp16-accum-v1';
+  launchBlocking: boolean;
+  beamSize: 1 | 5;
+  runtimeRevision: string;
+  languageOverride: 'en' | 'zh' | null;
+  batchSize: 1 | 2 | 3 | 4 | 8;
+  batchClipSeconds: 0 | 15 | 30;
+  encoderMicrobatchSize: 0 | 1 | 2;
+  timestampedBatch: boolean;
+  nativeWholeWindow: boolean;
+  gpuEncoderBridge: boolean;
+  shortEncoder: boolean;
+  windowMode: 'legacy' | 'coverage-clips30' | 'coverage-no-ts' | 'stable30';
+  allocatorCache: 'default' | 'large' | 'compact';
+}
+export const defaultPlan: Readonly<GpuFilePlan>;
+export function transcribeGpuFile(options: {
+  source: string; outputDirectory: string; root: string; ffmpeg: string;
+  runtime?: LocalSpeechRuntime; plan?: Partial<GpuFilePlan>; language?: SpeechLanguage;
+  signal?: AbortSignal; onProgress?: (event: { stage: string; plan: string; ownerPid?: number; index?: number; totalChunks?: number; seconds?: number; totalSeconds?: number }) => void;
+}): Promise<{ version: 1; policy: string; device: 'cuda'; complete: true; plan: GpuFilePlan;
+  totalSamples: number; duration: number; chunks: number; characters: number; recoveries: number; nativeExits: number;
+  transcriptFile: string; eventsFile: string; checkpointFile: string; transcriptSha256: string; text: string }>;

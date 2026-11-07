@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="settings.css">
   <link rel="stylesheet" href="ai-settings.css">
   <script src="speech-recorder.js" defer></script>
+  <script src="speech-presentation.js" defer></script>
   <script src="settings.js" defer></script>
 </head>
 <body>
@@ -83,11 +84,11 @@
           <p id="transcript-progress" class="field-help" role="status"></p><pre id="transcript-text" class="inline-result" hidden></pre>
         </div>
         <div class="provider-card"><h2>图片、扫描 PDF 文字识别</h2><p>Windows 与 Mac 使用 mediaocr 的微信原生引擎，本机离线识别，无需微信登录。首次准备需要联网下载引擎和独立 Python 依赖。</p><p id="ocr-state" class="field-help" role="status">首次使用请检测并准备 mediaocr。</p><div class="form-actions"><button id="ocr-prepare" class="button secondary">检测并准备 mediaocr</button><button id="ocr-stop" class="button secondary" hidden>停止准备</button></div></div>
-        <div class="page-heading"><div><span class="eyebrow">OFFLINE SPEECH</span><h1>离线语音转写</h1><p id="speech-backend">faster-whisper · Medium 多语言模型</p></div><span id="speech-status" class="badge">尚未检测</span></div>
+        <div class="page-heading"><div><span class="eyebrow">OFFLINE SPEECH</span><h1>离线语音转写</h1><p id="speech-backend">正在读取本机语音算子状态…</p></div><span id="speech-status" class="badge">尚未检测</span></div>
         <div id="speech-card" class="provider-card">
-              <h2>中文和英文，均在本机识别</h2><p>像双语语音输入：说中文出中文，说英文出英文，自动识别，不翻译或润色原话。自动检测本机环境，缺少的组件会下载到本地。模型约 1.5～1.6 GB，Windows 还可能需要 GPU 运行库；无需 API Key，不依赖 Codex。停止使用后自动释放资源。</p>
-            <label for="speech-model">录音识别模型</label><select id="speech-model"><option value="large-v3-turbo">Whisper Large-v3 Turbo · 约 1.6 GB</option><option value="medium">Whisper Medium · 约 1.5 GB</option></select><p class="field-help">修改后点“保存设置”，缺少模型会自动下载；麦克风、系统音频和录音测试统一使用所选模型。已有模型会保留。</p>
-          <p id="speech-description" class="field-help">点击“检测并准备”；缺少组件时自动下载到本地。首次模型约 1.5 GB，Windows GPU 还需额外运行库。</p>
+              <h2>中文和英文，均在本机识别</h2><p>像双语语音输入：说中文出中文，说英文出英文，自动识别，不翻译或润色原话。Windows 使用本项目内置 GPU 算子；Mac 沿用本机离线引擎，缺少的组件会在准备时下载到本地。模型约 1.5～1.6 GB；无需 API Key，不依赖 Codex。停止使用后自动释放资源。</p>
+            <label for="speech-model">录音识别模型</label><select id="speech-model" disabled><option value="large-v3-turbo">Whisper Large-v3 Turbo · 约 1.6 GB</option><option value="medium">Whisper Medium · 约 1.5 GB</option></select><p id="speech-model-help" class="field-help">正在确认当前平台的模型与语音引擎设置…</p>
+          <p id="speech-description" class="field-help">读取状态后显示资源与模型是否载入；可检测当前语音算子的运行状态。</p>
           <p class="field-help">Windows 使用 NVIDIA GPU；M1 等 Apple Silicon Mac 使用 CPU。Mac 已验证原生会议的开始、停止和收尾，长会议仍需单独验收。语音按短片段识别；DeepSeek 总结需要联网。</p>
           <label class="check-label"><input id="speech-enabled" type="checkbox"> 启用原生速记的离线转写</label><p id="speech-native-state" class="field-help">正在检查原生界面适配状态…</p>
           <label for="speech-input-mode">录音来源</label><select id="speech-input-mode"><option value="microphone">录音</option><option value="system">系统声音</option><option value="meeting" selected>录音加系统声音</option></select><p class="field-help">默认同时转写麦克风和电脑播放的声音；视频、网页和提示音中的讲话也会被转写，并保留来源标注。只选系统声音时不转写麦克风。更改后请刷新 Notion 页面。</p>

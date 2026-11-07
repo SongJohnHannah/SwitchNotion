@@ -1,77 +1,85 @@
-# 离线转写模块：Windows / Apple Silicon Mac
+# 离线转写接口：Windows / Apple Silicon Mac
 
-稳定入口为 `src/speech-provider.cjs`，类型声明为 `src/speech-provider.d.cts`。模块只依赖 Node 内置模块及本机 Python 转写环境，不依赖 Electron、Notion、Codex、DeepSeek 或它们的登录信息。相同接口用于文件转写和原生速记音频。
+Windows 应用使用项目内的 GPU 算子；实时入口为 `OperatorSessionClient`，文件入口为 `GpuOperatorClient`。Apple Silicon Mac 继续原有 `SpeechProvider`、环境安装和模型发现路线。二者保留相近的调用接口，不要求调用端处理 CUDA 或 CPU 细节。
 
-| 系统 | 默认运行方式 | 验证状态 |
+| 系统 | 当前路径 | 验证范围 |
 | --- | --- | --- |
-| Windows x64 + NVIDIA | faster-whisper Medium / Large-v3 Turbo，CUDA FP16 | RTX 2070 中文、英文文件转写已实测 |
-| Apple Silicon Mac（包括 M1） | faster-whisper Medium / Large-v3 Turbo，CPU INT8，4 线程 | 已实现平台检测和后端选择，通过模拟契约测试；未实机验证 |
-| Intel Mac / Rosetta x64 进程 | 拒绝启动 | 不属于本次支持范围 |
+| Windows x64 + NVIDIA | 项目内 Large-v3 Turbo / Native30 CUDA FP16，录音和文件共用本地资源 | 保留既有英语整片、实时 PCM 和录音文件记录；本次路径迁移的便携测试另计 |
+| Apple Silicon Mac | 原 faster-whisper Medium / Turbo、CPU INT8、4 线程 | 保留原实现；本次仅便携契约与打包测试，没有新增 Mac 真机验收 |
+| Intel Mac / Rosetta x64 进程 | 拒绝启动该语音后端 | 不属于本次支持范围 |
 
-M1 的 GPU 不通过 CUDA 使用。本模块没有启用 Metal、MLX 或 Neural Engine，不承诺 M1 达到 Windows GPU 的测试速度。[CTranslate2 的 macOS ARM64 支持及 GPU 限制](https://opennmt.net/CTranslate2/installation.html)、[硬件支持](https://opennmt.net/CTranslate2/hardware_support.html)。
+Mac 不安装 Windows DLL，也不通过 CUDA 使用 Apple GPU；当前路线没有启用 Metal、MLX 或 Neural Engine。Windows 缺资源或 GPU 失败不会切到旧 CPU provider。模块不需要 Notion、DeepSeek、Codex 的登录或密钥。
 
-## 调用示例
+## 应用调用
 
 ```js
-const { SpeechProvider } = require('./src/speech-provider.cjs');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const root = path.join(os.homedir(), '.notion-switch-speech');
-fs.mkdirSync(root, { recursive: true });
-const speech = new SpeechProvider({ root });
+const root = path.resolve('.notion-switch');
+const speech = process.platform === 'win32'
+  ? new (require('./src/speech/operator-session-client.cjs').OperatorSessionClient)({ root })
+  : new (require('./src/speech-provider.cjs').SpeechProvider)({ root });
 try {
-  await speech.probe(); // 自动识别本机系统、检测本机环境并载入模型
+  await speech.probe();
   const text = await speech.transcribeWav({
-    wav: fs.readFileSync('/absolute/path/recording.wav'),
-    language: 'auto', // auto / zh / en
+    wav: fs.readFileSync(absoluteRecordingPath),
+    language: 'auto',
   });
   console.log(text);
 } finally {
-  speech.close();
+  await speech.close();
 }
 ```
 
-`root` 必须为本机可写的绝对目录。示例中的录音路径需要换成本机路径，模块不会采集麦克风；录音采集由调用端负责。
+Windows 的 `root` 为本项目可写状态目录；适配器从代码旁的 `windows-operator` 和 `<root>/windows-gpu-operator` 创建本地算子。录音采集由调用端负责；示例不会开启麦克风。
 
 | 方法 | 约定 |
 | --- | --- |
-| `status()` | 返回系统、架构、运行设备、精度、就绪/忙碌状态；不暴露程序和模型路径 |
-| `probe({signal}?)` | 检测并实际载入模型；缺少组件报错，不自动下载，不静默切换云端 |
-| `transcribe({pcm,language?,context?,signal?})` | 输入单声道 16 kHz Float32 LE Buffer，数值范围 [-1,1]，最多 60 秒；返回文字 |
-| `transcribeDetailed({pcm,language?,context?,signal?})` | 返回 `{text,context,language}`；context 仅含高置信度文本，最多 120 字，供调用方在同一音源的下一段复用 |
-| `transcribeWav({wav,language?,signal?,onProgress?,chunkSeconds?})` | PCM16 / Float32、单/双声道、8–48 kHz WAV，最多 10 分钟 / 128 MiB；自动重采样、分段，返回文字。分段默认 30 秒，可设 1–30 秒；媒体收集使用 10 秒，连续保留全部采样 |
-| `retain()` / `release()` | 连续录音期间保留模型；配对使用，空闲默认 20 秒释放进程及内存/显存 |
-| `close()` | 中止自己的工作进程及排队请求；不关闭其他 Whisper 程序；下次调用可重新启动 |
+| `status()` | 返回设备、模型、就绪/忙碌状态；区分资源存在与 GPU 模型已载入 |
+| `configure()` | 验证/准备本地配置，不自动下载 Windows 大资源 |
+| `probe({signal}?)` | 检测资源并实际载入模型；只读描述不代替 probe |
+| `transcribe({pcm,language?,context?,signal?})` | 16 kHz 单声道 Float32 LE Buffer，范围 [-1,1]，单次最多 60 秒；返回文字 |
+| `transcribeDetailed(...)` | 返回 `{text,context,language}`；Windows 稳定会话不把输入 context 喂给下一段解码 |
+| `transcribeWav({wav,language?,signal?,onProgress?,chunkSeconds?})` | PCM16 / Float32、单/双声道、8–48 kHz WAV；保留尾段。Windows 每次分段 1–30 秒，默认 30；文件收集走整文件 API |
+| `transcribeRecording({audio,language?,signal?})` | Windows 会话接受 WebM/Opus 录音；保存编码输入及解码 PCM 身份，保留受限 codec 尾部 |
+| `retain()` / `await release()` | 连续录音时配对保留模型；Windows 等请求排空和 worker 关闭后释放同一资源根的 GPU lease |
+| `await close()` | 取消自己的工作、等待清理；不关闭其他项目的 Whisper 进程 |
 
-调用可排队执行。取消正在运行的任务会结束当前工作进程，之后重新加载；已排队但尚未开始的任务可独立取消。分段识别不等于逐字流式识别。首次加载包含额外延迟，CPU 转写较慢时调用端应限制积压音频。
+Windows 无 retain 的请求完成后及时释放 worker，避免空闲模型长期挡住文件队列。Mac 保留原 provider 的空闲释放策略。排队请求可独立取消；取消正在运行的识别会结束自己的 worker，下次请求重新加载。
 
-## 运行环境与迁移
+`language` 支持 `auto`、`zh`、`en`。应用普通调用默认 auto，保留语音原语言，不翻译或润色；历史英语基准显式 en。上下文只应来自同一音源：Mac 兼容 provider 保留原可靠上下文规则，Windows 冻结 greedy 会话传空提示，防止跨段引入文字。
 
-项目的 `npm run package:speech` 生成独立模块文件夹，包含代码、类型、依赖清单和本文档；不包含 Python、模型、CUDA、Notion 客户端、密钥、登录或音频。这个文件夹可直接交给 Mac 接入者，无需复制整个 NotionSwitch 项目。模块可离开 Codex 独立运行。
+## Windows 代码与资源
 
-应用配置页现已支持选择模型和自动准备：优先复用已有环境，缺少时下载独立 Python、固定版本的 faster-whisper/CTranslate2 和固定 revision 的所选模型；Windows 仅在缺少可用运行库时下载 CUDA 依赖。准备阶段联网，所有安装、缓存和模型保存在传入的本机状态目录。底层 `SpeechProvider.probe()` 继续保持不联网的约定，自动下载由 `src/speech/install.cjs` 的 `install({root,platform,onProgress,signal})` 完成。独立调用时用 `new SpeechProvider({root,model:'large-v3-turbo'})` 或 `createSpeechPlatform({model:'large-v3-turbo'})` 选择 Turbo，省略则保持 Medium 兼容默认值。
+- 代码、固定方案和冻结 SDK：`src/speech/windows-operator/`。
+- 自定义 Native CT2 DLL/PYD、配套代码与许可：`assets/windows-gpu-native/`。
+- 完整 Python、模型、CUDA、FFmpeg/ffprobe：`.notion-switch/windows-gpu-operator/`，Git 忽略。
+- 规范资源锁：`src/speech/windows-operator/asset-lock.json`；两类资产根也保存各自锁清单。
 
-默认 `language:'auto'` 按双语语音输入处理，中文和英文保留原语言，任务始终为 `transcribe`。每段按 20 毫秒小窗检测停顿，满 4 秒且静音约 0.8 秒时分段，连续讲话最多 20 秒一段，所有采样及尾段完整保留；规则集中在 `src/speech/segmentation.json`。批量音频与会议流使用相同规则，音频传输包边界不影响声学分段。
+新 checkout 已包含代码与 Native 库。使用 `node scripts/prepare-windows-gpu-runtime.mjs --source "已准备的独立包绝对路径"` 按现有资源锁物理安装未跟踪运行资源；`--source` 必填，可用 `--project` 选择目标项目，不覆盖版本控制下的代码和 Native 库。运行路径从项目状态目录和相对清单生成，不需要原复制来源，也不自动联网下载。
 
-自动模式不把 `context` 或中文书写提示用于下一段解码，避免上一句中文干扰下一句英文；显式 `zh` / `en` 请求仍传入限定语言及最多 120 字的可靠上下文。上下文只能来自同一会议的同一音源，切换会议后应清空。不调用文本模型修写录音，不做固定单词替换。模型名称、来源和 revision 在 `src/speech/models.json` 中固定；Turbo 的原始模型说明见 [OpenAI 发布说明](https://github.com/openai/whisper/discussions/2363)，CTranslate2 权重见 [模型仓库](https://huggingface.co/dropbox-dash/faster-whisper-large-v3-turbo)。识别准确率仍取决于实际录音，短测试样本不代表全部会议。
+`vendor-windows-gpu-operator.mjs` 是维护者首次导入代码、Native 和资源的 fresh-only 工具，已有输出根时拒绝覆盖，不用于给普通 checkout 补资源。
 
-M1 端准备原生 ARM64 Node 22+、原生 ARM64 Python 3.11 独立环境，以及 `src/speech/requirements.txt` 中的依赖。不要在 Rosetta 的 x64 Node/Python 下运行。依赖安装属于准备阶段，可在联网电脑准备相应 ARM64 安装包后离线安装；识别阶段不联网。
+Windows 分发按资源锁收录已安装的项目内资源；Mac 分发不带 Windows GPU 资源。Git 中没有模型、完整 Python/CUDA、私人音视频、转录和日志，拉取仓库后仍需准备大资源。文件接口示例见 [GPU 算子用法](GPU-OPERATOR-README.md)。
 
-默认优先查找 `root/speech/python/bin/python3`、`root/speech/venv/bin/python3`，再查找 Homebrew、用户 pyenv 和 PATH 中的 Python。特殊安装位置可通过调用进程的 `NOTION_SWITCH_SPEECH_PYTHON` 指定绝对路径。Windows 则查找对应的 `python.exe` 和 CUDA 环境。
+本项目文件、录音和视频转码共用本地资源根的 lease。旧外部独立包及其他项目使用自己的资源根，当前不能宣称跨项目仍统一排队。
 
-把已转换的 faster-whisper Medium 模型文件夹放在 `root/speech/faster-whisper-medium/`，至少包含 `model.bin`、`config.json`、`tokenizer.json` 及其原有词表文件。也支持本机已有的 Hugging Face 缓存。不要拿原版 Whisper 的 `medium.pt` 直接替换。相同的 CTranslate2 模型文件可在不同系统/架构间使用，但 Python、动态库及本机配置必须重新准备。[模型格式与可移植性](https://opennmt.net/CTranslate2/conversion.html)。
+## Mac 原有准备与迁移
 
-NotionSwitch 配置保存平台和架构，复制来的 Windows 配置会在 Mac 上失效并重新检测。不要打包 `.notion-switch/` 或 `speech.local.json`。
+Mac 的配置模型选择和 `src/speech/install.cjs` 自动准备流程保持原样：准备阶段可以联网获取独立 Python、固定依赖和模型；识别阶段从本机加载，不静默改云端。独立 `SpeechProvider.probe()` 不下载；省略 model 保持 Medium 兼容默认值，显式 `model:'large-v3-turbo'` 选择 Turbo。
 
-## 后续接入 Mac 原生 Notion
+M1 等机器需要原生 ARM64 Node 22+、Python 3.11 及 `src/speech/requirements.txt`。保留 `root/speech/python/bin/python3`、`root/speech/venv/bin/python3`，再到 Homebrew、pyenv 和 PATH 的发现顺序；特殊位置可用 `NOTION_SWITCH_SPEECH_PYTHON`。不复用 Windows Python、DLL 或本机配置，不在 Rosetta x64 下运行。
 
-语音模块的 M1 CPU 实现与 Mac Notion 桌面启动分别验证。Mac 的双击启动、`.app` 分发、隔离副本和本机签名流程已实现，见项目 `MAC-使用说明.md`；应用启动、登录和 Notion 原生控件仍待 M1 真机验收。
+CTranslate2 模型目录需要 `model.bin`、`config.json`、`tokenizer.json` 和词表；原版 Whisper 的 `.pt` 不能直接替换。模型定义与 revision 在 `src/speech/models.json`，各平台运行环境分别准备。平台与架构不匹配的配置会重新检测。
 
-Notion 原生桥接通过 `SpeechProvider` 的统一接口取得文字；其余 Agent 和页面工具不需要增加 CPU/CUDA 判断。若以后接入 Apple GPU，保留上述外部接口，在 `src/speech/platform.cjs` 和 `src/speech/faster_backend.py` 处替换具体运行实现，并重新通过契约及真实音频测试。
+原生音频按固定 20 毫秒小窗检测停顿，满约 4 秒且静音约 0.8 秒时分段，连续讲话最多约 20 秒，尾段保留。Windows 稳定会话使用同步 greedy1/零温度；Mac 保留原有解码规则。分段更新不等于逐字即时输出，模型载入与积累音频均有延迟。
 
-内部 Node/Python 使用版本 1 的 JSONL 协议：configure → probe / transcribe，按整数 id 匹配结果。configure 必须返回 `protocolVersion`、provider、model、platform、architecture、device、computeType；任何不匹配会在发送音频前结束进程。协议走标准输入输出，不开放公网端口；不写录音文件，不传入 API Key，工作进程禁止网络连接。
+`npm run package:speech` 导出兼容语音模块与接口文档，不包含完整 Python、模型、CUDA、用户数据或 Notion。这个兼容导出不等于带齐资源的 Windows 项目内算子；Mac 可继续按原接口集成，不能从 Windows 资源清单推导 Mac 已可运行。
 
-## 验证
+## 原始记录与验证
 
-`node --test tests/speech.test.mjs tests/speech-platform.test.mjs` 检查接口、M1 路径发现、跨系统配置隔离、平台握手、取消和资源释放。`python -B tests/speech_backend_test.py` 检查 Python 后端契约。这些测试不代表完成 M1 硬件推理或 Mac Notion 实录验收。
+Windows 原始结果先保存，再执行文本质量检查；异常文字和失败仍留作排查，记录包含 PCM 身份与 worker PID。文件转写另保留原始 JSONL、检查点、逐字稿和音轨。GPU 失败不返回旧成功文本；内容收集未完成转写时暂停总结。会议录音保存/上传是独立功能，见 [离线语音](OFFLINE-SPEECH.md)。
+
+Node/Python 使用版本化 JSONL 请求，按整数 id 匹配回复并核对 configure 的平台、设备、模型和协议字段。工作进程只使用本机识别资源，不接收模型服务密钥。
+
+`node --test tests/speech.test.mjs tests/speech-platform.test.mjs` 与对应 Python 契约测试检查接口、路径发现、跨平台隔离、取消和释放；Windows 算子和打包有独立测试。这些便携测试不启动真实 Mac 推理，也不替代新部署的 GPU 整片或现场麦克风验收。既有成绩与边界见 [历史对照](TRANSCRIBER-COMPARISON.md)。

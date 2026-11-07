@@ -1,18 +1,19 @@
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
 const { discover, worker } = require('./discovery.cjs');
 const { createSpeechPlatform } = require('./platform.cjs');
 const { decodeWav, validatePcm } = require('./wav.cjs');
 const { transcriptQualityIssue } = require('./transcript-quality.cjs');
 class SpeechProvider {
   constructor({ root, runtime, model = runtime?.model || 'medium',
-    platform = createSpeechPlatform({ model }), spawnImpl = spawn, discoverImpl = discover, idleMs = 20000, timeoutMs = 120000 } = {}) {
+    platform = createSpeechPlatform({ model, computeType: runtime?.device === 'cuda' ? runtime.computeType || 'auto' : 'auto' }), spawnImpl = spawn, discoverImpl = discover, idleMs = 20000, timeoutMs = 120000 } = {}) {
     if (!root || !path.isAbsolute(root)) throw Error('请指定离线语音资源的绝对目录。');
     Object.assign(this, { root, platform, spawnImpl, discoverImpl, idleMs, timeoutMs });
     try { this.runtime = runtime ? platform.normalizeRuntime(runtime) : null; } catch { this.runtime = null; }
     this.child = null; this.current = null; this.sequence = 0; this.queue = Promise.resolve(); this.initializing = null;
     this.checked = false; this.epoch = 0; this.leases = 0; this.idle = null;
     this.stderrTail = ''; this.lastFailure = '';
+    this.terminating = Promise.resolve();
   }
   status() {
     return { ...this.platform.profile, protocolVersion: 1, configured: !!this.runtime,
@@ -30,6 +31,7 @@ class SpeechProvider {
     if (this.child && this.checked) return;
     const epoch = this.epoch;
     this.initializing = (async () => {
+      await this.terminating;
       const runtime = await this.configure();
       if (epoch !== this.epoch) throw Error('离线转写已停止。');
       this.stderrTail = '';
@@ -59,7 +61,7 @@ class SpeechProvider {
         .some(key => configured[key] !== this.platform.profile[key])) throw Error('本机语音进程版本或平台不匹配，请重新检测。');
       if (this.child !== child) throw Error('离线转写已停止。');
       this.checked = true;
-    })().catch(error => { const child = this.child; this.child = null; this.checked = false; child?.kill(); throw error; })
+    })().catch(error => { const child = this.child; this.child = null; this.checked = false; this.terminateWorker(child); throw error; })
       .finally(() => { this.initializing = null; });
     return this.initializing;
   }
@@ -75,7 +77,18 @@ class SpeechProvider {
     this.lastFailure = error.message;
     return error;
   }
-  fail(child, error) { this.lastFailure = error.message; if (this.current?.child === child) this.current.finish(error); if (this.child === child) { this.child = null; this.checked = false; } child.kill(); }
+  terminateWorker(child) {
+    if (!child) return this.terminating;
+    // A Windows venv python.exe can be a launcher with a real interpreter
+    // child. Terminate the owned tree before loading another CUDA context.
+    if (process.platform === 'win32' && Number.isInteger(child.pid) && child.pid > 0) {
+      const stopped = new Promise(resolve => execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'),
+        ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }, () => { if (child.exitCode == null) child.kill(); resolve(); }));
+      this.terminating = Promise.all([this.terminating, stopped]).then(() => {});
+    } else { child.kill(); }
+    return this.terminating;
+  }
+  fail(child, error) { this.lastFailure = error.message; if (this.current?.child === child) this.current.finish(error); if (this.child === child) { this.child = null; this.checked = false; } this.terminateWorker(child); }
   exchange(child, type, fields = {}, signal) {
     signal?.throwIfAborted(); const id = ++this.sequence;
     return new Promise((resolve, reject) => {
@@ -135,6 +148,6 @@ class SpeechProvider {
   retain() { this.leases++; clearTimeout(this.idle); }
   release() { this.leases = Math.max(0, this.leases - 1); this.scheduleRelease(); }
   scheduleRelease() { clearTimeout(this.idle); if (!this.leases && !this.current) { this.idle = setTimeout(() => this.close(), this.idleMs); this.idle.unref?.(); } }
-  close() { this.epoch++; clearTimeout(this.idle); const child = this.child; this.child = null; this.checked = false; this.current?.finish(Error('离线转写已停止。')); child?.kill(); }
+  close() { this.epoch++; clearTimeout(this.idle); const child = this.child; this.child = null; this.checked = false; this.current?.finish(Error('离线转写已停止。')); return this.terminateWorker(child); }
 }
 module.exports = { SpeechProvider, decodeWav };

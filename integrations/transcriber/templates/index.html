@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>逐字稿生成器</title>
+<style>
+:root {
+  --bg: #fafafa; --surface: #ffffff; --border: #e5e5e5; --border-hover: #d4d4d4;
+  --text: #171717; --text2: #525252; --text3: #a3a3a3;
+  --blue: #2563eb; --blue-light: #eff6ff; --blue-hover: #1d4ed8;
+  --green: #16a34a; --green-light: #f0fdf4;
+  --orange: #ea580c; --orange-light: #fff7ed;
+  --red: #dc2626; --red-light: #fef2f2;
+  --radius: 10px; --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+       background: var(--bg); color: var(--text); line-height: 1.6; min-height: 100vh; }
+.container { max-width: 900px; margin: 0 auto; padding: 32px 24px; }
+
+/* Header */
+.header { margin-bottom: 32px; }
+.header h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+.header p { color: var(--text2); font-size: 14px; margin-top: 4px; }
+
+/* Card */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 20px; margin-bottom: 16px; box-shadow: var(--shadow); transition: box-shadow 0.2s; }
+.card:hover { box-shadow: var(--shadow-md); }
+.card-title { font-size: 13px; font-weight: 600; color: var(--text3); text-transform: uppercase;
+              letter-spacing: 0.5px; margin-bottom: 12px; }
+
+/* Form */
+.form-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.form-row:last-child { margin-bottom: 0; }
+.form-label { font-size: 14px; font-weight: 500; min-width: 80px; color: var(--text2); }
+.form-input { flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px;
+              font-size: 14px; font-family: inherit; outline: none; transition: border-color 0.2s; }
+.form-input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+
+/* Buttons */
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px;
+       font-size: 14px; font-weight: 500; border: 1px solid var(--border); background: var(--surface);
+       cursor: pointer; transition: all 0.15s; font-family: inherit; }
+.btn:hover { background: var(--bg); border-color: var(--border-hover); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--blue); color: white; border-color: var(--blue); }
+.btn-primary:hover { background: var(--blue-hover); border-color: var(--blue-hover); }
+.btn-danger { background: var(--red); color: white; border-color: var(--red); }
+.btn-danger:hover { background: #b91c1c; }
+.btn-sm { padding: 5px 10px; font-size: 13px; }
+.hidden { display: none !important; }
+
+/* Checkbox */
+.checkbox-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+.checkbox-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--blue); cursor: pointer; }
+.checkbox-row label { font-size: 14px; cursor: pointer; flex: 1; }
+
+/* Video list */
+.video-list { max-height: 400px; overflow-y: auto; }
+.video-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+              border-bottom: 1px solid #f5f5f5; transition: background 0.15s; }
+.video-item:hover { background: #f9fafb; }
+.video-item:last-child { border-bottom: none; }
+.video-name { flex: 1; font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.video-size { font-size: 13px; color: var(--text3); min-width: 60px; text-align: right; }
+.video-ext { font-size: 11px; color: var(--text3); background: #f5f5f5; padding: 2px 6px;
+             border-radius: 4px; min-width: 40px; text-align: center; }
+.badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+.badge-done { background: var(--green-light); color: var(--green); }
+.badge-pending { background: var(--orange-light); color: var(--orange); }
+
+/* Progress */
+.progress-section { padding: 20px; }
+.progress-bar-track { width: 100%; height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden; margin: 12px 0; }
+.progress-bar-fill { height: 100%; background: linear-gradient(90deg, var(--blue), #60a5fa);
+                     border-radius: 4px; transition: width 0.5s ease; }
+.progress-text { display: flex; justify-content: space-between; font-size: 13px; color: var(--text2); }
+.progress-current { font-size: 14px; font-weight: 500; margin-top: 8px; color: var(--text); }
+.progress-eta { font-size: 13px; color: var(--text3); margin-top: 4px; }
+
+/* Spinner */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--blue);
+           border-radius: 50%; animation: spin 0.8s linear infinite; display: inline-block; }
+
+/* Modal */
+.modal-overlay { position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(0,0,0,0.4);
+                 display: flex; align-items: center; justify-content: center; z-index: 1000;
+                 opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+.modal-overlay.active { opacity: 1; pointer-events: auto; }
+.modal { background: var(--surface); border-radius: 12px; padding: 24px; max-width: 500px;
+         width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.15); }
+.modal h3 { font-size: 16px; margin-bottom: 12px; }
+.modal p { font-size: 14px; color: var(--text2); margin-bottom: 20px; line-height: 1.6;
+           max-height: 300px; overflow-y: auto; white-space: pre-wrap; }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* Transcript viewer */
+.transcript-view { background: #f9fafb; border: 1px solid var(--border); border-radius: var(--radius);
+                   padding: 16px; max-height: 400px; overflow-y: auto; font-size: 14px;
+                   line-height: 1.8; white-space: pre-wrap; word-break: break-all; }
+.empty-state { text-align: center; padding: 40px 20px; color: var(--text3); }
+.empty-state .icon { font-size: 40px; margin-bottom: 12px; }
+
+/* Toolbar */
+.toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.toolbar .spacer { flex: 1; }
+.select-count { font-size: 13px; color: var(--text2); }
+
+/* GPU banner */
+.gpu-banner { display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+              border-radius: 8px; font-size: 13px; margin-bottom: 16px; }
+.gpu-banner.gpu-on { background: var(--green-light); color: var(--green); }
+.gpu-banner.gpu-off { background: var(--orange-light); color: var(--orange); }
+.gpu-dot { width: 8px; height: 8px; border-radius: 50%; }
+.gpu-on .gpu-dot { background: var(--green); }
+.gpu-off .gpu-dot { background: var(--orange); }
+
+/* Footer */
+.footer { display: flex; align-items: center; gap: 8px; padding: 16px 0;
+          border-top: 1px solid var(--border); margin-top: 24px; }
+.footer .spacer { flex: 1; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="header">
+    <h1>逐字稿生成器</h1>
+    <p>选择音视频目录，使用统一 Turbo 稳定 GPU 算子生成逐字稿与字幕</p>
+  </div>
+
+  <!-- GPU 状态 -->
+  <div class="gpu-banner" id="gpuBanner">
+    <span class="gpu-dot"></span>
+    <span id="gpuText">检查算子入口资源...</span>
+  </div>
+
+  <!-- 模型加载状态 -->
+  <div class="gpu-banner" id="modelBanner" style="display:none; background:var(--blue-light); color:var(--blue)">
+    <span class="spinner"></span>
+    <span id="modelText">检查算子入口资源，不预载 GPU 模型...</span>
+  </div>
+
+  <!-- 设置 -->
+  <div class="card">
+    <div class="card-title">目录设置</div>
+    <div class="form-row">
+      <span class="form-label">音视频目录</span>
+      <input class="form-input" id="videoDir" value="D:\迅雷下载" readonly placeholder="点击右侧按钮选择">
+      <button class="btn" onclick="pickFolder('videoDir')">选择</button>
+    </div>
+    <div class="form-row">
+      <span class="form-label">保存目录</span>
+      <input class="form-input" id="outputDir" value="D:\迅雷下载" readonly placeholder="默认与音视频目录相同" title="默认使用选中的音视频目录，也可单独修改">
+      <button class="btn" onclick="pickFolder('outputDir')">单独修改</button>
+    </div>
+    <div class="form-row" style="justify-content:flex-end; margin-top:4px;">
+      <span class="form-label">模型</span>
+      <span id="modelSelect">large-v3-turbo · Native30 · CUDA FP16</span>
+      <span class="form-label" style="min-width:60px">语言</span>
+      <select class="form-input" id="languageSelect" style="max-width:120px;cursor:pointer">
+        <option value="auto" selected>自动识别</option>
+        <option value="en">英语</option>
+        <option value="zh">中文</option>
+      </select>
+      <button class="btn btn-primary" onclick="scanVideos()">扫描</button>
+    </div>
+  </div>
+
+  <!-- 视频列表 -->
+  <div class="card" id="listCard" style="display:none">
+    <div class="card-title">音视频文件</div>
+    <div class="toolbar">
+      <button class="btn btn-sm" onclick="toggleAll(true)">全选</button>
+      <button class="btn btn-sm" onclick="toggleAll(false)">全不选</button>
+      <button class="btn btn-sm" onclick="toggleMediaType('video')">只选视频</button>
+      <button class="btn btn-sm" onclick="toggleMediaType('audio')">只选音频</button>
+      <button class="btn btn-sm" onclick="togglePending()">选未生成</button>
+      <span class="select-count" id="selectCount"></span>
+      <span class="spacer"></span>
+      <label class="checkbox-row" style="gap:4px; margin:0">
+        <input type="checkbox" id="overwrite">
+        <span style="font-size:13px; color:var(--text2)">覆盖已有</span>
+      </label>
+      <label class="checkbox-row" style="gap:4px; margin:0">
+        <input type="checkbox" id="addIpa">
+        <span style="font-size:13px; color:var(--text2)">英文音标</span>
+      </label>
+      <button class="btn btn-primary" id="btnGenerate" onclick="startTranscribe()">生成逐字稿</button>
+      <button class="btn btn-sm" onclick="openFolder('outputDir')">📂 打开文件夹</button>
+    </div>
+    <div class="video-list" id="videoList"></div>
+  </div>
+
+  <!-- 进度 -->
+  <div class="card" id="progressCard" style="display:none">
+    <div class="card-title">转写进度</div>
+    <div class="progress-section">
+      <div class="progress-text">
+        <span id="progressLabel">0 / 0</span>
+        <span id="progressPercent">0%</span>
+      </div>
+      <div class="progress-bar-track"><div class="progress-bar-fill" id="progressBar"></div></div>
+      <div class="progress-current" id="progressCurrent"></div>
+      <div class="progress-eta" id="progressEta"></div>
+    </div>
+    <div style="text-align:right; margin-top:8px;">
+      <button class="btn btn-danger btn-sm" onclick="cancelTranscribe()">取消</button>
+    </div>
+  </div>
+
+  <!-- 结果 -->
+  <div class="card" id="resultCard" style="display:none">
+    <div class="card-title" style="display:flex;align-items:center;gap:8px">
+      <span>转写结果</span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn btn-sm" onclick="openFolder('outputDir')">📂 打开文件夹</button>
+    </div>
+    <div id="resultList"></div>
+  </div>
+
+  <!-- 逐字稿查看 -->
+  <div class="card" id="transcriptCard" style="display:none">
+    <div class="card-title">逐字稿内容</div>
+    <div class="toolbar" style="margin-bottom:8px">
+      <strong id="transcriptTitle"></strong>
+      <span class="spacer"></span>
+      <button class="btn btn-sm" onclick="closeTranscript()">关闭</button>
+    </div>
+    <div class="transcript-view" id="transcriptContent"></div>
+  </div>
+
+  <!-- 底栏 -->
+  <div class="footer">
+    <span style="font-size:13px;color:var(--text3)" id="serverStatus">● 服务运行中</span>
+    <span class="spacer"></span>
+    <button class="btn btn-sm btn-danger" onclick="shutdownServer()">关闭服务</button>
+  </div>
+</div>
+
+<!-- 确认弹窗 -->
+<div class="modal-overlay" id="confirmModal">
+  <div class="modal">
+    <h3 id="confirmTitle">确认</h3>
+    <p id="confirmMsg"></p>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" id="confirmOk">确定</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let videos = [];
+let pollTimer = null;
+let isTranscribing = false;
+
+function $(id) { return document.getElementById(id); }
+
+// ── Open folder in Explorer ──
+async function openFolder(inputId) {
+  const path = $(inputId).value.trim();
+  if (!path) return;
+  await fetch(`/api/open_folder?path=${encodeURIComponent(path)}`);
+}
+
+async function openOutputFolder(videoPath) {
+  await fetch(`/api/open_output_folder?path=${encodeURIComponent(videoPath)}`);
+}
+
+// ── Folder Picker ──
+async function pickFolder(inputId) {
+  const initDir = $(inputId).value || '';
+  const res = await fetch(`/api/pick_folder?init=${encodeURIComponent(initDir)}`);
+  const data = await res.json();
+  if (data.path) {
+    $(inputId).value = data.path;
+    if (inputId === 'videoDir') {
+      $('outputDir').value = data.path;
+    }
+  }
+}
+
+// ── Scan ──
+async function scanVideos() {
+  const videoDir = $('videoDir').value.trim();
+  if (!videoDir) { alert('请输入视频目录'); return; }
+  const res = await fetch('/api/scan', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ video_dir: videoDir })
+  });
+  const data = await res.json();
+  videos = data.videos || [];
+  renderVideoList();
+}
+
+function renderVideoList() {
+  if (videos.length === 0) {
+    $('listCard').style.display = 'none';
+    alert('未找到音视频文件，请检查目录');
+    return;
+  }
+  $('listCard').style.display = 'block';
+
+  const doneCount = videos.filter(v => v.has_txt).length;
+  const list = $('videoList');
+  list.innerHTML = videos.map((v, i) => `
+    <div class="video-item">
+      <input type="checkbox" class="vcheck" data-idx="${i}" ${v.has_txt ? '' : 'checked'}>
+      <span class="video-name" title="${v.path}">${v.name}</span>
+      <span class="video-ext">${v.ext}</span>
+      <button class="btn btn-sm" style="padding:2px 6px;font-size:12px" onclick="openOutputFolder(videos[${i}].path)" title="打开字幕文件夹">📂</button>
+      <span class="video-size">${v.size_mb}MB</span>
+      <span class="badge ${v.has_txt ? 'badge-done' : 'badge-pending'}">${v.has_txt ? '已有' : '未生成'}</span>
+    </div>
+  `).join('');
+
+  updateSelectCount();
+
+  // Listen for checkbox changes
+  list.querySelectorAll('.vcheck').forEach(cb => {
+    cb.addEventListener('change', updateSelectCount);
+  });
+}
+
+function getSelected() {
+  const checks = document.querySelectorAll('.vcheck:checked');
+  return Array.from(checks).map(cb => videos[parseInt(cb.dataset.idx)]);
+}
+
+function toggleAll(checked) {
+  document.querySelectorAll('.vcheck').forEach(cb => cb.checked = checked);
+  updateSelectCount();
+}
+
+function toggleMediaType(type) {
+  document.querySelectorAll('.vcheck').forEach(cb => {
+    cb.checked = videos[parseInt(cb.dataset.idx)].media_type === type;
+  });
+  updateSelectCount();
+}
+
+function togglePending() {
+  document.querySelectorAll('.vcheck').forEach((cb, i) => {
+    cb.checked = !videos[i].has_txt;
+  });
+  updateSelectCount();
+}
+
+function updateSelectCount() {
+  const sel = getSelected().length;
+  const done = getSelected().filter(v => v.has_txt).length;
+  let text = `已选 ${sel} / ${videos.length}`;
+  if (done > 0) text += `（${done} 个已有逐字稿）`;
+  $('selectCount').textContent = text;
+}
+
+// ── Transcribe ──
+async function startTranscribe() {
+  const selected = getSelected();
+  if (selected.length === 0) { alert('请选择视频'); return; }
+
+  const overwrite = $('overwrite').checked;
+  const existing = selected.filter(v => v.has_txt);
+
+  if (existing.length > 0 && !overwrite) {
+    const names = existing.map(v => v.name).join('\n');
+    const proceed = await showConfirm(
+      '以下视频已有逐字稿',
+      `共 ${existing.length} 个：\n${names}\n\n要覆盖它们吗？取消则自动跳过。`
+    );
+    if (proceed) {
+      $('overwrite').checked = true;
+    }
+  }
+
+  const res = await fetch('/api/transcribe', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      videos: getSelected(),
+      video_dir: $('videoDir').value.trim(),
+      output_dir: $('outputDir').value.trim(),
+      overwrite: $('overwrite').checked,
+      transcribe_mode: 'stable',
+      add_ipa: $('addIpa').checked,
+      language: $('languageSelect').value,
+    })
+  });
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+
+  isTranscribing = true;
+  $('progressCard').style.display = 'block';
+  $('btnGenerate').disabled = true;
+  startPolling();
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollStatus, 1000);
+}
+
+async function pollStatus() {
+  const res = await fetch('/api/status');
+  const s = await res.json();
+
+  $('progressBar').style.width = s.progress + '%';
+  $('progressPercent').textContent = s.progress + '%';
+  $('progressLabel').textContent = `${s.current_index} / ${s.total}`;
+  const chunkText = s.chunk_seconds ? `每段 ${Math.round(s.chunk_seconds / 60)} 分钟 · ${s.chunk_policy || ''}` : '';
+  const modeText = s.transcribe_mode_label ? `模式: ${s.transcribe_mode_label}` : '';
+  const ipaText = s.add_ipa ? '英文音标: 开' : '';
+  const chunkModeText = s.chunk_mode === 'manual' ? '手动切片' : '';
+  $('progressEta').textContent = [s.eta ? `预计剩余: ${s.eta}` : '', modeText, ipaText, chunkModeText, chunkText].filter(Boolean).join(' | ');
+
+  if (s.transcribing && s.cancel_requested) {
+    $('progressCurrent').textContent = '正在取消，等待当前分块结束...';
+  } else if (s.current_video) {
+    const name = s.current_video.split(/[/\\]/).pop().replace(/\.[^.]+$/, '');
+    if (s.phase === 'extracting') {
+      $('progressCurrent').innerHTML = `<span class="spinner"></span> 正在提取音频: ${name}`;
+    } else {
+      let chunkInfo = '';
+      if (s.chunk_total > 0) {
+        chunkInfo = ` (段 ${s.chunk_current}/${s.chunk_total})`;
+      } else {
+        chunkInfo = ' (模型推理中...)';
+      }
+      $('progressCurrent').innerHTML = `<span class="spinner"></span> 正在转写: ${name}${chunkInfo}`;
+    }
+  }
+
+  if (!s.transcribing) {
+    clearInterval(pollTimer);
+    isTranscribing = false;
+    if (s.cancel_requested) {
+      $('progressCurrent').textContent = '已取消，已完成的分块已保存';
+    } else {
+      $('progressCurrent').textContent = '✅ 全部完成';
+      $('progressBar').style.width = '100%';
+      $('progressPercent').textContent = '100%';
+    }
+    $('btnGenerate').disabled = false;
+    showResults(s);
+    // Refresh list
+    scanVideos();
+  }
+}
+
+async function cancelTranscribe() {
+  const res = await fetch('/api/cancel', { method: 'POST' });
+  const data = await res.json();
+  if (data.status === 'cancelling') {
+    $('progressCurrent').textContent = '正在取消，等待当前分块结束...';
+  }
+  await pollStatus();
+}
+
+function showResults(s) {
+  $('resultCard').style.display = 'block';
+  let html = '';
+  s.done.forEach(d => {
+    const name = d.name || d.video;
+    html += `<div class="video-item">
+      <span class="video-name">${name}</span>
+      <span class="badge badge-done">✅ ${d.elapsed}s</span>
+      <button class="btn btn-sm" onclick="viewTranscript(this)" data-path="${encodeURIComponent(d.video)}">查看</button>
+    </div>`;
+  });
+  s.errors.forEach(e => {
+    const name = e.name || e.video;
+    html += `<div class="video-item">
+      <span class="video-name">${name}</span>
+      <span class="badge" style="background:var(--red-light);color:var(--red)">❌ ${e.error}</span>
+    </div>`;
+  });
+  $('resultList').innerHTML = html;
+}
+
+// ── Transcript viewer ──
+async function viewTranscript(btn) {
+  const path = decodeURIComponent(btn.dataset.path);
+  const res = await fetch(`/api/transcript?path=${encodeURIComponent(path)}`);
+  const data = await res.json();
+  $('transcriptCard').style.display = 'block';
+  const name = path.split(/[/\\]/).pop().replace(/\.[^.]+$/, '');
+  $('transcriptTitle').textContent = name;
+  $('transcriptContent').textContent = data.text || '(无内容)';
+  $('transcriptCard').scrollIntoView({ behavior: 'smooth' });
+}
+
+function closeTranscript() {
+  $('transcriptCard').style.display = 'none';
+}
+
+// ── Modal ──
+function showConfirm(title, msg) {
+  return new Promise(resolve => {
+    $('confirmTitle').textContent = title;
+    $('confirmMsg').textContent = msg;
+    $('confirmModal').classList.add('active');
+    $('confirmOk').onclick = () => { closeModal(); resolve(true); };
+    $('confirmModal').onclick = (e) => { if (e.target === $('confirmModal')) { closeModal(); resolve(false); } };
+  });
+}
+function closeModal() { $('confirmModal').classList.remove('active'); }
+
+// ── Browser close protection ──
+window.addEventListener('beforeunload', (e) => {
+  if (isTranscribing) {
+    e.preventDefault();
+    e.returnValue = '视频正在转写中，关闭将中断任务。确定要关闭吗？';
+  }
+});
+
+// ── Auto scan on load ──
+function trackRunningTask(info) {
+  $('videoDir').value = info.video_dir;
+  $('outputDir').value = info.output_dir || info.video_dir;
+  $('languageSelect').value = info.language || 'auto';
+  isTranscribing = true;
+  $('progressCard').style.display = 'block';
+  $('btnGenerate').disabled = true;
+  startPolling();
+  pollStatus();
+}
+
+window.addEventListener('load', async () => {
+  checkGPU();
+  // Check for resumable state
+  try {
+    const res = await fetch('/api/resume_check');
+    const data = await res.json();
+    if (data.running) {
+      trackRunningTask(data);
+      return;
+    }
+    if (data.remaining > 0) {
+      const ok = await showConfirm(
+        '检测到未完成的任务',
+        `上次有 ${data.remaining} 个视频未完成转写。\n\n选择"确定"继续，选择"取消"放弃。`
+      );
+      if (ok) {
+        const r2 = await fetch('/api/resume', { method: 'POST' });
+        const d2 = await r2.json();
+        if (d2.status === 'resumed' || d2.status === 'running') {
+          trackRunningTask(d2);
+          return;
+        }
+      } else {
+        await fetch('/api/resume_discard', { method: 'POST' });
+      }
+    }
+  } catch (e) {}
+  scanVideos();
+});
+
+// ── GPU + Model check ──
+async function checkGPU() {
+  try {
+    const res = await fetch('/api/system');
+    const info = await res.json();
+    const banner = $('gpuBanner');
+    if (info.gpu_verified) {
+      banner.className = 'gpu-banner gpu-on';
+      $('gpuText').textContent = '统一 Turbo GPU 算子：最近任务已完成 CUDA 转写';
+    } else if (info.resources_ready) {
+      banner.className = 'gpu-banner';
+      $('gpuText').textContent = '统一 Turbo GPU 算子：入口资源就绪，任务启动时验证 GPU';
+    } else {
+      banner.className = 'gpu-banner gpu-off';
+      $('gpuText').textContent = info.error || 'GPU 算子入口未就绪，请检查统一算子目录';
+    }
+  } catch (e) {
+    $('gpuText').textContent = '无法检查 GPU 算子入口';
+  }
+  // Load model list
+  try {
+    const res = await fetch('/api/models');
+    const data = await res.json();
+    const sel = $('modelSelect');
+    sel.textContent = `${data.current} · Native30 · CUDA FP16`;
+  } catch (e) {}
+  // Check model loading status
+  checkModel();
+}
+
+async function checkModel() {
+  try {
+    const res = await fetch('/api/model_status');
+    const info = await res.json();
+    if (info.ready) {
+      $('modelBanner').style.display = 'none';
+    } else if (info.loading) {
+      $('modelBanner').style.display = 'flex';
+      $('modelText').textContent = '正在检查统一算子资源，不载入 GPU 模型...';
+      setTimeout(checkModel, 2000);
+    }
+  } catch (e) {}
+}
+
+// ── Shutdown ──
+async function shutdownServer() {
+  const msg = isTranscribing
+    ? '正在转写中！关闭将中断当前任务（进度已保存）。确定关闭？'
+    : '确定要关闭服务吗？';
+  const ok = await showConfirm('关闭服务', msg);
+  if (!ok) return;
+  try {
+    await fetch('/api/shutdown', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ force: isTranscribing }),
+    });
+  } catch (e) { /* server stopped */ }
+  document.body.innerHTML = '<div style="text-align:center;padding:80px"><h2>服务已关闭</h2><p style="color:#a3a3a3;margin-top:12px">可关闭此页面</p></div>';
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,27 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { loadGpuImplementation } from '../scripts/gpu-runtime-snapshot.mjs';
+test('new source creates a new isolated runtime while old functions and Python worker paths stay frozen', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'gpu-snapshot-'));
+  t.after(() => { assert.equal(path.dirname(fs.realpathSync(directory)), fs.realpathSync(os.tmpdir())); fs.rmSync(directory, { recursive: true, force: true }); });
+  const sourceDirectory = path.join(directory, 'source'), cacheDirectory = path.join(directory, 'cache'); fs.mkdirSync(sourceDirectory);
+  for (const file of ['platform.cjs','discovery.cjs','wav.cjs','transcript-quality.cjs','faster_backend.py','recognition.py','segmentation.py']) fs.writeFileSync(path.join(sourceDirectory, file), '');
+  for (const file of ['segmentation.json','models.json']) fs.writeFileSync(path.join(sourceDirectory, file), '{}');
+  fs.writeFileSync(path.join(sourceDirectory, 'worker.py'), 'version = "first"');
+  fs.writeFileSync(path.join(sourceDirectory, 'provider.cjs'), 'module.exports = "first";');
+  const entry = allowed => `const path=require("node:path");module.exports={normalizePlan:p=>{if(p.computeType&&!${JSON.stringify(allowed)}.includes(p.computeType))throw Error('unsupported compute');return p;},transcribeGpuFile:()=>require("./provider.cjs"),worker:path.join(__dirname,"worker.py")};`;
+  fs.writeFileSync(path.join(sourceDirectory, 'gpu-file.cjs'), entry(['float16']));
+  const first = loadGpuImplementation({ sourceDirectory, cacheDirectory }); assert.equal(first.transcribeGpuFile(), 'first');
+  fs.writeFileSync(path.join(sourceDirectory, 'provider.cjs'), 'module.exports = "second";'); fs.writeFileSync(path.join(sourceDirectory, 'worker.py'), 'version = "second"');
+  fs.writeFileSync(path.join(sourceDirectory, 'gpu-file.cjs'), entry(['float16', 'int8_float16']));
+  const second = loadGpuImplementation({ sourceDirectory, cacheDirectory });
+  assert.notEqual(first.revision, second.revision); assert.equal(first.transcribeGpuFile(), 'first'); assert.equal(second.transcribeGpuFile(), 'second');
+  assert.equal(fs.readFileSync(first.worker, 'utf8'), 'version = "first"'); assert.equal(fs.readFileSync(second.worker, 'utf8'), 'version = "second"');
+  assert.throws(() => first.normalizePlan({ computeType: 'int8_float16' }), /unsupported/); assert.equal(second.normalizePlan({ computeType: 'int8_float16' }).computeType, 'int8_float16');
+  assert.equal(loadGpuImplementation({ sourceDirectory, cacheDirectory }).revision, second.revision);
+  fs.writeFileSync(path.join(second.snapshotDirectory, 'provider.cjs'), 'tampered');
+  assert.throws(() => loadGpuImplementation({ sourceDirectory, cacheDirectory }), /校验失败/);
+});

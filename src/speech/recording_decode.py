@@ -1,8 +1,13 @@
 import base64
 import io
+import hashlib
 
 
 def decode_recording(message):
+    language = message.get('language', 'auto')
+    policy = message.get('decodingPolicy')
+    if language not in ('auto', 'en', 'zh') or policy not in (None, 'stable-gpu-v1', 'stable-gpu-v1-greedy') or message.get('context', '') != '':
+        raise RuntimeError('Invalid recording language or decoding policy')
     import av
     import numpy as np
     encoded = message.get('audio')
@@ -30,8 +35,14 @@ def decode_recording(message):
             parts.append(samples)
     if not parts:
         raise RuntimeError('Empty recording')
-    samples = np.concatenate(parts)[:60 * 16000].astype('<f4')
+    # Keep the browser codec's bounded tail. Silently slicing at 60 seconds can
+    # remove the end of a word; the recognizer validates this decoded provenance.
+    samples = np.concatenate(parts).astype('<f4')
     if not np.isfinite(samples).all():
         raise RuntimeError('Invalid decoded samples')
     np.clip(samples, -1, 1, out=samples)
-    return {'audio': base64.b64encode(samples.tobytes()).decode('ascii'), 'language': 'auto'}
+    pcm = samples.tobytes()
+    return {'audio': base64.b64encode(pcm).decode('ascii'), 'language': language, 'context': '',
+            **({'decodingPolicy': policy} if policy is not None else {}),
+            'recordingDecode': {'pcmSha256': hashlib.sha256(pcm).hexdigest(), 'samples': len(samples),
+                                'sampleRate': 16000, 'channels': 1, 'sampleFormat': 'f32le'}}

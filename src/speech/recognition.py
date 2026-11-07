@@ -1,6 +1,7 @@
 """Shared local decoding policy for meetings, configuration tests and SDK audio."""
 import base64
 import time
+import hashlib
 from segmentation import acoustic_chunks
 
 def transcribe(recognizer, message):
@@ -10,9 +11,17 @@ def transcribe(recognizer, message):
     if not isinstance(audio, str) or len(audio) > 6 * 1024**2:
         raise RuntimeError('Invalid audio size')
     data = base64.b64decode(audio, validate=True)
-    if not data or len(data) % 4 or len(data) > 16000 * 4 * 60:
+    recording = message.get('recordingDecode')
+    if recording is not None and (not isinstance(recording, dict) or recording.get('samples') != len(data) // 4 or
+            recording.get('sampleRate') != 16000 or recording.get('channels') != 1 or recording.get('sampleFormat') != 'f32le' or
+            recording.get('pcmSha256') != hashlib.sha256(data).hexdigest()):
+        raise RuntimeError('Invalid decoded recording provenance')
+    maximum_seconds = 61 if recording is not None else 60
+    if not data or len(data) % 4 or len(data) > 16000 * 4 * maximum_seconds:
         raise RuntimeError('Expected 16kHz mono Float32 LE PCM')
     language = message.get('language', 'auto')
+    stable = message.get('decodingPolicy') in ('stable-gpu-v1', 'stable-gpu-v1-greedy')
+    beam_size = 1 if message.get('decodingPolicy') == 'stable-gpu-v1-greedy' else 5
     context = message.get('context', '')
     if language not in ['auto', 'zh', 'en'] or not isinstance(context, str) or len(context) > 400:
         raise RuntimeError('Invalid recognition language or context')
@@ -33,9 +42,11 @@ def transcribe(recognizer, message):
         if np.sqrt(np.mean(chunk**2)) < .001:
             continue
         prompt = None if language == 'auto' else ('以下是简体中文和英语的会议记录。' if language == 'zh' else '') + context[-120:]
+        # The Windows CUDA FP16 8-beam path reproduced both native exits and
+        # punctuation-only output on real speech. Keep the tested 5-beam path.
         segments, info = recognizer.transcribe(chunk, language=None if language == 'auto' else language,
-            task='transcribe', beam_size=8, best_of=5, patience=1.5,
-            temperature=[0, .2, .4], condition_on_previous_text=False,
+            task='transcribe', beam_size=beam_size, best_of=1 if stable else 5, patience=1.5,
+            temperature=0 if stable else [0, .2, .4], condition_on_previous_text=False,
             multilingual=language == 'auto', language_detection_threshold=.8, language_detection_segments=3,
             initial_prompt=prompt or None, vad_filter=True,
             vad_parameters={'min_speech_duration_ms': 150, 'min_silence_duration_ms': 350, 'speech_pad_ms': 150})

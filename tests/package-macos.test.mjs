@@ -20,7 +20,11 @@ test('Mac package is relocatable, carries the personal icon and preserves double
   assert.equal(path.basename(result.app), 'SwitchNotion.app');
   assert.match(plist, /<key>CFBundleName<\/key><string>SwitchNotion<\/string>/);
   assert.match(plist, /<key>CFBundleDisplayName<\/key><string>SwitchNotion<\/string>/); assert.ok(plist.includes('notion.icns'));
-  assert.equal(JSON.parse(fs.readFileSync(path.join(result.directory, 'package-manifest.json'))).name, 'SwitchNotion');
+  const packagedManifest = JSON.parse(fs.readFileSync(path.join(result.directory, 'package-manifest.json')));
+  assert.equal(packagedManifest.name, 'SwitchNotion');
+  assert.equal(packagedManifest.files.some(item => /(?:^|\/)(?:windows-gpu-native|windows-gpu-operator|\.notion-switch)(?:\/|$)/.test(item.file)), false);
+  assert.equal(fs.existsSync(path.join(result.app, 'Contents/Resources/project/assets/windows-gpu-native')), false);
+  assert.equal(fs.existsSync(path.join(result.app, 'Contents/Resources/project/.notion-switch')), false);
   for (const name of ['Switch Notion 启动.command', 'Switch Notion 配置.command']) {
     assert.ok(fs.readFileSync(path.join(result.directory, name), 'utf8').includes('/SwitchNotion.app/Contents/Resources/project'));
   }

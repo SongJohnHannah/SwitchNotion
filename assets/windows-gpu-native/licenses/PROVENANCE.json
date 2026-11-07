@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "scope": "Original notices supplementing the imported runtime; no model or inference binary changed",
+  "components": [
+    {
+      "files": [
+        "licenses/cuda-EULA.txt",
+        "licenses/cuda-LICENSE.txt"
+      ],
+      "source": "NVIDIA CUDA Toolkit 13.3 installed license files"
+    },
+    {
+      "files": [
+        "licenses/ffmpeg-GPLv3.txt",
+        "licenses/ffmpeg-build-info.txt"
+      ],
+      "source": "Installed Gyan.FFmpeg 8.1.1 full build LICENSE and the copied executable -L output",
+      "upstream": "https://www.gyan.dev/ffmpeg/builds/"
+    },
+    {
+      "files": [
+        "licenses/whisper-MIT.txt"
+      ],
+      "source": "https://raw.githubusercontent.com/openai/whisper/main/LICENSE",
+      "modelRepository": "dropbox-dash/faster-whisper-large-v3-turbo",
+      "modelRevision": "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf"
+    }
+  ]
+}

@@ -1,11 +1,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { SpeechProvider } = require('../speech-provider.cjs');
+const { OperatorSessionClient } = require('./operator-session-client.cjs');
 const { RecordingTest } = require('./recording-test.cjs');
-const { install } = require('./install.cjs');
 const models = require('./models.json');
 class SpeechSettings {
-  constructor({ root, provider, isBusy = () => false, installImpl = install, onChange = () => {}, runtimeExists = runtime => fs.existsSync(runtime.pythonExecutable) && fs.existsSync(path.join(runtime.modelDirectory, 'model.bin')) } = {}) {
+  constructor({ root, provider, platform = process.platform, operatorOptions,
+    operatorSessionFactory = options => new OperatorSessionClient(options),
+    legacyProviderFactory = options => new (require('../speech-provider.cjs').SpeechProvider)(options),
+    isBusy = () => false, installImpl = options => require('./install.cjs').install(options), onChange = () => {}, runtimeExists = runtime => fs.existsSync(runtime.pythonExecutable) && fs.existsSync(path.join(runtime.modelDirectory, 'model.bin')) } = {}) {
     Object.assign(this, { root, isBusy, installImpl, onChange, runtimeExists });
     this.file = path.join(root, 'speech.local.json'); this.lastError = ''; this.preparing = false;
     let saved; try { saved = JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch { saved = {}; }
@@ -14,12 +16,15 @@ class SpeechSettings {
     this.autoAttachAudio = saved.autoAttachAudio !== false;
     this.inputMode = ['microphone', 'system', 'meeting'].includes(saved.inputMode) ? saved.inputMode : 'meeting';
     const model = Object.hasOwn(models, saved.model) ? saved.model : 'medium';
-    this.provider = provider || new SpeechProvider({ root, runtime: saved.runtime, model });
+    this.usingOperatorSession = provider ? provider.operatorSession === true : platform === 'win32';
+    this.provider = provider || (this.usingOperatorSession ? operatorSessionFactory({ root, ...operatorOptions }) : legacyProviderFactory({ root, runtime: saved.runtime, model }));
     this.progress = null; this.capture = new RecordingTest({ provider: this.provider, isBusy });
   }
   get recording() { return this.capture.active; }
   status() { return { ...this.provider.status(), enabled: this.enabled, preparing: this.preparing,
-    lastError: this.lastError, progress: this.progress, recording: this.recording, modelName: models[this.provider.status().model || 'medium']?.name, engineName: 'faster-whisper',
+    lastError: this.lastError, progress: this.progress, recording: this.recording, modelName: models[this.provider.status().model || (this.usingOperatorSession ? 'large-v3-turbo' : 'medium')]?.name,
+    engineName: this.usingOperatorSession ? '本项目内置 GPU 算子' : 'faster-whisper', modelLocked: this.usingOperatorSession,
+    modelOptions: Object.entries(models).filter(([id]) => !this.usingOperatorSession || id === 'large-v3-turbo').map(([id, value]) => ({ id, name: value.name })),
     summaryUsesNetwork: true, autoSummary: this.autoSummary, autoAttachAudio: this.autoAttachAudio, audioImports: this.audioImports?.status(), inputMode: this.inputMode, nativeMeetingAdapter: !!this.native?.status().available }; }
   save() {
     const { provider, model, platform, architecture, device, computeType } = this.provider.status();
@@ -32,6 +37,14 @@ class SpeechSettings {
     this.preparing = true; this.lastError = '';
     this.installAbort = new AbortController();
     try {
+      if (this.usingOperatorSession) {
+        this.progress = { message: '正在检测本项目内置 NVIDIA GPU 算子与 Large-v3 Turbo 模型…' };
+        await this.provider.configure({ signal: this.installAbort.signal });
+        this.installAbort.signal.throwIfAborted();
+        await this.provider.probe({ signal: this.installAbort.signal });
+        this.installAbort.signal.throwIfAborted();
+        this.save(); this.progress = null; return this.status();
+      }
       if (this.provider.runtime && !this.runtimeExists(this.provider.runtime)) this.provider.runtime = null;
       let installed = false;
       const ready = async () => {
@@ -52,7 +65,7 @@ class SpeechSettings {
       }
       this.save(); this.progress = null; return this.status();
     }
-    catch (error) { this.lastError = '本机离线引擎检测失败，请检查 faster-whisper、所选模型和当前系统运行环境。'; throw error; }
+    catch (error) { this.lastError = this.usingOperatorSession ? '本项目内置 GPU 算子检测失败：' + error.message : '本机离线引擎检测失败，请检查 faster-whisper、所选模型和当前系统运行环境。'; throw error; }
     finally { this.preparing = false; this.installAbort = null; }
   }
   async request(action, input = {}) {
@@ -68,7 +81,7 @@ class SpeechSettings {
       if (action === 'speech.record.finish') return { ok: true, result: await this.capture.finish(input) };
       if (this.isBusy() && action !== 'speech.save') throw Error('Notion 任务正在执行，请结束后再检测或测试语音。');
       if (action === 'speech.prepare' || action === 'speech.probe') {
-        await this.prepare(); return { ok: true, result: { ...this.status(), message: `已检测到 ${this.status().modelName} 中英文模型，${this.provider.status().hardwareLabel} 离线引擎就绪。` } };
+        await this.prepare(); return { ok: true, result: { ...this.status(), message: this.usingOperatorSession ? '本项目内置 NVIDIA GPU 算子与 Large-v3 Turbo 录音会话已就绪；录音、文件转写与视频转码共用 GPU 队列。' : `已检测到 ${this.status().modelName} 中英文模型，${this.provider.status().hardwareLabel} 离线引擎就绪。` } };
       }
       if (action === 'speech.save') {
         if (typeof input.enabled !== 'boolean') throw Error('请选择是否启用离线转写。');
@@ -77,6 +90,7 @@ class SpeechSettings {
         const inputMode = input.inputMode ?? this.inputMode;
         if (!['microphone', 'system', 'meeting'].includes(inputMode)) throw Error('请选择有效的录音来源。');
         const model = input.model ?? this.provider.status().model ?? 'medium';
+        if (this.usingOperatorSession && model !== 'large-v3-turbo') throw Error('本项目内置 GPU 算子固定使用 Whisper Large-v3 Turbo，不支持切换 Medium。');
         if (!Object.hasOwn(models, model)) throw Error('请选择有效的离线语音模型。');
         if (this.provider.leases) throw Error('请先停止录音，再更改离线转写设置。');
         if (this.preparing) throw Error('本机语音正在准备，请完成后再保存。');
@@ -97,14 +111,14 @@ class SpeechSettings {
       }
       if (action === 'speech.release') {
         if (this.provider.leases) throw Error('仍有录音正在转写，请先停止录音。');
-        this.provider.close(); return { ok: true, result: { ...this.status(), message: '已结束本机语音进程并释放资源。' } };
+        await this.provider.close(); return { ok: true, result: { ...this.status(), message: '已结束本机语音进程并释放资源。' } };
       }
       const generation = this.capture.generation;
       if (!this.provider.runtime) await this.prepare();
       if (generation !== this.capture.generation) throw Error('本机录音测试已取消。');
       return { ok: true, result: await this.capture.start() };
     } catch (error) {
-      const known = /^(?:离线|Notion |本机|请选择|仍有|已有|测试录音|请使用|请先|未找到|音频)/.test(error.message || '');
+      const known = /^(?:独立|GPU|离线|Notion |本机|本项目|请选择|仍有|已有|测试录音|请使用|请先|未找到|音频)/.test(error.message || '');
       return { ok: false, error: known ? error.message : '离线语音操作失败，请重新检测本机引擎。' };
     }
   }

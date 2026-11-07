@@ -1,0 +1,19 @@
+{
+  "name": "@notion-switch/offline-speech",
+  "version": "0.2.0",
+  "private": true,
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "./src/speech-provider.cjs",
+  "types": "./src/speech-provider.d.cts",
+  "exports": {
+    ".": {
+      "types": "./src/speech-provider.d.cts",
+      "require": "./src/speech-provider.cjs",
+      "default": "./src/speech-provider.cjs"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

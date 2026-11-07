@@ -39,6 +39,8 @@ Local Storage/
 *.aiff
 *.caf
 *.pcm
+*.s16le
+*.f32le
 *.webm
 *.mp4
 *.m4v
@@ -60,3 +62,5 @@ __pycache__/
 /Switch Notion.app/
 /bin/
 /licenses/NODE-LICENSE.txt
+/src/speech/windows-operator/outputs/
+/src/speech/windows-operator/video-runs/

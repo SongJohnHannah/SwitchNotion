@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "resourcesRoot": "resources",
+  "pythonExecutable": "resources/speech/python/python.exe",
+  "modelDirectory": "resources/speech/model",
+  "ffmpeg": "bin/ffmpeg.exe",
+  "ffprobe": "bin/ffprobe.exe",
+  "model": "large-v3-turbo",
+  "operatorProtocol": 1,
+  "profiles": {
+    "winner": {
+      "verifiedOriginalPlanId": "gpu-pinned-en-30s-v1-sm75",
+      "medianSeconds": 194.092,
+      "oldProjectMedianSeconds": 216.2185,
+      "planFile": "plans/winner.json"
+    },
+    "native30": {
+      "verifiedOriginalPlanId": "gpu-pinned-en-30s-v1-sm75",
+      "medianSeconds": 194.092,
+      "oldProjectMedianSeconds": 216.2185,
+      "planFile": "plans/native30.json"
+    },
+    "native30-streaming": {
+      "experimental": false,
+      "status": "validated-optional",
+      "planFile": "plans/native30-streaming.json",
+      "entryFile": "implementations/ade666a6cfea4be636cd6c88845aa68d3e1fb353f58063fb9389aa7597e0dc8f/gpu-pipelined-file.cjs",
+      "implementationRevision": "ade666a6cfea4be636cd6c88845aa68d3e1fb353f58063fb9389aa7597e0dc8f"
+    },
+    "native120-complete": {
+      "experimental": false,
+      "status": "validated-optional",
+      "medianSeconds": 204.9925,
+      "sourceCandidate": "bench-native120-stable30-v1",
+      "reductionVsNative30": -0.05616151103600342,
+      "defaultProfile": false,
+      "retainedDespiteSlower": true,
+      "qualityBeforeSpeed": true,
+      "transportSeconds": 120,
+      "innerCallMaximumSeconds": 30,
+      "acousticMaximumSeconds": 20,
+      "encoderFrames": 3000,
+      "planFile": "plans/native120-complete.json",
+      "entryFile": "implementations/75e7b4ee14daa549252ccc9b4b4e2c75f15f0fe972d66c72dad279e084cb43ca/gpu-file.cjs",
+      "implementationRevision": "75e7b4ee14daa549252ccc9b4b4e2c75f15f0fe972d66c72dad279e084cb43ca"
+    }
+  },
+  "sessionEntryFile": "implementations/20de38509125a3b8be1a42278adcb71da273a6b6634ebcb7bb88b9a29a538e3e/operator-session.cjs",
+  "sessionImplementationRevision": "20de38509125a3b8be1a42278adcb71da273a6b6634ebcb7bb88b9a29a538e3e",
+  "sessionPolicy": "stable-gpu-v1-greedy",
+  "hardware": {
+    "system": "Windows x64",
+    "gpu": "NVIDIA RTX 2070",
+    "driverRequired": true
+  },
+  "validation": {
+    "englishOnly": true,
+    "packagedEntryGpuValidated": true,
+    "recognitionMedianSeconds": 194.092,
+    "oldProjectMedianSeconds": 216.2185,
+    "timingScope": "engine-ready-to-final-transcript, excluding preparation/model loading/queue wait",
+    "validationFile": "VENDORED-VALIDATION.json"
+  }
+}

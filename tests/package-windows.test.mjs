@@ -19,6 +19,7 @@ test('the portable package uses an allowlist, carries its runtime and licenses, 
   assert.equal(fs.existsSync(path.join(destination, '.notion-switch')), false); assert.equal(fs.existsSync(path.join(destination, 'research')), false);
   assert.equal(fs.existsSync(path.join(destination, 'bin/node.exe')), true); assert.equal(fs.existsSync(path.join(destination, 'licenses/NODE-LICENSE.txt')), true);
   assert.equal(manifest.requiresOfficialNotion, true); assert.equal(manifest.includesUserData, false); assert.equal(manifest.license, 'MIT');
+  assert.equal(manifest.includesWindowsGpuNative, false); assert.equal(manifest.includesWindowsGpuRuntime, false);
   assert.ok(manifest.files.some(item => item.file === 'NotionSwitch.exe'));
   assert.equal(manifest.files.some(item => /Notion\.exe|private\.txt|deepseek-api-key\.txt/.test(item.file)), false);
   const documents = ['WINDOWS-使用说明.md'], visited = new Set();

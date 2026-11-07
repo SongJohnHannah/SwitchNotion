@@ -4,13 +4,14 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { download } = require('./network.cjs');
 const { run, workerEnvironment, nodeExecutable } = require('./process.cjs');
-const { mediaKinds, atomicJson, hash } = require('./model.cjs');
+const { mediaKinds } = require('./model.cjs');
+const { GpuOperatorClient } = require('../speech/operator-client.cjs');
 const { downloadError } = require('./download-error.cjs');
 function clock(value) { const match = String(value).match(/(\d+):(\d+):(\d+(?:\.\d+)?)/); return match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) : 0; }
 const inputArgs = file => ['-protocol_whitelist', 'file,pipe,crypto,data', '-format_whitelist', 'mov,matroska,webm,avi,asf,mpeg,mpegts,aac,ac3,aiff,wav,ogg,flac,mp3,gif,apng,png_pipe,jpeg_pipe,webp_pipe,bmp_pipe,tiff_pipe,image2,image2pipe,hevc,h264', '-i', file];
 const localVisionProfile = Object.freeze({ endpoint: 'http://127.0.0.1:11434/api/chat', model: 'qwen3.8-27b-vl:latest' });
 class CollectionMedia {
-  constructor({ root, browser, binaries, speech, provider, ollama, ocr, fetchImpl = fetch }) { Object.assign(this, { root, browser, binaries, speech, provider, ollama, ocr, fetchImpl }); this.localVisionQueue = Promise.resolve(); this.ocrQueue = Promise.resolve(); this.ocrSession = null; this.ocrStarting = null; }
+  constructor({ root, browser, binaries, speech, operator = new GpuOperatorClient({ root }), provider, ollama, ocr, fetchImpl = fetch, platform = process.platform, runImpl = run }) { Object.assign(this, { root, browser, binaries, speech, operator, provider, ollama, ocr, fetchImpl, platform }); this.runMedia = runImpl; this.localVisionQueue = Promise.resolve(); this.ocrQueue = Promise.resolve(); this.ocrSession = null; this.ocrStarting = null; }
   get localOcr() { return !!this.ocr; }
   async importLocal(source, directory, { signal, progress = () => {} } = {}) {
     const { checkLocal } = require('./local-media.cjs'); checkLocal(source); signal?.throwIfAborted();
@@ -81,99 +82,113 @@ class CollectionMedia {
     return { path: real, kind: node.kind, bytes: fs.statSync(real).size, ...metadata };
   }
   async prepareUpload(asset, options, limit, { signal, progress = () => {} } = {}) {
-    let file = asset.path; const directory = path.dirname(file);
+    signal?.throwIfAborted();
+    let file = asset.path; const directory = path.dirname(file), transcodes = [];
+    const asParts = files => files.map(file => ({ path: file, kind: asset.kind, ...(transcodes.length ? { transcodes } : {}) }));
+    const gpuCompress = async forceKeyframeSeconds => {
+      const result = await this.gpuVideoForUpload(asset, { quality: options.compress ? options.quality : 'original', forceKeyframeSeconds, signal, progress });
+      transcodes.push(result);
+      if (result.accepted) file = result.path;
+      else progress('GPU 转码后体积没有减小，保留原文件；转码结果与记录已归档。');
+      return result;
+    };
     if (asset.kind === 'video' && options.compress) {
       const height = options.quality === '1080p' ? 1080 : 720;
       const metadata = asset.height ? asset : { ...asset, ...await this.probe(asset.path, signal) };
-      const efficient = options.quality !== 'original' && metadata.height <= height && metadata.width <= height * 2 && asset.bytes * 8 / asset.duration <= (height === 1080 ? 1800000 : 900000);
+      const originalBytes = fs.statSync(asset.path).size;
+      const efficient = options.quality !== 'original' && metadata.height <= height && metadata.width <= height * 2 && originalBytes * 8 / asset.duration <= (height === 1080 ? 1800000 : 900000);
       if (efficient) progress('原视频已达到所选画质且体积较小，保留原文件…');
-      else {
-      progress('正在压缩视频，保留完整时长…');
-      const output = path.join(directory, 'notion-video.mp4');
-      await run(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', ...inputArgs(file),
-        ...(options.quality === 'original' ? [] : ['-vf', `scale=w='min(iw,${height * 2})':h='min(ih,${height})':force_original_aspect_ratio=decrease:force_divisible_by=2`]),
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-y', output], { signal });
-      const checked = await this.probe(output, signal);
-      if (Math.abs(checked.duration - asset.duration) > Math.max(.2, Math.min(1, asset.duration * .001))) throw Error('压缩后时长核验失败，原始文件已保留。');
-      if (fs.statSync(output).size < asset.bytes) file = output;
+      else if (this.platform === 'win32') {
+        const estimatedSegment = asset.duration * limit / originalBytes * .65;
+        await gpuCompress(originalBytes > limit ? Math.max(.25, Math.min(2, estimatedSegment)) : undefined);
+      } else {
+        progress('正在压缩视频，保留完整时长…');
+        const output = path.join(directory, 'notion-video.mp4');
+        await this.runMedia(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', ...inputArgs(file),
+          ...(options.quality === 'original' ? [] : ['-vf', `scale=w='min(iw,${height * 2})':h='min(ih,${height})':force_original_aspect_ratio=decrease:force_divisible_by=2`]),
+          '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-y', output], { signal });
+        const checked = await this.probe(output, signal);
+        if (Math.abs(checked.duration - asset.duration) > Math.max(.2, Math.min(1, asset.duration * .001))) throw Error('压缩后时长核验失败，原始文件已保留。');
+        if (fs.statSync(output).size < asset.bytes) file = output;
       }
     }
     if (asset.kind === 'video' && !['.mp4', '.mov', '.webm'].includes(path.extname(file).toLowerCase())) {
       progress('正在转换视频封装，保留完整音画与清晰度…');
       const output = path.join(directory, 'notion-playback.mp4');
-      await run(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', ...inputArgs(file), '-map', '0:v:0', '-map', '0:a?', '-c', 'copy', '-movflags', '+faststart', '-y', output], { signal });
+      await this.runMedia(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', ...inputArgs(file), '-map', '0:v:0', '-map', '0:a?', '-c', 'copy', '-movflags', '+faststart', '-y', output], { signal });
       const checked = await this.probe(output, signal);
       if (Math.abs(checked.duration - asset.duration) > .5 || asset.audio && !checked.audio) throw Error('视频封装转换后时长或音轨核验未通过，原文件已保留。');
       file = output;
     }
-    if (fs.statSync(file).size <= limit) return [{ path: file, kind: asset.kind }];
+    if (fs.statSync(file).size <= limit) return asParts([file]);
     if (asset.kind === 'image') throw Error('原图超过目标工作区的单文件限制，已保留原图；请选择支持更大附件的工作区。');
     progress('文件超过工作区限制，正在按完整时间顺序分段…');
     let seconds = Math.max(.5, asset.duration * limit / fs.statSync(file).size * .65);
     for (let attempt = 0; attempt < 10; attempt++, seconds /= 2) {
+      if (attempt > 0 && asset.kind === 'video' && this.platform === 'win32') {
+        if (transcodes.some(item => item.forceKeyframeSeconds !== undefined)) throw Error('GPU 视频转码后分段仍超过附件上限；原片和全部记录已保留，未改用 CPU 编码。');
+        const result = await gpuCompress(Math.max(.25, Math.min(2, seconds)));
+        if (!result.accepted) throw Error('GPU 视频压缩未减小体积，无法完成目标限制内分段；原片与记录已保留。');
+        if (fs.statSync(file).size <= limit) return asParts([file]);
+        seconds = Math.max(.5, asset.duration * limit / fs.statSync(file).size * .65);
+      }
       if (asset.duration / seconds > 2000) throw Error('目标工作区的附件上限过小，需要过多分段；原始文件已保留。');
       const dir = path.join(directory, 'parts-' + randomUUID()); fs.mkdirSync(dir);
       const extension = path.extname(file), pattern = path.join(dir, 'part-%04d' + extension);
-      const codec = attempt === 0 || asset.kind !== 'video' ? ['-c', 'copy'] : ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-force_key_frames', `expr:gte(t,n_forced*${seconds})`, '-c:a', 'aac', '-b:a', '128k'];
-      await run(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', ...inputArgs(file), '-map', '0', ...codec, '-f', 'segment', '-segment_time', String(seconds), '-reset_timestamps', '1', pattern], { signal });
+      const codec = attempt === 0 || asset.kind !== 'video' || this.platform === 'win32' ? ['-c', 'copy'] : ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-force_key_frames', `expr:gte(t,n_forced*${seconds})`, '-c:a', 'aac', '-b:a', '128k'];
+      await this.runMedia(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', ...inputArgs(file), '-map', '0', ...codec, '-f', 'segment', '-segment_time', String(seconds), '-reset_timestamps', '1', pattern], { signal });
       const files = fs.readdirSync(dir).sort().map(name => path.join(dir, name));
       if (files.length && files.every(f => fs.statSync(f).size <= limit)) {
         let duration = 0; for (const f of files) duration += (await this.probe(f, signal)).duration;
         if (Math.abs(duration - asset.duration) > Math.max(.25, files.length * .075)) throw Error('媒体分段时长核验未通过，原始文件已保留。');
-        return files.map(p => ({ path: p, kind: asset.kind }));
+        return asParts(files);
       }
     }
     throw Error('媒体分段后仍超过附件限制，原始文件已保留。');
   }
-  async transcript(asset, { signal, progress = () => {}, directory = path.dirname(asset.path) } = {}) {
-    if (!asset.audio && asset.kind !== 'audio') return { text: '', note: '此媒体没有音轨。' };
-    if (!this.speech) throw Error('本地转写引擎未配置，请在 Switch Notion 的离线语音中检测并准备。');
-    if (!path.isAbsolute(directory)) throw Error('转写记录目录须为绝对路径。');
-    fs.mkdirSync(directory, { recursive: true });
-    const file = path.join(directory, 'transcript-progress.json'), stat = fs.statSync(asset.path);
-    const identity = hash(JSON.stringify([asset.bytes || stat.size, stat.mtimeMs, asset.duration, this.speech.status?.().model || 'configured', 'minute-checkpoints-10s-inference']));
-    let checkpoint = { identity, chunks: {} };
-    try { const saved = JSON.parse(fs.readFileSync(file, 'utf8')); if (saved.identity === identity && saved.chunks && typeof saved.chunks === 'object') checkpoint = saved; } catch {}
-    this.speech.retain?.();
-    const device = this.speech.status?.().device, label = device === 'cuda' ? 'NVIDIA GPU' : '本机 CPU';
-    const record = event => fs.appendFileSync(path.join(directory, 'transcript-events.jsonl'), JSON.stringify({ at: new Date().toISOString(), device, model: this.speech.status?.().model, ...event }) + '\n');
-    try {
-      await this.speech.probe({ signal });
-      for (let start = 0; start < asset.duration; start += 60) {
-      if (typeof checkpoint.chunks[start] === 'string') {
-        if (!transcriptQualityIssue(checkpoint.chunks[start])) continue;
-        record({ event: 'invalid-checkpoint', start, text: checkpoint.chunks[start] });
-      }
-      progress(`正在生成逐字稿（${label}）：${Math.floor(start / 60)} / ${Math.ceil(asset.duration / 60)} 分钟`);
-      const wav = path.join(directory, 'speech-' + start + '.wav');
-      try {
-        await run(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', '-ss', String(start), ...inputArgs(asset.path), '-t', '60', '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-y', wav], { signal });
-        const text = await this.transcribeChunk(fs.readFileSync(wav), { signal, progress,
-          onResult: result => record({ ...result, start: start + (result.start || 0) }),
-          onProgress: value => progress(`正在生成逐字稿（${label}）：${Math.floor((start + Math.min(60, asset.duration - start) * value) / asset.duration * 100)}% · ${Math.floor(start / 60)} / ${Math.ceil(asset.duration / 60)} 分钟`) });
-        record({ event: 'minute-result', start, text });
-        if (transcriptQualityIssue(text)) throw Error('逐字稿出现异常重复标点，已保留原始记录并暂停处理。');
-        checkpoint.chunks[start] = text.trim(); checkpoint.backend = device; checkpoint.chunkBackends ||= {}; checkpoint.chunkBackends[start] = device; atomicJson(file, checkpoint);
-      } finally { try { fs.unlinkSync(wav); } catch {} }
-      }
-    } finally { this.speech.release?.(); }
-    const paragraphs = Object.entries(checkpoint.chunks).sort(([a], [b]) => Number(a) - Number(b)).map(([, text]) => text).filter(Boolean);
-    return { text: paragraphs.join('\n\n'), note: !paragraphs.length ? '未识别到清晰语音。' : '', device };
+  async gpuVideoForUpload(asset, { quality = 'original', forceKeyframeSeconds, signal, progress }) {
+    const source = fs.realpathSync(asset.path), before = fs.statSync(source);
+    const outputDirectory = path.join(this.root || path.dirname(source), 'collection', 'video-transcodes');
+    progress('正在使用 NVIDIA GPU 压缩视频' + (quality === 'original' ? '（保持原尺寸，有损编码）' : '') + '…');
+    const result = await this.operator.transcodeVideo({ source, outputDirectory, quality, hardwareDecode: true,
+      ...(forceKeyframeSeconds !== undefined ? { forceKeyframeSeconds } : {}), signal,
+      onProgress: event => {
+        if (event.stage === 'waiting-gpu') progress('视频 GPU 转码正在等待其他 GPU 任务释放资源…');
+        else if (event.stage === 'transcoding') progress(`NVIDIA GPU 视频压缩：${Math.floor((event.fraction || 0) * 100)}%`);
+      } });
+    signal?.throwIfAborted();
+    if (!result?.complete || result.engine !== 'h264_nvenc' || !/_cuvid$/.test(result.decodeEngine || '') || typeof result.path !== 'string' || !path.isAbsolute(result.path)) throw Error('GPU 视频压缩未返回有效的 NVENC/NVDEC 结果；原片已保留，未改用 CPU。');
+    if (forceKeyframeSeconds !== undefined && (result.nvenc?.forcedIdr !== true || result.nvenc.forceKeyframeSeconds !== forceKeyframeSeconds)) throw Error('GPU 视频分段所需的关键帧间隔未得到实际执行确认，原片与记录已保留。');
+    const output = fs.realpathSync(result.path), base = fs.realpathSync(outputDirectory), relative = path.relative(base, output);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || output === source || !fs.statSync(output).isFile()) throw Error('GPU 视频输出不在本次独立归档目录，原片已保留。');
+    const checked = await this.probe(output, signal), after = fs.statSync(source);
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || !checked.video || asset.audio && !checked.audio ||
+        Math.abs(checked.duration - asset.duration) > Math.max(.2, Math.min(1, asset.duration * .001))) throw Error('GPU 压缩后时长、音轨或原片身份核验失败，原片与记录已保留。');
+    const bytes = fs.statSync(output).size;
+    if (!bytes) throw Error('GPU 视频压缩结果为空，原片已保留。');
+    return { ...result, path: output, bytes, source,
+      ...(forceKeyframeSeconds !== undefined ? { forceKeyframeSeconds: result.nvenc.forceKeyframeSeconds } : {}), accepted: bytes < before.size,
+      note: quality === 'original' ? 'original 表示保持原尺寸，采用有损 NVENC 编码，并非无损。' : '采用有损 NVENC 编码；原片与转码记录保留。' };
   }
-  async transcribeChunk(wav, { signal, progress = () => {}, onProgress = () => {}, onResult = () => {} }) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try { return await this.speech.transcribeWav({ wav, language: 'auto', chunkSeconds: 10, signal, onProgress,
-        onResult: result => onResult({ ...result, attempt: attempt + 1 }) }); }
-      catch (error) {
-        signal?.throwIfAborted();
-        onResult({ event: 'error', attempt: attempt + 1, error: error.message, code: error.code || null, workerExit: this.speech.status?.().lastWorkerExit || null });
-        if (error.code !== 'SPEECH_UNRELIABLE' && !/进程已退出|无法向离线|转写超时/.test(error.message)) throw error;
-        if (!attempt) { progress('本地转写引擎中断或结果异常，正在恢复当前音频段…'); continue; }
-        if (error.code === 'SPEECH_UNRELIABLE') throw Error('转写连续出现异常重复标点，已保留进度和原始识别记录；AI 总结已暂停。', { cause: error });
-        if (this.speech.status?.().device !== 'cuda') throw error;
-        throw Error('GPU 转写连续中断，已保留进度并停止自动处理；请检查 GPU 运行库后重试。' + error.message, { cause: error });
-      }
-    }
+  async transcript(asset, { signal, progress = () => {}, directory, language = 'auto', profile = 'winner', allowExperimental = false } = {}) {
+    signal?.throwIfAborted();
+    if (!asset.audio && asset.kind !== 'audio') return { text: '', note: '此媒体没有音轨。' };
+    if (directory && !path.isAbsolute(directory)) throw Error('转写记录目录须为绝对路径。');
+    progress('正在准备独立 GPU 逐字稿…');
+    const result = await this.operator.transcribeFile({ source: asset.path, outputDirectory: directory, language, profile, allowExperimental, signal,
+      onProgress: event => {
+        if (event.stage === 'waiting-gpu') progress('独立 GPU 转写正在等待其他 GPU 任务释放资源…');
+        else if (event.stage === 'transcribing') progress(`正在生成逐字稿（独立 NVIDIA GPU）：${Math.floor((event.seconds || 0) / 60)} / ${Math.ceil((event.totalSeconds || asset.duration || 0) / 60)} 分钟`);
+        else if (event.stage === 'preparing') progress('正在准备独立 GPU 转写音轨…');
+      } });
+    signal?.throwIfAborted();
+    if (!result?.complete || result.device !== 'cuda' || typeof result.text !== 'string') throw Error('独立 GPU 算子未完成整份音轨转写；AI 总结已暂停。');
+    const issue = transcriptQualityIssue(result.text);
+    if (issue) throw Object.assign(Error(issue + '；AI 总结已暂停。'), { code: 'SPEECH_UNRELIABLE' });
+    return { text: result.text, note: result.text.trim() ? '' : '未识别到清晰语音。', device: result.device,
+      operator: { profile: result.profile || profile, language, allowExperimental, sourceIdentity: result.sourceIdentity, outputDirectory: result.outputDirectory || directory,
+        transcriptFile: result.transcriptFile, eventsFile: result.eventsFile, checkpointFile: result.checkpointFile,
+        transcriptSha256: result.transcriptSha256, validationScope: result.validationScope, complete: result.complete } };
   }
   async vision(asset, options = {}) {
     if (options.engine !== 'local') return this.runVision(asset, options);

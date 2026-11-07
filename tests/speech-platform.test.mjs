@@ -22,6 +22,27 @@ test('Windows GPU and M1 CPU profiles share a multilingual offline interface; In
   }
 });
 
+test('mixed INT8/FP16 is an explicit CUDA profile passed to the worker and retained across model selection', () => {
+  const p = createSpeechPlatform({ id: 'win32', arch: 'x64', env: {}, computeType: 'int8_float16' });
+  assert.equal(p.profile.device, 'cuda'); assert.equal(p.profile.computeType, 'int8_float16');
+  assert.equal(p.profile.hardwareLabel, 'NVIDIA GPU');
+  assert.equal(p.environment('C:\\state').NOTION_SWITCH_SPEECH_COMPUTE_TYPE, 'int8_float16');
+  assert.equal(p.withModel('large-v3-turbo').profile.computeType, 'int8_float16');
+  const runtime = p.normalizeRuntime({ pythonExecutable: 'C:\\python.exe', modelDirectory: 'C:\\model',
+    device: 'cuda', computeType: 'int8_float16', model: 'medium' });
+  assert.equal(runtime.device, 'cuda'); assert.equal(runtime.computeType, 'int8_float16');
+  assert.throws(() => p.normalizeRuntime({ ...runtime, device: 'cpu' }), e => e.code === 'SPEECH_RUNTIME_MISMATCH');
+});
+
+test('CPU INT8 profiles never accept a mixed CUDA precision or advertise CUDA', () => {
+  assert.throws(() => createSpeechPlatform({ id: 'win32', arch: 'x64', device: 'cpu', computeType: 'int8_float16' }), /精度/);
+  assert.throws(() => mac({ computeType: 'int8_float16' }), /精度/);
+  const cpu = createSpeechPlatform({ id: 'win32', arch: 'x64', device: 'cpu', env: {} });
+  assert.equal(cpu.profile.device, 'cpu'); assert.equal(cpu.profile.computeType, 'int8');
+  assert.equal(cpu.environment('C:\\state').NOTION_SWITCH_SPEECH_DEVICE, 'cpu');
+  assert.equal(cpu.environment('C:\\state').NOTION_SWITCH_SPEECH_COMPUTE_TYPE, undefined);
+});
+
 test('M1 discovery uses native macOS paths and ignores copied Windows settings and credentials', () => {
   const p = mac({ env: { PATH: '/opt/homebrew/bin:/usr/bin', HOME: '/Users/test', DEEPSEEK_API_KEY: 'fixture',
     NOTION_TOKEN: 'fixture', CUDA_PATH: 'C:\\cuda', PYTHONPATH: '/untrusted' }, fsImpl: {

@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "createdAt": "2026-11-06T12:39:08.201871+00:00",
+  "target": "D:/www/claude/transcriber",
+  "gpuModelExecuted": false,
+  "testsPassed": 22,
+  "files": [
+    {
+      "path": "core.py",
+      "deploy": true,
+      "originalSha256": "c037e79270e4694416e2e9d329aaff68f830bc908e9db38a635487872e72b2be",
+      "stagedSha256": "924e1bef2ee2fcc03a2fb303af4d5c01ba539c2c96b724d4622134754165e11d"
+    },
+    {
+      "path": "app.py",
+      "deploy": true,
+      "originalSha256": "0caf1a9f2213edb7997a2f8477248db8771742cd60db458dff3b8a4f55dd26c0",
+      "stagedSha256": "ebbfd837bf5eb5cfcebf53ee65a1ff56e75ca96c64516d5dfa1bf6cdbc78e67a"
+    },
+    {
+      "path": "gpu_operator.py",
+      "deploy": true,
+      "originalSha256": null,
+      "stagedSha256": "a58a9e749d3e381d73de9c1a606efc2353a4b972a1d95ff7dca605b220db5c3c"
+    },
+    {
+      "path": "supervisor.py",
+      "deploy": true,
+      "originalSha256": "ab3a0c3f4b5b1ac2bb2c01438295e861fc895a0f08f83976a4db3d2c03f10c96",
+      "stagedSha256": "53ee047602c0dc72cd1ed78b998f4e0498ff255ad3439480ab485583f023ddfa"
+    },
+    {
+      "path": "transcribe_file.py",
+      "deploy": true,
+      "originalSha256": null,
+      "stagedSha256": "0ecf772fa285fcf98abda126afa5f0fbe2f7ca7dcb1c9b97fe1f95454f7b0d2b"
+    },
+    {
+      "path": "启动逐字稿.bat",
+      "deploy": true,
+      "originalSha256": "0cf6d8b52be84050dca93d7ddefd52695cbec679e3767cd1e0fb8364a247c83c",
+      "stagedSha256": "a5232f95f2b4b467445788569b0fee54357d6d412d1b4e3b073dccae40fa684e"
+    },
+    {
+      "path": "templates/index.html",
+      "deploy": true,
+      "originalSha256": "3177a3278571c6e2533c30f103835a3987c2ac88f1207170cdf7b2f61283e459",
+      "stagedSha256": "e63f24009213bed36d87a1adde5130c41d5aee3929d4de743336295253ed5151"
+    },
+    {
+      "path": "tests/test_task_lifecycle.py",
+      "deploy": true,
+      "originalSha256": "edcffc2caccc0595720e3c39768b5e4c05b1cad74d91c58f69317189f030ac61",
+      "stagedSha256": "dee3abd472974dfd8015f0a91e16464ded82a0d5f18894e7135a90244e050fc4"
+    },
+    {
+      "path": "tests/test_gpu_operator.py",
+      "deploy": true,
+      "originalSha256": null,
+      "stagedSha256": "636117472b07dfbee59658293239f189027bf97e61ffdaa248f5ca95b4a61941"
+    },
+    {
+      "path": "tests/test_operator_integration.py",
+      "deploy": true,
+      "originalSha256": null,
+      "stagedSha256": "65119f7c95d44bd8643a362f97a0300a1b22491f7360b393745b2d951bd784a8"
+    }
+  ]
+}

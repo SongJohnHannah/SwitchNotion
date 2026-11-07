@@ -42,6 +42,8 @@
 
 Windows 支持 x64。需要本机安装官方 [Notion 桌面版](https://www.notion.com/desktop)。
 
+Windows 离线语音和 GPU 视频转码使用本项目内的算子：代码与自定义 Native 库随 Git 保存，模型、Python、CUDA 和 FFmpeg 安装在 `.notion-switch/windows-gpu-operator/`，不默认依赖下载目录中的外部包。首次准备需显式导入已准备的资源；说明见 [GPU 算子用法](docs/GPU-OPERATOR-README.md)。Mac 继续原有语音安装与 CPU 路线。
+
 桌面安装、启动、更新校验和登录策略已封装到平台接口，自动按本机系统查找 Notion；接入说明见 [平台接口](docs/PLATFORM-INTERFACE.md)。
 
 如果使用迁移包：
@@ -153,7 +155,7 @@ Windows 迁移包构建产物保存在 `dist/`，不创建桌面文件。配置�
 
 本机聊天记录不会同步到 Notion 云端或其他设备。模型服务目前仅接入 DeepSeek，联网搜索复用同一份密钥。
 
-配置的“离线语音”支持 Medium / Large-v3 Turbo 模型选择、缺失组件自动下载和直接麦克风录音测试。Windows 使用 NVIDIA CUDA FP16，M1 等 Apple Silicon Mac 使用 CPU INT8；本轮没有新增 Mac 硬件推理或真人录音验收。原生录音按片段离线识别，支持尾段收尾和去重。停止后默认把转录文字与手写笔记交给 DeepSeek，生成原生“摘要”标签并读回核验；原转录、手写笔记保留。可在配置关闭自动摘要，仅使用本机转写。`npm run package:speech` 可导出不包含模型、运行环境或用户资料的独立转写模块。详见 [跨平台转写接口](docs/SPEECH-INTERFACE.md)、[原生速记适配](docs/OFFLINE-SPEECH.md) 和 [摘要接口](docs/MEETING-SUMMARY-INTERFACE.md)。
+配置的“离线语音”提供直接麦克风录音测试。Windows 固定项目内 Large-v3 Turbo / Native30 CUDA FP16 算子，缺资源时提示显式准备；Mac 保留 Medium / Turbo 选择、自动准备和 CPU INT8 路线。本轮没有新增 Mac 硬件推理或真人录音验收。原生录音按片段离线识别，保留尾段；停止后可把转录与手写笔记交给 DeepSeek 生成原生“摘要”并读回核验，原文保留，也可关闭自动摘要。`npm run package:speech` 导出兼容语音模块，不包含大模型、运行环境或用户资料。详见 [跨平台接口](docs/SPEECH-INTERFACE.md)、[原生速记](docs/OFFLINE-SPEECH.md) 和 [摘要接口](docs/MEETING-SUMMARY-INTERFACE.md)。
 
 ## 许可证
 

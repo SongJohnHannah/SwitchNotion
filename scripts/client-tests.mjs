@@ -20,7 +20,9 @@ export async function runProjectTests({ project, root, timeoutMs = 480000, perTe
   // Nested test runs inherit the parent runner's child context and would exit early.
   delete env.NODE_TEST_CONTEXT;
   env.NODE_NO_WARNINGS = '1';
-  const child = spawnImpl(process.execPath, ['--test', '--test-timeout=' + perTestMs, ...files], {
+  // Git/SQLite fixture files saturate Windows I/O when every CPU starts a
+  // separate test process. Keep the same case set and bounded concurrency as npm test.
+  const child = spawnImpl(process.execPath, ['--test', '--test-concurrency=2', '--test-timeout=' + perTestMs, ...files], {
     cwd: project, env, windowsHide: true, stdio: ['ignore', descriptor, descriptor]
   });
   fs.closeSync(descriptor);

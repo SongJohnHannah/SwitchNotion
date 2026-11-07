@@ -4,16 +4,17 @@ const os = require('node:os');
 const models = require('./models.json');
 
 function createSpeechPlatform({ id = process.platform, arch = process.arch, env = process.env, device = 'auto',
-  home = os.homedir(), fsImpl = fs, model = 'medium' } = {}) {
+  home = os.homedir(), fsImpl = fs, model = 'medium', computeType = 'auto' } = {}) {
   if (!Object.hasOwn(models, model)) throw Error('本机语音模型选择无效。');
   if (!['auto', 'cpu'].includes(device)) throw Error('语音计算设备选择无效。');
   const windows = id === 'win32' && arch === 'x64';
   const apple = id === 'darwin' && arch === 'arm64';
   const cuda = windows && device !== 'cpu';
+  if (!(cuda ? ['auto', 'float16', 'float32', 'int8_float16'] : ['auto', 'int8']).includes(computeType)) throw Error('语音计算精度不适用于当前设备。');
   const paths = id === 'win32' ? path.win32 : path.posix;
   const profile = Object.freeze({ platform: id, architecture: arch, supported: windows || apple,
     provider: 'faster-whisper', model, device: cuda ? 'cuda' : 'cpu',
-    computeType: cuda ? 'float16' : 'int8', cpuThreads: 4, offline: true,
+    computeType: cuda ? (computeType === 'auto' ? 'float16' : computeType) : 'int8', cpuThreads: 4, offline: true,
     hardwareLabel: cuda ? 'NVIDIA GPU' : apple ? 'Apple Silicon CPU' : windows ? '本机 CPU' : '不支持的平台' });
   function requireSupported() {
     if (!profile.supported) {
@@ -64,10 +65,11 @@ function createSpeechPlatform({ id = process.platform, arch = process.arch, env 
       PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1',
       HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1', HF_HUB_DISABLE_TELEMETRY: '1' };
     if (cuda) value.CUDA_CACHE_PATH = paths.join(root, 'speech/cuda-cache');
+    if (cuda) value.NOTION_SWITCH_SPEECH_COMPUTE_TYPE = profile.computeType;
     if (windows && !cuda) value.NOTION_SWITCH_SPEECH_DEVICE = 'cpu';
     return value;
   }
   return Object.freeze({ profile, requireSupported, normalizeRuntime, candidates, environment,
-    withModel: next => createSpeechPlatform({ id, arch, env, home, fsImpl, model: next, device }) });
+    withModel: next => createSpeechPlatform({ id, arch, env, home, fsImpl, model: next, device, computeType }) });
 }
 module.exports = { createSpeechPlatform };

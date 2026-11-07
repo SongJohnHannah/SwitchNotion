@@ -23,7 +23,7 @@ test('media acquisition preserves the worker failure instead of replacing it wit
   t.after(() => { assert.equal(path.dirname(fs.realpathSync(directory)), fs.realpathSync(parent)); fs.rmSync(directory, { recursive: true }); });
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(new URL('../src/collection/media.cjs', import.meta.url), 'utf8'), {
-    module, __dirname: path.resolve(import.meta.dirname, '../src/collection'), URL, fetch: () => {},
+    module, __dirname: path.resolve(import.meta.dirname, '../src/collection'), URL, fetch: () => {}, process: { platform: 'win32' },
     require: name => name === './process.cjs' ? { nodeExecutable: () => '/node', workerEnvironment: () => ({}),
       run: async () => ({ stdout: JSON.stringify({ ok: false, files: [], error: 'HTTP Error 502: Bad Gateway' }) }) } : require(name)
   });

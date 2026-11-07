@@ -1,12 +1,12 @@
 # Windows 离线语音转写
 
-当前实现使用 faster-whisper 1.2.1、CTranslate2 4.8.1，可在配置中选择 Whisper Medium（约 1.5 GB）或 Large-v3 Turbo（约 1.6 GB）。Windows x64 使用 NVIDIA CUDA GPU / FP16，均已实测；Apple Silicon Mac（M1 等）使用 CPU INT8 后端，已验证中英文合成音频与原生会议的短录音开始、停止和收尾，长会议仍需单独验收。稳定接口、迁移准备和独立模块分发见 [跨平台转写接口](SPEECH-INTERFACE.md)。
+Windows x64 的录音、录音测试、文件转写和 GPU 视频转码使用本项目内的算子代码与资源。识别固定 Whisper Large-v3 Turbo、Native30 CUDA FP16；本项目的这些入口共用本地资源根的 GPU 租约。Apple Silicon Mac（M1 等）继续使用原 CPU INT8 后端、安装流程及 Medium / Turbo 模型选择，不加载 Windows DLL。接入方式见 [项目内 GPU 算子](GPU-OPERATOR-INTEGRATION.md)，兼容接口见 [跨平台转写接口](SPEECH-INTERFACE.md)。
 
-配置窗口的“离线语音”提供模型选择、检测、直接录音测试、启用原生速记和释放资源。选择模型后点击“保存设置”，会先准备所选模型，再切换；准备失败保留此前配置。麦克风、系统音频和录音测试统一使用所选模型。已有环境优先复用；检测不到时自动下载独立 Python、faster-whisper、所选模型及必要运行库。自动下载保存在本机状态目录，不修改原有 Python，不依赖 Codex。首次准备联网，识别阶段不联网。录音测试由用户点击开始，停止后转写，最多 60 秒。
+配置窗口的“离线语音”提供检测、直接录音测试、启用原生速记和释放资源。Windows 模型锁定 Turbo；代码在 `src/speech/windows-operator/`，本机 Python、模型、CUDA 和 FFmpeg 在 `.notion-switch/windows-gpu-operator/`。路径按项目与状态目录解析，不默认访问下载目录中的旧独立包，也不通过旧 provider 安装第二套 GPU 环境。界面分别显示“GPU 资源已就绪”和“GPU 模型已载入”。新 checkout 缺资源时按 [准备说明](GPU-OPERATOR-README.md) 运行 `prepare-windows-gpu-runtime.mjs --source <绝对目录>`，不承诺自动联网下载。Mac 保留原有自动准备流程。录音测试由用户点击开始，停止后转写，最多 60 秒。
 
 原生转录按双语语音输入处理：中文输出中文，英文输出英文，自动识别语言，不翻译、润色或补写原话。Notion 的首选输入语言不再将本机会议锁定为单一语言。DeepSeek 摘要单独生成，不覆盖转录文字。
 
-本机配置保存在 `.notion-switch/speech.local.json`；保存平台、架构、程序、模型及 Windows DLL 位置，不包含模型服务 API Key。不把本机配置、音频、模型缓存或登录资料放入源码分发包。换电脑后需在当地准备对应离线组件并重新检测；Mac 不沿用 Windows 路径。
+Windows 的程序与模型路径从项目内资源根和锁定的相对清单解析；旧 `.notion-switch/speech.local.json` 不再决定这条算子的外部安装位置，Mac 兼容路径仍保留自己的本机配置与发现规则。源码仓库包含算子代码、自定义 Native DLL/PYD 及资源锁，不包含大模型、完整 Python/CUDA、视频、转录或登录资料。Windows 分发包可包含已校验的项目内资源；Mac 分发包不携带这套 Windows GPU 资源。
 
 配置提供“转写系统播放声音”开关，默认开启：保留麦克风与系统音频转录，视频、网页和提示音中的讲话也属于系统声音。关闭后采用只录麦克风模式；在已审核的原生采集入口禁用系统声音，并在本地音频入口拒收系统音频帧，不能只在混音后尝试删掉文字。切换后须刷新 Notion 页面再开始录音；未刷新前不颁发新的录音连接令牌，防止旧采集设置继续使用。
 
@@ -25,8 +25,13 @@
 ## 独立调用接口
 
 ```js
-const { SpeechProvider } = require('./src/speech-provider.cjs');
-const provider = new SpeechProvider({ root: absoluteLocalStateDirectory });
+const provider = process.platform === 'win32'
+  ? new (require('./src/speech/operator-session-client.cjs').OperatorSessionClient)({
+      root: absoluteProjectStateDirectory, // 本项目的 .notion-switch 绝对路径
+    })
+  : new (require('./src/speech-provider.cjs').SpeechProvider)({
+      root: absoluteLocalStateDirectory,
+    });
 try {
   await provider.probe();
   const text = await provider.transcribe({
@@ -35,13 +40,13 @@ try {
     signal
   });
 } finally {
-  provider.close();
+  await provider.close();
 }
 ```
 
-`transcribeWav({ wav, language, signal })` 接受不超过 10 分钟的 PCM16/Float32 WAV，并逐段识别。`retain()` / `release()` 可在连续录音期间保留模型；空闲 20 秒后结束进程释放显存。`close()` 立即取消自己的工作进程，不影响原有 Whisper 程序。
+`transcribeWav({ wav, language, signal })` 接受 PCM16/Float32 WAV 并逐段识别，输入限制见 [接口说明](SPEECH-INTERFACE.md)。Windows 会话用 `retain()` / `await release()` 保留连续录音模型，最后释放时先等待请求和 worker 关闭，再释放本项目资源根的 GPU 租约；没有保留者时及时释放模型。Mac 旧 provider 保留原空闲释放策略。`await close()` 取消自己的请求并等待清理，不关闭其他项目的 Whisper 程序。
 
-Node 与 Python 通过版本化 JSONL 协议传递内存中的音频，不创建录音文件。工作进程启用 Hugging Face 离线模式，只从本机路径载入模型，并禁止 Python socket 连接；不传入 DeepSeek/Notion/Codex 凭据。Windows GPU 不可用会报错；Mac 自动选择 CPU INT8。均不静默改为云端。
+Node 与 Python 通过版本化 JSONL 协议传递内存音频，原始识别结果与音频身份记录持久保存；会议录音保存由单独开关控制。工作进程从本机路径载入模型，不接收 DeepSeek/Notion/Codex 凭据。Windows GPU 不可用会报错；Mac 选择原有 CPU INT8 路径，均不静默切换云端识别。
 
 ## Notion 原生速记适配
 
@@ -55,7 +60,7 @@ Mac 官方客户端升级改为手动在配置 → 版本与更新 → “同步
 
 保留工作区限制及管理员禁止转写的设置。客户端继续使用原有记录写入逻辑；本机 ASR 不直接调用 Notion 内容 API。点击结束先同步调用原生录音器停止采集、释放麦克风与系统音源，清除采集状态；之后通过原生编码队列的 `afterFlush()` 等待已有编码，再发送不足一帧的尾音，然后进入原生 drain。转写和尾音等待不能延长实际录音。预收尾最多等待 1.5 秒，异常时仍调用原生停止；迟到的编码结果不再发送。上一录音迟到的停止操作不能关闭新录音。保留原生 12 秒 drain 时限和 30 秒连接看门狗，不额外等待摘要或 WebSocket 关闭。未知版本未适配收尾时不启动录音。出错或取消立即结束，已确认的重复停止不会重复提交尾音。累计音频积压上限为十分钟，达到上限拒绝新帧前不清空已接收音频。
 
-这是按短片段更新的转写，不是严格逐字的流式识别。停顿按固定 20 毫秒音频小窗检测，不受传输包大小影响；至少积累约 4 秒并遇到约 0.8 秒停顿时处理，连续说话达到约 20 秒时分段，停止时处理剩余短片段。分段完整保留采样和时间偏移，不裁掉停顿或尾音。原生会议、配置录音测试和自动语言接口均按声学片段重新识别语言，采用 `transcribe` 任务。自动双语模式不将上一段文字或中文提示喂给下一段，避免跨语言提示干扰。独立 SDK 的显式 `zh` / `en` 请求仍支持同音源最多 120 字的可靠上下文。全部录音使用本地 VAD、beam search 和低置信度解码回退，不做针对某个词的替换。实际延迟还包含模型首次加载、片段积累和推理时间，专有名词、重叠说话、无停顿的快速语言切换和噪声仍可能识别错误。
+这是按短片段更新的转写，不是严格逐字的流式识别。停顿按固定 20 毫秒音频小窗检测，不受传输包大小影响；至少积累约 4 秒并遇到约 0.8 秒停顿时处理，连续说话达到约 20 秒时分段，停止时处理剩余短片段。分段保留采样和时间偏移。原生会议、配置录音测试和自动语言接口均使用 `transcribe` 任务。Windows 冻结方案为同步 greedy1、零温度，会话不把上一段文字作为下一段提示；Mac 兼容 provider 保留原有解码与可靠上下文规则。不做针对某个词的替换。实际延迟还包含载模、片段积累、排队和推理；专有名词、重叠说话、快速语言切换和噪声仍可能识别错误。
 
 识别使用原先的单次解码策略，不按 VAD 时间戳再次裁切、补识别或拼接额外文字。语音时长与文本时间戳并不能证明漏词；此前的自动补识别已撤回，避免对片段反复推理造成延迟和错误内容。
 
@@ -65,7 +70,7 @@ Mac 官方客户端升级改为手动在配置 → 版本与更新 → “同步
 
 ## 验证与实机边界
 
-自动测试覆盖协议握手、尾段处理、重复请求、错误输入、取消、进程复用、空闲释放和原生代码兼容检查。真实 GPU 已完成中文、英文文件转写。Notion 麦克风录音的实际控件体验仍须单独验收，协议测试不代表已完成一次真人会议录制。
+本次项目内资源迁移的自动测试覆盖路径解析、资源隔离、协议和打包契约；便携测试不代表新的 GPU 整片或 Mac 真机验收。既有 Windows 中文、英文文件及同采访实时 PCM 记录保留，见 [历史对照](TRANSCRIBER-COMPARISON.md)。Notion 麦克风控件、长会议和识别准确率仍需分别验收。以下 Mac 记录是既有路线的历史记录，本次没有重新在 Mac 机器上验证，也没有将 Windows 算子迁入 Mac。
 
 Mac 本机以当前新版模块和已有中英文合成音频连续完成了十次连接、转写、停止；同时将旧的进程级就绪标志设为未就绪，确认页面级版本标记仍可启动，重复停止未新增转录。另测当前原生停止包装连续三次释放采集并提交完整尾段。这些是合成音频与协议验收，不代表十次真人麦克风实录。
 

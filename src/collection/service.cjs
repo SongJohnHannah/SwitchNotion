@@ -229,8 +229,13 @@ class CollectionService extends EventEmitter {
       work.push((async () => {
         try {
           const current = await asset; resource.asset = current; save();
-          if (job.options.transcribe && ['audio', 'video'].includes(node.kind) && !analysis.transcript) {
+          const legacyTranscript = this.media.operator && current.audio !== false && analysis.transcript && !analysis.transcript.operator?.complete;
+          if (job.options.transcribe && ['audio', 'video'].includes(node.kind) && (!analysis.transcript || legacyTranscript)) {
             markProcessing();
+            if (legacyTranscript) {
+              (analysis.transcriptHistory ||= []).push({ at: new Date().toISOString(), reason: 'standalone-gpu-operator-upgrade', result: analysis.transcript });
+              delete analysis.transcript; save();
+            }
             try { analysis.transcript = await this.media.transcript(current, { signal, progress: nodeProgress }); }
             catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
           }

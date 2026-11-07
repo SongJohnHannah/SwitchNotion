@@ -1,0 +1,95 @@
+/// <reference types="node" />
+
+export type SpeechLanguage = 'auto' | 'zh' | 'en';
+export type SpeechModel = 'medium' | 'large-v3-turbo';
+export interface LocalSpeechRuntime {
+  model?: SpeechModel;
+  pythonExecutable: string;
+  modelDirectory: string;
+  dllDirectory?: string | null;
+  dllDirectories?: string[];
+  platform?: 'win32' | 'darwin';
+  architecture?: 'x64' | 'arm64';
+  device?: 'cuda' | 'cpu';
+  computeType?: 'float16' | 'float32' | 'int8_float16' | 'int8';
+  cpuThreads?: number;
+}
+export interface SpeechStatus {
+  protocolVersion: 1;
+  provider: 'faster-whisper';
+  model: SpeechModel;
+  platform: string;
+  architecture: string;
+  device: 'cuda' | 'cpu';
+  computeType: 'float16' | 'float32' | 'int8_float16' | 'int8';
+  hardwareLabel: string;
+  offline: true;
+  supported: boolean;
+  configured: boolean;
+  ready: boolean;
+  loaded: boolean;
+  busy: boolean;
+  languages: SpeechLanguage[];
+}
+export interface SpeechOptions {
+  /** Absolute, writable, per-computer state directory; never distribute it. */
+  root: string;
+  runtime?: LocalSpeechRuntime;
+  model?: SpeechModel;
+  idleMs?: number;
+  timeoutMs?: number;
+}
+export interface SpeechRecognitionResult {
+  text: string;
+  segments?: { start: number; end: number; text: string }[];
+  language?: string;
+  contextText?: string;
+  elapsedMs?: number;
+}
+export type SpeechResultObserver = (result: SpeechRecognitionResult) => void | Promise<void>;
+export class SpeechProvider {
+  constructor(options: SpeechOptions);
+  runtime: LocalSpeechRuntime | null;
+  readonly leases: number;
+  status(): SpeechStatus;
+  configure(): Promise<LocalSpeechRuntime>;
+  probe(options?: { signal?: AbortSignal }): Promise<SpeechStatus>;
+  /** 16 kHz mono Float32 little-endian PCM, normalized [-1, 1], at most 60 s. */
+  transcribe(options: { pcm: Buffer; language?: SpeechLanguage; context?: string; signal?: AbortSignal; onResult?: SpeechResultObserver }): Promise<string>;
+  /** Reliable context is scoped by the caller to the same meeting and audio source. */
+  transcribeDetailed(options: { pcm: Buffer; language?: SpeechLanguage; context?: string; signal?: AbortSignal; onResult?: SpeechResultObserver }):
+    Promise<{ text: string; context: string; language?: string }>;
+  /** PCM16 / Float32 WAV, up to 10 minutes and 128 MiB; progress is 0..1. */
+  transcribeWav(options: { wav: Buffer; language?: SpeechLanguage; signal?: AbortSignal;
+    chunkSeconds?: number; onProgress?: (fraction: number) => void;
+    onResult?: (result: SpeechRecognitionResult & { start: number; duration: number }) => void | Promise<void> }): Promise<string>;
+  transcribeRecording(options: { audio: Buffer; signal?: AbortSignal }): Promise<string>;
+  retain(): void;
+  release(): void;
+  close(): Promise<void>;
+}
+export function decodeWav(wav: Buffer): { pcm: Buffer; sampleRate: number; duration: number };
+export interface GpuFilePlan {
+  id: string;
+  computeType: 'float16' | 'float32' | 'int8_float16';
+  allocator: 'cub_caching' | 'cuda_malloc_async';
+  fp16Gemm: boolean;
+  chunkSeconds: 10 | 20 | 30 | 60 | 90 | 120 | 240;
+  resetEveryChunks: number;
+  runtimeVariant: 'bundled' | 'pinned-cudnn' | 'sm75-native';
+  launchBlocking: boolean;
+  beamSize: 1 | 5;
+  runtimeRevision: string;
+  languageOverride: 'en' | 'zh' | null;
+  batchSize: 1 | 2 | 3 | 4 | 8;
+  batchClipSeconds: 0 | 15 | 30;
+  encoderMicrobatchSize: 0 | 1 | 2;
+}
+export const defaultPlan: Readonly<GpuFilePlan>;
+export function transcribeGpuFile(options: {
+  source: string; outputDirectory: string; root: string; ffmpeg: string;
+  runtime?: LocalSpeechRuntime; plan?: Partial<GpuFilePlan>; language?: SpeechLanguage;
+  signal?: AbortSignal; onProgress?: (event: { stage: string; plan: string; ownerPid?: number; index?: number; totalChunks?: number; seconds?: number; totalSeconds?: number }) => void;
+}): Promise<{ version: 1; policy: string; device: 'cuda'; complete: true; plan: GpuFilePlan;
+  totalSamples: number; duration: number; chunks: number; characters: number; recoveries: number; nativeExits: number;
+  transcriptFile: string; eventsFile: string; checkpointFile: string; transcriptSha256: string; text: string }>;

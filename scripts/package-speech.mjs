@@ -6,8 +6,11 @@ import { assertDistributionFiles, localDeepSeekKeys } from './package-safety.mjs
 
 const project = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const files = ['src/speech-provider.cjs', 'src/speech-provider.d.cts', 'src/speech/provider.cjs',
-  'src/speech/platform.cjs', 'src/speech/discovery.cjs', 'src/speech/wav.cjs', 'src/speech/transcript-quality.cjs',
-  'src/speech/worker.py', 'src/speech/faster_backend.py', 'src/speech/recognition.py',
+  'src/speech/platform.cjs', 'src/speech/discovery.cjs', 'src/speech/wav.cjs', 'src/speech/transcript-quality.cjs', 'src/speech/gpu-file.cjs', 'src/speech/atomic-json.cjs', 'src/speech/gpu-lease.cjs',
+  'src/speech/worker.py', 'src/speech/faster_backend.py', 'src/speech/recognition.py', 'src/speech/batch_recognition.py', 'src/speech/batch_timestamp_recognition.py', 'src/speech/native_window_recognition.py', 'src/speech/short_encoder_recognition.py', 'src/speech/encoder_bridge.py',
+  'src/speech/encoder_gpu_bridge.py', 'src/speech/gpuops/concat.cpp',
+  'src/speech/operator-session.cjs', 'src/speech/pcm-pipeline.cjs', 'src/speech/gpu-pipelined-file.cjs', 'src/speech/video-transcode.cjs',
+  'src/speech/window_diagnostic_recognition.py', 'src/speech/complete_window_recognition.py',
   'src/speech/segmentation.py', 'src/speech/segmentation.json', 'src/speech/models.json', 'src/speech/requirements.txt',
   'src/speech/recording_decode.py', 'src/speech/download.cjs', 'src/speech/install.cjs',
   'src/speech/extract-runtime.ps1', 'src/speech/managed_prepare.py',

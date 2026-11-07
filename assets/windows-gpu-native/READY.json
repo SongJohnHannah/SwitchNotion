@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "id": "sm75-native",
+  "publishedAt": "2026-11-06T08:09:33.953Z",
+  "dependencyImportChecked": true,
+  "gpuValidationPending": true,
+  "importAudit": "D:\\www\\claude\\notionSwitch\\.notion-switch\\speech\\gpu-v1\\variants\\sm75-native\\import-check.json",
+  "relocatedAt": "2026-11-06T10:23:32.553Z",
+  "originalReadySha256": "7467039061104c35a4837252ab7625e5e07f3373f34166109c0859f3a393bfeb",
+  "relocationVerifiedByGpu": false
+}

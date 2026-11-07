@@ -1,2 +1,3 @@
 // Stable application interface; the worker has no Codex or Notion dependency.
-module.exports = require('./speech/provider.cjs');
+const { transcribeGpuFile, defaultPlan } = require('./speech/gpu-file.cjs');
+module.exports = { ...require('./speech/provider.cjs'), transcribeGpuFile, defaultPlan };

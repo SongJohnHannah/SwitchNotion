@@ -5,6 +5,20 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { checkStagedSecrets } from '../scripts/check-staged-secrets.mjs';
 
+test('reviewed native binaries larger than 16 MiB are fully scanned, including credentials near the end', t => {
+  const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-git-native-'));
+  t.after(() => { assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
+  const git = args => execFileSync('git', args, { cwd: root, windowsHide: true, stdio: 'pipe' }); git(['init', '-q']);
+  const relative = 'assets/windows-gpu-native/ctranslate2.dll', file = path.join(root, relative);
+  const bytes = Buffer.alloc(17 * 1024 * 1024, 0); bytes.write('MZ');
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, bytes); git(['add', relative]);
+  assert.equal(checkStagedSecrets(root).privateFilesFound, false);
+  const key = 'fixture-local-native-key-private';
+  fs.mkdirSync(path.join(root, '.notion-switch')); fs.writeFileSync(path.join(root, '.notion-switch/deepseek-api-key.txt'), key);
+  bytes.write(key, bytes.length - key.length); fs.writeFileSync(file, bytes); git(['add', relative]);
+  assert.throws(() => checkStagedSecrets(root), error => error.message.includes('停止提交') && !error.message.includes(key));
+});
+
 test('vendored dist source remains scanned while root build output stays private', t => {
   const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-git-vendor-dist-'));
   t.after(() => { assert.equal(path.dirname(root), parent); fs.rmSync(root, { recursive: true, force: true }); });
@@ -39,7 +53,7 @@ test('recordings and login databases are rejected even when force-added or renam
   const git = args => execFileSync('git', args, { cwd: root, windowsHide: true, stdio: 'pipe' });
   git(['init', '-q']);
   for (const [file, contents] of [
-    ['meeting.WAV', 'fixture'], ['meeting.webm', 'fixture'], ['session.sqlite-wal', 'fixture'],
+    ['meeting.WAV', 'fixture'], ['meeting.webm', 'fixture'], ['audio.s16le', 'fixture'], ['input.f32le', 'fixture'], ['session.sqlite-wal', 'fixture'],
     ['Login Data', 'fixture'], ['profiles/session', 'fixture'],
     ['renamed-audio.bin', Buffer.from('RIFF0000WAVEfmt ')],
     ['renamed-recording.bin', Buffer.from([0x1a, 0x45, 0xdf, 0xa3])],

@@ -1,0 +1,21 @@
+{
+  "id": "gpu-native120-stable30-v1",
+  "computeType": "float16",
+  "allocator": "cub_caching",
+  "fp16Gemm": false,
+  "chunkSeconds": 120,
+  "resetEveryChunks": 0,
+  "runtimeVariant": "sm75-native",
+  "launchBlocking": true,
+  "beamSize": 1,
+  "runtimeRevision": "92a40836aedd5e72c37aa1d288382bfb74e0f22fdfded793c158ca7ccc3e9b14",
+  "languageOverride": "en",
+  "batchSize": 1,
+  "batchClipSeconds": 0,
+  "encoderMicrobatchSize": 0,
+  "timestampedBatch": false,
+  "nativeWholeWindow": true,
+  "gpuEncoderBridge": false,
+  "shortEncoder": false,
+  "windowMode": "stable30"
+}

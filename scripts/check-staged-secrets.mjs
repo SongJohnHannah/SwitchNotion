@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { localDeepSeekKeys } from './package-safety.mjs';
 
 export function checkStagedSecrets(root = process.cwd()) {
-  const git = args => execFileSync('git', args, { cwd: root, windowsHide: true, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  // The reviewed Native CT2 DLL is about 24 MiB. Read and scan its entire
+  // staged blob; keep the same credential checks and fail closed above the cap.
+  const git = args => execFileSync('git', args, { cwd: root, windowsHide: true, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   const keys = localDeepSeekKeys(root), state = path.join(root, '.notion-switch');
   for (const name of ['notion-connections.local.json', 'notion.local.json']) {
     const file = path.join(state, name);
@@ -26,7 +28,7 @@ export function checkStagedSecrets(root = process.cwd()) {
     // Root dist is a private build output. Reviewed vendored libraries also
     // have nested dist source folders; their bytes still receive every scan.
     const privatePath = file.split('/')[0].toLowerCase() === 'dist' || file.split('/').some(part => /^(?:\.notion-switch|research|node_modules|profiles?|user data|indexeddb|session storage|local storage|\.env(?:\..*)?|.*\.local\.json|.*api[-_]?key.*\.(?:txt|json)|.*\.(?:pem|key|p12|pfx)|cookies(?:-(?:journal|wal|shm))?|(?:login|web) data(?:-(?:journal|wal|shm))?|local state)$/i.test(part)) ||
-      /\.(?:wav|mp3|m4a|aac|ogg|opus|flac|aiff?|caf|pcm|webm|mp4|m4v|mov|mkv|(?:sqlite3?|db)(?:-(?:wal|shm|journal))?)$/i.test(file);
+      /\.(?:wav|mp3|m4a|aac|ogg|opus|flac|aiff?|caf|pcm|s16le|f32le|webm|mp4|m4v|mov|mkv|(?:sqlite3?|db)(?:-(?:wal|shm|journal))?)$/i.test(file);
     const bytes = git(['cat-file', 'blob', ':' + file]);
     const signature = bytes.subarray(0, 16).toString('latin1');
     const privateBinary = signature.startsWith('SQLite format 3\0') || signature.startsWith('fLaC') || signature.startsWith('OggS') ||

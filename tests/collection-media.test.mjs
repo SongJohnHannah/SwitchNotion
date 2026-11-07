@@ -104,24 +104,13 @@ test('local Qwen vision is serialized while cloud vision stays concurrent', asyn
   await assert.rejects(media.vision({ kind: 'video' }, { engine: 'local' }), /识别失败/);
   assert.deepEqual(await media.vision({ kind: 'video' }, { engine: 'local' }), { text: '恢复' });
 });
-test('repeated GPU worker exits stop with saved progress instead of switching transcription to CPU', async () => {
-  const wav = Buffer.from('bounded-wave'), calls = [], backend = {};
-  const media = new CollectionMedia({root:'/fixture',speech:{status:()=>({device:'cuda'}),transcribeWav:async options=>{calls.push(['gpu',options.wav]);throw Error('离线转写进程已退出。')}}});
-  media.makeCpuSpeech = async () => ({transcribeWav:async options=>{calls.push(['cpu',options.wav]);assert.equal(options.chunkSeconds,10);return '原始逐字稿';}});
-  await assert.rejects(media.transcribeChunk(wav,{},backend), /GPU.*转写.*中断/);
-  assert.deepEqual(calls.map(call=>call[0]),['gpu','gpu']);assert.ok(calls.every(call=>call[1]===wav));
-});
-
-test('unreliable GPU text is retried with the original result and error preserved for each attempt', async () => {
-  const events = []; let attempts = 0;
-  const media = new CollectionMedia({ speech: { status: () => ({ device: 'cuda' }), transcribeWav: async options => {
-    attempts++; options.onResult({ start: 10, text: '!'.repeat(224), segments: [{ start: 0, end: 1, text: '!'.repeat(224) }] });
-    throw Object.assign(Error('识别结果包含异常重复标点'), { code: 'SPEECH_UNRELIABLE' });
-  } } });
-  await assert.rejects(media.transcribeChunk(Buffer.from('wav'), { onResult: event => events.push(event) }), /异常重复标点.*AI 总结已暂停/);
-  assert.equal(attempts, 2);
-  assert.deepEqual(events.filter(event => event.text).map(event => [event.attempt, event.start, event.text.length]), [[1, 10, 224], [2, 10, 224]]);
-  assert.deepEqual(events.filter(event => event.event === 'error').map(event => event.code), ['SPEECH_UNRELIABLE', 'SPEECH_UNRELIABLE']);
+test('an incomplete, CPU or degenerate operator result never becomes a collection transcript', async () => {
+  for (const result of [{ text: 'partial', complete: false, device: 'cuda' }, { text: 'CPU result', complete: true, device: 'cpu' }, { text: '!'.repeat(224), complete: true, device: 'cuda' }]) {
+    let calls = 0;
+    const media = new CollectionMedia({ operator: { transcribeFile: async () => { calls++; return result; } } });
+    await assert.rejects(media.transcript({ path: path.resolve('fixture.mp4'), audio: true }), /AI 总结已暂停/);
+    assert.equal(calls, 1);
+  }
 });
 test('explicit CPU profiles never inherit API credentials', () => {
   const platform = createSpeechPlatform({id:'win32',arch:'x64',device:'cpu',env:{DEEPSEEK_API_KEY:'private',NOTION_TOKEN:'private'}});
@@ -129,17 +118,19 @@ test('explicit CPU profiles never inherit API credentials', () => {
   const env=platform.environment('C:\\state');assert.equal(env.NOTION_SWITCH_SPEECH_DEVICE,'cpu');assert.equal(env.DEEPSEEK_API_KEY,undefined);assert.equal(env.NOTION_TOKEN,undefined);
 });
 
-test('a legacy CPU checkpoint resumes on the currently configured GPU without forcing CPU again', async t => {
+test('legacy minute checkpoints are preserved as history and ignored by whole-file operator transcription', async t => {
   const { hash } = require('../src/collection/model.cjs');
   const parent = path.resolve(import.meta.dirname, '../.notion-switch'); fs.mkdirSync(parent, { recursive: true });
   const directory = fs.mkdtempSync(path.join(parent, 'test-gpu-resume-')); t.after(() => { assert.equal(path.dirname(fs.realpathSync(directory)), fs.realpathSync(parent)); fs.rmSync(directory, { recursive: true }); });
   const file = path.join(directory, 'original.wav'); fs.writeFileSync(file, 'preserved-media'); const stat = fs.statSync(file), duration = 60;
   const identity = hash(JSON.stringify([stat.size, stat.mtimeMs, duration, 'fixture', 'minute-checkpoints-10s-inference']));
   fs.writeFileSync(path.join(directory, 'transcript-progress.json'), JSON.stringify({ identity, backend: 'cpu', chunks: { 0: '已保存的文字' } }));
-  let probes = 0; const media = new CollectionMedia({ speech: { status: () => ({ device: 'cuda', model: 'fixture' }), probe: async () => { probes++; } } });
-  media.makeCpuSpeech = async () => assert.fail('must follow the configured GPU');
+  let calls = 0; const media = new CollectionMedia({ operator: { transcribeFile: async options => {
+    calls++; assert.equal(options.source, file); return { text: '独立算子的完整逐字稿', device: 'cuda', complete: true };
+  } }, speech: { probe: () => assert.fail('must not probe the old runtime') } });
   const result = await media.transcript({ path: file, kind: 'audio', bytes: stat.size, duration, audio: true });
-  assert.equal(result.text, '已保存的文字'); assert.equal(result.device, 'cuda'); assert.equal(probes, 1);
+  assert.equal(result.text, '独立算子的完整逐字稿'); assert.equal(result.device, 'cuda'); assert.equal(calls, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'transcript-progress.json'))).chunks[0], '已保存的文字');
 });
 
 test('expired Xiaohongshu video addresses are refreshed only for the same complete source', async () => {

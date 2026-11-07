@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "variant": "sm75-native",
+  "sourceCommit": "7f59ae114cba0f7d5fb1fe6099142e4c3b0037c8",
+  "ctranslate2Version": "4.8.5",
+  "cudaToolkit": "13.3",
+  "cudaArchitectures": [
+    "sm_75"
+  ],
+  "withCuDNN": false,
+  "dllDirectories": [
+    "gpu-libs"
+  ],
+  "preloadLibraries": [
+    "cudart64_13.dll",
+    "cublasLt64_13.dll",
+    "cublas64_13.dll"
+  ],
+  "kernelChanges": [],
+  "buildChanges": [
+    "CMake VS_SETTINGS: parallel independent CUDA custom builds (4 jobs)"
+  ],
+  "cmakeListsSha256": "9e1108ecbc6cd619f61200dbf01aa506edb3d739a85c034c8c6c23be524f001a",
+  "validation": {
+    "nativeBuild": true,
+    "pythonBindingBuild": true,
+    "gpuTested": false,
+    "fullVideoVerified": false
+  },
+  "files": [
+    {
+      "file": "ctranslate2.dll",
+      "sha256": "9dfdd201fc6769c611a6ba595d53489cf2f05833ac2940d02f29670b5320a20f"
+    },
+    {
+      "file": "_ext.cp311-win_amd64.pyd",
+      "sha256": "7bf348153f92bbfa29bfbdeaa4eb32fa2bec8355702a21a30faf803fbf41833e"
+    }
+  ],
+  "builtAt": "2026-11-06T08:09:30.234Z",
+  "logs": [
+    "D:\\www\\claude\\notionSwitch\\.notion-switch\\speech\\gpu-v1\\ct2-sm75\\build.log",
+    "D:\\www\\claude\\notionSwitch\\.notion-switch\\speech\\gpu-v1\\ct2-sm75\\binding-build.log"
+  ],
+  "relocatedAt": "2026-11-06T10:23:32.553Z",
+  "relocation": {
+    "originalDirectories": [
+      "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.3/bin/x64"
+    ],
+    "originalReadySha256": "7467039061104c35a4837252ab7625e5e07f3373f34166109c0859f3a393bfeb",
+    "gpuTestedAfterRelocation": false
+  }
+}

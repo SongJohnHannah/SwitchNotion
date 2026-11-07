@@ -1,0 +1,128 @@
+{
+  "version": "0.2.0",
+  "platforms": [
+    "win32-x64-cuda",
+    "darwin-arm64-cpu"
+  ],
+  "hardwareVerified": [
+    "win32-x64-cuda"
+  ],
+  "includesModels": false,
+  "includesRuntime": false,
+  "includesUserData": false,
+  "includesNotion": false,
+  "files": [
+    {
+      "file": "src/speech-provider.cjs",
+      "sha256": "771903d6de5a96c610091e5c187c1e61af0bde1465af93493435f2a8dd5f3332"
+    },
+    {
+      "file": "src/speech-provider.d.cts",
+      "sha256": "bcd3c7a4914b33244e6aa6720e549f75794d6d1ab44dd19074955cf3f282215b"
+    },
+    {
+      "file": "src/speech/provider.cjs",
+      "sha256": "b7cae66dc9906c55eb2d09d7024f7a9391b5591a11ea82246c8c0537b56439f1"
+    },
+    {
+      "file": "src/speech/platform.cjs",
+      "sha256": "c0cbafea610b468b407224cb8f30bcfd37b521f692dffb7535ef0276300279d2"
+    },
+    {
+      "file": "src/speech/discovery.cjs",
+      "sha256": "f13cec1691545a1bf7c0b151b85adf07b8c514801567236e8ddeebbb091dbc4f"
+    },
+    {
+      "file": "src/speech/wav.cjs",
+      "sha256": "fb9cd9a8b752e754bfc6dd62096336021c09df002a1b0ba281071b9318051da6"
+    },
+    {
+      "file": "src/speech/transcript-quality.cjs",
+      "sha256": "5b5621db53b163aaee7204be0da662adb7ccf1261167e6c999cd23a2426aa0cd"
+    },
+    {
+      "file": "src/speech/gpu-file.cjs",
+      "sha256": "a4aefa9e36c12714b69158aa4c3c0463a87f88a5e3ddc000a0bd516e7e094cbf"
+    },
+    {
+      "file": "src/speech/atomic-json.cjs",
+      "sha256": "3ce141701a98e545bd04aec4a09e6e65437218ad2457c0d3e0095ab5ebca3cac"
+    },
+    {
+      "file": "src/speech/gpu-lease.cjs",
+      "sha256": "8693f2c7816bf9077fed8be66a3ad8a70b5b56772c93c4dcaa5da78274d3a097"
+    },
+    {
+      "file": "src/speech/worker.py",
+      "sha256": "5f2b06d6738e2d50ccac4613defd18e088e6d1fdcd8d53c4507cb523f8db8b97"
+    },
+    {
+      "file": "src/speech/faster_backend.py",
+      "sha256": "623624700f2bd644b6bf297a834be70e3c9b710e4a1101604e0f8785927fd767"
+    },
+    {
+      "file": "src/speech/recognition.py",
+      "sha256": "b73f7b29a567b3fa8e8197643b9a1fdd410f51b2fc2ac8a6d7b172138a6bb248"
+    },
+    {
+      "file": "src/speech/batch_recognition.py",
+      "sha256": "0e6ffcba8ae8e89965a18a9457d48ecdb98e7d4f6b5209d241371e7e4b1e58cb"
+    },
+    {
+      "file": "src/speech/encoder_bridge.py",
+      "sha256": "af8421003f53ba2f73dfe0cb05251b32d129eafd116100cf9113aa4e4a8b4557"
+    },
+    {
+      "file": "src/speech/segmentation.py",
+      "sha256": "a768f31b8d9f3df30c9f165077ef32644a5df277d11937f6611a03b24cea94da"
+    },
+    {
+      "file": "src/speech/segmentation.json",
+      "sha256": "ab87d4d7418f332af53b8e72cd9211f06ce1c5b8623003d4d0d1b3d4bfd9fa8b"
+    },
+    {
+      "file": "src/speech/models.json",
+      "sha256": "5b738558ece2e74ae8f24e1667d5b2bbcb335a15e72daa94c4f6ca1de4b290d4"
+    },
+    {
+      "file": "src/speech/requirements.txt",
+      "sha256": "a422539376969d4db65c39b24620268e31683c2cbb24a3f48f3cd4958c7f637c"
+    },
+    {
+      "file": "src/speech/recording_decode.py",
+      "sha256": "339cd56151c1aa7c6276a8e57e573c472f1597333cf53211c47fc8d4af08cdc9"
+    },
+    {
+      "file": "src/speech/download.cjs",
+      "sha256": "445a563c11a4de98cfc0303936353329c72bedce84455f3a9384f6325866327f"
+    },
+    {
+      "file": "src/speech/install.cjs",
+      "sha256": "3c2500687c9f80789b066faf907c08730897e658017f295a2ec54aefba3f3b88"
+    },
+    {
+      "file": "src/speech/extract-runtime.ps1",
+      "sha256": "4511bbadb877bac2adf306b10b0810cafde8443263d1b0647c8e2c22004aed9e"
+    },
+    {
+      "file": "src/speech/managed_prepare.py",
+      "sha256": "dd9bbecb8acfce0dc49fbe853ce7a1244bf3d12562dbe7bce611804744691fa6"
+    },
+    {
+      "file": "LICENSE",
+      "sha256": "13a3fe88a7932691facbb16aac714c26cd2510fd3557374f75a7f5fc927a6116"
+    },
+    {
+      "file": "THIRD-PARTY-NOTICES.md",
+      "sha256": "f66ee7d68dc59561c1e4f6beaae585b335abfef03c75feed7e47a324c818296a"
+    },
+    {
+      "file": "README.md",
+      "sha256": "e7ba43107d554eaa81cd7ac37916b38b9cb361e7ff6d203bffea86a3be6ac7c4"
+    },
+    {
+      "file": "package.json",
+      "sha256": "ef3e5c1261ed4f9056e12aea01a0540298194aa0ef1b1dbd8eb464481bc79838"
+    }
+  ]
+}

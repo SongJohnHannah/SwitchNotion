@@ -1,16 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { assertDistributionFiles, localDeepSeekKeys } from './package-safety.mjs';
+import { planWindowsGpuAssets, copyWindowsGpuAssets, hashAsset, assertNewWindowsStage } from './package-windows-gpu.mjs';
 const project = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const runtimeScripts = ['asar.mjs', 'native-fs.mjs', 'desktop-compat.mjs', 'runtime-update.mjs', 'runtime-health.mjs', 'source-discovery.mjs', 'find-notion.mjs', 'bootstrap-windows.ps1', 'launch.ps1', 'launch-lock.mjs', 'prepare-desktop.mjs', 'start-desktop.mjs', 'open-notion.mjs', 'open-settings.mjs', 'open-collection.mjs', 'open-update.mjs', 'update-helper.mjs', 'client-update-helper.mjs', 'login-helper.cjs', 'check-windows.mjs', 'check-meeting-summary.mjs'];
 const documentation = ['CONTENT-COLLECTION.md', 'MAC-CHECKLIST-ACCEPTANCE-2026-10-29.md', 'WINDOWS-VALIDATION-CHECKLIST.md', 'AI-REFERENCE-COVERAGE.md', 'AI-INTEGRATION-AUDIT.md', 'NATIVE-FORMULA-INTERFACE.md', 'NATIVE-AUTOFILL-INTERFACE.md', 'NATIVE-AI-BLOCK-INTERFACE.md', 'NATIVE-DATABASE-BUILD-INTERFACE.md', 'NATIVE-INSTRUCTIONS-INTERFACE.md', 'WEB-SOURCES-INTERFACE.md', 'AI-MEETING-NOTES-INTERFACE.md',
-  'NATIVE-RESEARCH-INTERFACE.md', 'NATIVE-DOCUMENTS-INTERFACE.md', 'NATIVE-OCR-INTERFACE.md', 'MCP-CONNECTIONS.md', 'NATIVE-CALENDAR-INTERFACE.md', 'AI-APPROVALS.md', 'AI-CHAT-SHARING.md', 'OFFLINE-SPEECH.md', 'SPEECH-INTERFACE.md', 'MEETING-SUMMARY-INTERFACE.md', 'AUTOMATIC-COMPATIBILITY.md', 'PLATFORM-INTERFACE.md'];
+  'NATIVE-RESEARCH-INTERFACE.md', 'NATIVE-DOCUMENTS-INTERFACE.md', 'NATIVE-OCR-INTERFACE.md', 'MCP-CONNECTIONS.md', 'NATIVE-CALENDAR-INTERFACE.md', 'AI-APPROVALS.md', 'AI-CHAT-SHARING.md', 'OFFLINE-SPEECH.md', 'SPEECH-INTERFACE.md', 'GPU-OPERATOR-INTEGRATION.md', 'GPU-OPERATOR-README.md', 'WINDOWS-GPU-MIGRATION-VALIDATION.md', 'TRANSCRIBER-COMPARISON.md', 'MEETING-SUMMARY-INTERFACE.md', 'AUTOMATIC-COMPATIBILITY.md', 'PLATFORM-INTERFACE.md'];
 const publicFiles = ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'WINDOWS-使用说明.md', 'MAC-使用说明.md', 'package.json', 'NotionSwitch 启动.vbs', 'NotionSwitch 配置.vbs', 'NotionSwitch 更新.vbs',
   ...documentation.map(name => 'docs/' + name)];
-const hash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+const hash = hashAsset;
 function buildLaunchers(destination, sourceProject) {
   const file = path.join(destination, 'NotionSwitch.exe');
   execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(sourceProject, 'scripts', 'compile-launcher.ps1'), '-Source', path.join(sourceProject, 'scripts', 'windows-launcher.cs'), '-Destination', file], { windowsHide: true, timeout: 30000, stdio: 'pipe' });
@@ -27,10 +28,10 @@ function descendants(root) {
   } } visit(root); return files;
 }
 export function stageWindows({ sourceProject = project, destination, nodeExecutable = fs.realpathSync(process.execPath), nodeLicense = path.join(path.dirname(nodeExecutable), 'LICENSE'), launcherBuilder = buildLaunchers }) {
-  const relative = path.relative(path.join(sourceProject, 'dist'), path.resolve(destination));
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || fs.existsSync(destination)) throw Error('打包目标必须是 dist 内的新目录。');
+  assertNewWindowsStage(sourceProject, destination);
   const keys = localDeepSeekKeys(sourceProject);
   assertDistributionFiles(sourceProject, [...publicFiles.map(file => path.join(sourceProject, file)), ...runtimeScripts.map(file => path.join(sourceProject, 'scripts', file)), ...descendants(path.join(sourceProject, 'src'))], keys);
+  const gpuAssets = planWindowsGpuAssets({ sourceProject, keys });
   fs.mkdirSync(path.join(destination, 'scripts'), { recursive: true }); fs.mkdirSync(path.join(destination, 'bin')); fs.mkdirSync(path.join(destination, 'licenses'));
   for (const file of publicFiles) {
     fs.mkdirSync(path.dirname(path.join(destination, file)), { recursive: true });
@@ -42,10 +43,12 @@ export function stageWindows({ sourceProject = project, destination, nodeExecuta
   fs.copyFileSync(nodeExecutable, path.join(destination, 'bin', 'node.exe'));
   fs.copyFileSync(nodeLicense, path.join(destination, 'licenses', 'NODE-LICENSE.txt'));
   launcherBuilder(destination, sourceProject);
-  assertDistributionFiles(destination, descendants(destination), keys);
+  const reviewedGpuPaths = copyWindowsGpuAssets({ plan: gpuAssets, destination });
+  assertDistributionFiles(destination, descendants(destination).filter(file => !reviewedGpuPaths.has(path.relative(destination, file).replaceAll('\\', '/'))), keys);
   const manifest = descendants(destination).map(file => ({ file: path.relative(destination, file).replaceAll('\\', '/'), bytes: fs.statSync(file).size, sha256: hash(file) })).sort((a, b) => a.file.localeCompare(b.file));
-  if (manifest.some(entry => entry.file.split('/').some(part => ['.notion-switch', 'runtime', 'profile', 'research', 'tests', 'app.asar', 'Notion.exe'].includes(part)))) throw Error('迁移包包含非分发内容。');
-  const metadata = { name: 'NotionSwitch', version: JSON.parse(fs.readFileSync(path.join(sourceProject, 'package.json'), 'utf8')).version, platform: 'win32', architecture: 'x64', nodeVersion: process.version, requiresOfficialNotion: true, includesUserData: false, license: 'MIT', files: manifest };
+  if (manifest.some(entry => !reviewedGpuPaths.has(entry.file) && entry.file.split('/').some(part => ['.notion-switch', 'runtime', 'profile', 'research', 'tests', 'app.asar', 'Notion.exe'].includes(part)))) throw Error('迁移包包含非分发内容。');
+  const metadata = { name: 'NotionSwitch', version: JSON.parse(fs.readFileSync(path.join(sourceProject, 'package.json'), 'utf8')).version, platform: 'win32', architecture: 'x64', nodeVersion: process.version, requiresOfficialNotion: true, includesUserData: false,
+    includesWindowsGpuNative: gpuAssets.includesWindowsGpuNative, includesWindowsGpuRuntime: gpuAssets.includesWindowsGpuRuntime, license: 'MIT', files: manifest };
   fs.writeFileSync(path.join(destination, 'package-manifest.json'), JSON.stringify(metadata, null, 2));
   return metadata;
 }
@@ -61,6 +64,7 @@ export function packageWindows() {
   const resolvedStage = fs.realpathSync(stage);
   if (path.dirname(resolvedStage).toLowerCase() !== fs.realpathSync(dist).toLowerCase() || !/^\.build-[\da-f-]{36}$/.test(path.basename(resolvedStage))) throw Error('打包暂存目录校验失败，已保留文件。');
   fs.rmSync(resolvedStage, { recursive: true });
-  return { archive, bytes: fs.statSync(archive).size, fileCount: metadata.files.length, includesUserData: false, includesNotion: false };
+  return { archive, bytes: fs.statSync(archive).size, fileCount: metadata.files.length, includesUserData: false, includesNotion: false,
+    includesWindowsGpuNative: metadata.includesWindowsGpuNative, includesWindowsGpuRuntime: metadata.includesWindowsGpuRuntime };
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) console.log(JSON.stringify(packageWindows(), null, 2));

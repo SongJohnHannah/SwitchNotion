@@ -61,6 +61,20 @@ test('failed transcription defers summary even if video frames and webpage text 
   assert.equal(f.calls.filter(call => call.startsWith('download:')).length, downloads);
 });
 
+test('upgrading a legacy successful transcript preserves its history but a new operator failure pauses summary', async t => {
+  let summaries = 0;
+  const document = normalizeDocument({ title: 'Legacy video', url: 'https://example.com/legacy-video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
+  const f = fixture(t, { document, media: { vision: async () => { throw Error('画面未完成'); } }, extraction: { run: async () => { summaries++; return { text: 'summary', name: '访谈' }; } } });
+  await f.service.create({ input: document.url }); await idle(f.service);
+  const job = [...f.service.jobs.values()][0], analysis = job.analyses[document.nodes[0].id];
+  assert.equal(analysis.transcript.text, '原始语音逐字稿'); assert.equal(job.status, 'partial');
+  f.service.media.operator = {}; f.service.media.transcript = async () => { throw Error('独立 GPU 转写未完成'); };
+  f.service.media.vision = async () => ({ text: 'frames' }); job.options.extraction.mode = 'auto';
+  f.service.retry(job.id); await idle(f.service);
+  assert.equal(summaries, 0); assert.equal(analysis.transcript, undefined);
+  assert.equal(analysis.transcriptHistory[0].result.text, '原始语音逐字稿'); assert.equal(job.extraction.stage, 'transcript');
+});
+
 test('restoring an old failed video task suppresses its metadata-only summary classification', async t => {
   const f = fixture(t, { media: { acquire: async () => { throw Error('媒体下载未完成，请在收集浏览器中登录并确认原始内容可播放。'); } } });
   await f.service.create({ input: 'https://example.com/article' }); await idle(f.service);

@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "scope": "Imported previously validated Windows CUDA English profiles; no GPU executed by vendor script",
+  "defaultProfile": "winner",
+  "profiles": {
+    "winner": {
+      "medianSeconds": 194.092
+    },
+    "native30": {
+      "medianSeconds": 194.092
+    },
+    "native30-streaming": {
+      "status": "validated-optional",
+      "implementationRevision": "ade666a6cfea4be636cd6c88845aa68d3e1fb353f58063fb9389aa7597e0dc8f"
+    },
+    "native120-complete": {
+      "status": "validated-optional",
+      "medianSeconds": 204.9925,
+      "sourceCandidate": "bench-native120-stable30-v1",
+      "implementationRevision": "75e7b4ee14daa549252ccc9b4b4e2c75f15f0fe972d66c72dad279e084cb43ca"
+    }
+  },
+  "runtimeRevision": "92a40836aedd5e72c37aa1d288382bfb74e0f22fdfded793c158ca7ccc3e9b14",
+  "humanWerVerified": false
+}

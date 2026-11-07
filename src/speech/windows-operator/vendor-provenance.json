@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "nativeBaseline": {
+    "sha256": "9dfdd201fc6769c611a6ba595d53489cf2f05833ac2940d02f29670b5320a20f",
+    "source": "original working SDK Native sm75 DLL"
+  },
+  "runtimeRevision": "92a40836aedd5e72c37aa1d288382bfb74e0f22fdfded793c158ca7ccc3e9b14",
+  "adaptations": [
+    {
+      "file": "operator.cjs",
+      "reason": "project entry supports separate code home and asset home",
+      "originalSha256": "121cc99e3b4bed7e8fe2b9d60c54877ae4de831fe9f6830ede98529a4be9a2b2",
+      "sha256": "3bf03cd9dba92aff8dfcf0cb20ce989929752e99f4d03e173002f25080fdeece"
+    },
+    {
+      "file": "module/src/speech/worker.py",
+      "reason": "resolve imports from this worker directory",
+      "originalSha256": "befbe6dd727303bb82618c9f323c7e48344d281cf6798b8ade847f2711974dd2",
+      "sha256": "5f2b06d6738e2d50ccac4613defd18e088e6d1fdcd8d53c4507cb523f8db8b97"
+    },
+    {
+      "root": "runtime",
+      "file": "resources/speech/python/python311._pth",
+      "reason": "remove obsolete archive-relative module path; no replacement external path",
+      "originalSha256": "70077b445745e1d07fc90c1abb0fd6309135a08e1c57a7e848bfa3666d92c8e3",
+      "sha256": "106d88e287fdfb7807eb0188e9efa6fddec6b198ddd77d94378b058f5e230b69"
+    }
+  ],
+  "frozenImplementations": [
+    {
+      "revision": "ade666a6cfea4be636cd6c88845aa68d3e1fb353f58063fb9389aa7597e0dc8f",
+      "files": 38,
+      "originalManifestSha256": "85aefe07b575ceb1894771961ea3419cf786e962ce4372ed3229fb90e364c175",
+      "manifestSha256": "8c834c6cf4fa47d6742c1fce1ef9ba83e034ac5aaf45f05e7e363af204ebbda0",
+      "manifestAdaptation": "remove private source/snapshot absolute metadata; listed source bytes and revision unchanged"
+    },
+    {
+      "revision": "75e7b4ee14daa549252ccc9b4b4e2c75f15f0fe972d66c72dad279e084cb43ca",
+      "files": 47,
+      "originalManifestSha256": "3760f746d39d4c324e8048200e7a888cc3c16df42232c76bb7f5d41dc55e2a87",
+      "manifestSha256": "54676bec64bb7e2fdc9075a06ff22645dbc9f242d3c2c4f46ac03ff43610aa2c",
+      "manifestAdaptation": "remove private source/snapshot absolute metadata; listed source bytes and revision unchanged"
+    },
+    {
+      "revision": "20de38509125a3b8be1a42278adcb71da273a6b6634ebcb7bb88b9a29a538e3e",
+      "files": 41,
+      "originalManifestSha256": "2982d331ff15b9440dcb2da16a7c1b373d1dc94d41a5b415fcb2b823a8036581",
+      "manifestSha256": "ffec7cad395d119169c33038d5fb48b1977aa85cbf161631dff1208d6f30bb41",
+      "manifestAdaptation": "remove private source/snapshot absolute metadata; listed source bytes and revision unchanged"
+    }
+  ],
+  "defaultModuleManifest": {
+    "originalSha256": "ac1a341ace05cf1791a02636bb062d47874969f1bf0487c46ea8423af97b051d",
+    "sha256": "e54c0b405033103c3a76bebe01dbed0153701c029e99bdc609ab9aa2daee0ff4"
+  },
+  "sourceMachineSha256": "5fd3d9fbf131ffc50f1f1fda4d90f8bcda4e92caadd3513a82132aee7e1549ef",
+  "containsUserOutputs": false,
+  "physicalCopies": true
+}

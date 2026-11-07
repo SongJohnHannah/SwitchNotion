@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { runProjectTests, testFiles } from '../scripts/client-tests.mjs';
 
 function removeWithRetry(directory) {
@@ -24,9 +25,14 @@ function project(t, body) {
 test('update test runs enumerate project tests and keep their output in a local log', async t => {
   const f = project(t, "import test from 'node:test'; test('ok', () => {});\n");
   assert.deepEqual(testFiles(f.directory), [path.join('tests', 'sample.test.mjs')]);
-  const result = await runProjectTests({ project: f.directory, root: f.root, timeoutMs: 30000 });
+  let actualArguments;
+  const result = await runProjectTests({ project: f.directory, root: f.root, timeoutMs: 30000,
+    spawnImpl: (file, args, options) => { actualArguments = args; return spawn(file, args, options); } });
   assert.equal(result.ok, true);
   assert.ok(fs.statSync(result.log).size > 0);
+  assert.ok(actualArguments.includes('--test-concurrency=2'));
+  const configured = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.ok(configured.scripts.test.includes('--test-concurrency=2'));
 });
 
 test('failing update tests report failure without leaking into the caller, and timeouts stop the runner', async t => {
