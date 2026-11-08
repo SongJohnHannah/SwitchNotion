@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { NotionRouter } = require('../notion-routing.cjs');
-const { hash, destination, mediaKinds, recognitionResult } = require('./model.cjs');
+const { hash, destination, mediaKinds, recognitionResult, reportDetail } = require('./model.cjs');
 const { matchesBlockContent } = require('../notion-blocks.cjs');
 const { canonical } = require('../notion-mutations.cjs');
 const analysisKeys = ['transcript', 'ocr', 'vision'];
@@ -32,30 +32,32 @@ function extractionBlocks(extraction) {
   if (!extraction?.text) return [];
   const blocks = textBlocks({ kind: 'heading', level: 1, text: 'AI 提取结果 · ' + extraction.name });
   if (extraction.note) blocks.push(paragraph(extraction.note));
-  let code = false, step;
-  const flushStep = () => {
-    if (!step) return;
-    const groups = batches(step.children, { maxBlocks: 79, maxBytes: 340000 });
+  let code = false, detail;
+  const flushDetail = () => {
+    if (!detail) return;
+    const groups = batches(detail.children, { maxBlocks: 79, maxBytes: 340000 });
     for (const [index, children] of (groups.length ? groups : [[]]).entries()) {
-      const title = step.title + (index ? `（续 ${index + 1}）` : '');
+      const title = detail.title + (index ? `（续 ${index + 1}）` : '');
       blocks.push({ object: 'block', type: 'toggle', toggle: { rich_text: textSpans(title), ...(children.length ? { children } : {}) } });
     }
-    step = null;
+    detail = null;
   };
   for (const line of extraction.text.split(/\r?\n/)) {
     if (/^\s*```/.test(line)) { code = !code; continue; }
     if (!line.trim()) continue;
     const heading = !code && line.match(/^(#{1,3})\s+(.+)/), bullet = !code && line.match(/^(?:[-*+] |\d+[.)] )(.+)/);
     if (heading) {
-      flushStep();
+      flushDetail();
+      const title = line.trimEnd().match(reportDetail)?.[1];
+      if (title) { detail = { title, children: [] }; continue; }
       if (heading[1] === '###' && /^步骤\s*\d+\s*[｜|]\s*\S.{0,150}$/.test(heading[2].trim())) {
-        step = { title: heading[2].trim(), children: [] }; continue;
+        detail = { title: heading[2].trim(), children: [] }; continue;
       }
     }
-    const target = step?.children || blocks;
+    const target = detail?.children || blocks;
     target.push(...textBlocks({ kind: code ? 'code' : heading ? 'heading' : bullet ? 'list' : line.startsWith('> ') ? 'quote' : 'paragraph', level: heading?.[1].length, text: heading?.[2] || bullet?.[1] || (line.startsWith('> ') ? line.slice(2) : line) }));
   }
-  flushStep();
+  flushDetail();
   if (extraction.sources?.length) {
     blocks.push(...textBlocks({ kind: 'heading', level: 2, text: '制作参考' }));
     for (const { id, title, url } of extraction.sources) blocks.push(...textBlocks({ kind: 'list', spans: [{ text: `[${id}] ${title}`, href: url }] }));

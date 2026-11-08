@@ -43,7 +43,7 @@ function setupCollection({ root, speech, webSources, createWindow, openSettings,
     if (!window || window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== url) return { ok: false, error: '此操作只能从快捷收集窗口执行。' };
     try {
       if (['expand', 'hide', 'settings', 'directory', 'browser', 'profile', 'open-page', 'open-destination', 'open-source', 'open-local', 'open-downloads'].includes(action)) {
-        if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !(action === 'expand' ? ['expanded'] : action === 'open-destination' ? ['target'] : ['open-page', 'open-source', 'open-local'].includes(action) ? ['id'] : []).includes(key))) throw Error('收集窗口操作参数无效。');
+        if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !(action === 'expand' ? ['expanded'] : action === 'open-destination' ? ['target'] : action === 'open-page' ? ['id', 'report'] : ['open-source', 'open-local'].includes(action) ? ['id'] : []).includes(key))) throw Error('收集窗口操作参数无效。');
         if (action === 'expand') resize(input.expanded === true);
         if (action === 'hide') window.hide();
         if (action === 'settings') await openSettings();
@@ -58,7 +58,11 @@ function setupCollection({ root, speech, webSources, createWindow, openSettings,
           if (selected?.endsWith('.app')) selected = path.join(selected, 'Contents/MacOS', path.basename(selected, '.app'));
           return { ok: true, result: { path: selected } }; }
         const job = service.jobs.get(input.id);
-        if (action === 'open-page') { if (!job?.page?.id || !/^[a-f\d-]{36}$/i.test(job.page.id)) throw Error('此任务还没有已核验的 Notion 页面。'); await shell.openExternal('https://www.notion.so/' + job.page.id.replaceAll('-', '')); }
+        if (action === 'open-page') {
+          const page = input.report === undefined ? job?.page : job?.pages?.find(page => page.key === input.report);
+          if (!page?.id || !/^[a-f\d-]{36}$/i.test(page.id)) throw Error('此任务还没有已核验的 Notion 页面。');
+          await shell.openExternal('https://www.notion.so/' + page.id.replaceAll('-', ''));
+        }
         if (action === 'open-destination') { const target = destination(input.target); if (!target) throw Error('请选择保存位置。'); await service.notion.verifyTarget(target, AbortSignal.timeout(45000)); await shell.openExternal('https://www.notion.so/' + target.id.replaceAll('-', '')); }
         if (action === 'open-source') { if (!job) throw Error('任务不存在。'); if (job.localSource?.path) { const { checkLocal } = require('./local-media.cjs'); checkLocal(job.localSource); shell.showItemInFolder(job.localSource.path); return { ok: true, result: {} }; } return { ok: true, result: await service.browser.login(job.url, AbortSignal.timeout(60000)) }; }
         if (action === 'open-local') { if (!job?.exportDirectory) throw Error('此任务没有保留本地副本。'); const error = await shell.openPath(job.exportDirectory); if (error) throw Error('无法打开本地目录。'); }
@@ -73,8 +77,8 @@ function setupCollection({ root, speech, webSources, createWindow, openSettings,
   service.on('settings', register);
   service.on('finished', info => {
     if (!Notification.isSupported()) return;
-    const notice = new Notification({ title: info.status === 'completed' ? '已收集到 Notion' : '内容已保存，部分处理未完成', body: info.title.slice(0, 120), silent: true });
-    notice.on('click', () => { if (info.status === 'completed' && /^[a-f\d-]{36}$/i.test(info.pageId)) void shell.openExternal('https://www.notion.so/' + info.pageId.replaceAll('-', '')); else void open(true); }); notice.show();
+    const notice = new Notification({ title: info.status === 'completed' ? '已收集到 Notion' : info.pageId ? '内容已保存，部分处理未完成' : '收集处理待完成', body: info.title.slice(0, 120), silent: true });
+    notice.on('click', () => { if (info.status === 'completed' && !info.pages?.length && /^[a-f\d-]{36}$/i.test(info.pageId)) void shell.openExternal('https://www.notion.so/' + info.pageId.replaceAll('-', '')); else void open(true); }); notice.show();
   });
   app.whenReady().then(register).catch(() => {});
   app.on('before-quit', event => {

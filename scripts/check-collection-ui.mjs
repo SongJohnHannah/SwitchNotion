@@ -155,6 +155,15 @@ try {
   await page.waitForFunction(() => window._collectionCalls.some(call => call.action === 'create' && call.input.options.extraction.mode === 'both'));
   const bothCall = (await page.evaluate(() => window._collectionCalls)).find(call => call.action === 'create' && call.input.options.extraction.mode === 'both');
   assert.equal(bothCall.input.options.vision, true);
+  await page.evaluate(() => {
+    window._collectionFixture.latestCompletion = { id: 'split-fixture', pages: [
+      { key: 'content', name: '内容理解' }, { key: 'style', name: '画面与视频制作拆解' }
+    ] };
+    window._changeCollection();
+  });
+  await page.locator('#last-report-links button').nth(1).click();
+  await page.waitForFunction(() => window._collectionCalls.some(call => call.action === 'open-page' && call.input.id === 'split-fixture' && call.input.report === 'style'));
+  assert.equal(await page.locator('#last-result').isHidden(), true);
   await page.evaluate(() => { window._collectionFixture.jobs = []; window._changeCollection(); });
   await page.locator('#tasks-section').waitFor({ state: 'hidden' });
   for (const width of [480, 580, 620, 820]) {

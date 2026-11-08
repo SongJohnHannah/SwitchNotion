@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { atomicJson, layoutNodes, selectedNodes, recognitionResult } = require('./model.cjs');
+const { atomicJson, layoutNodes, selectedNodes, recognitionResult, reportDetail } = require('./model.cjs');
 const { ownedExport } = require('./history.cjs');
 function prepareLocalOutput(job, downloadsDirectory) {
   if (job.exportOwned && job.exportDirectory) {
@@ -18,6 +18,24 @@ function prepareLocalOutput(job, downloadsDirectory) {
   }
   throw Error('同名资料文件夹过多，请选择其他下载目录。');
 }
+function foldDetails(markdown) {
+  const lines = [];
+  let detail = false, code = false;
+  for (const line of markdown.split(/\r?\n/)) {
+    if (!code && /^#{1,3}[ \t]/.test(line)) {
+      if (detail) { lines.push('', '</details>', ''); detail = false; }
+      const title = line.trimEnd().match(reportDetail)?.[1];
+      if (title) {
+        lines.push('<details>', '<summary>' + title.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;') + '</summary>', '');
+        detail = true; continue;
+      }
+    }
+    if (/^\s*```/.test(line)) code = !code;
+    lines.push(line);
+  }
+  if (detail) lines.push('', '</details>');
+  return lines.join('\n');
+}
 function writeLocalOutput(job) {
   if (!job.exportOwned || !job.exportDirectory || !fs.existsSync(job.exportDirectory)) return;
   const directory = ownedExport(job); if (!directory) return;
@@ -29,7 +47,7 @@ function writeLocalOutput(job) {
     if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) files[node.id] = relative.replaceAll('\\', '/');
   }
   atomicJson(path.join(directory, 'content.json'), { version: 1, title: job.document.title, source: job.document, status: job.status,
-    selectedIds: nodes.map(n => n.id), files, analyses: job.analyses, extraction: job.extraction, notion: job.page });
+    selectedIds: nodes.map(n => n.id), files, analyses: job.analyses, extraction: job.extraction, notion: job.page, notionPages: job.pages });
   const text = ['# ' + job.document.title, '', '来源：' + job.document.url, '']; let mediaHeading = false;
   for (const node of nodes) {
     if (['video', 'audio'].includes(node.kind) && !mediaHeading) { text.push('## 原始音视频', ''); mediaHeading = true; }
@@ -57,11 +75,14 @@ function writeLocalOutput(job) {
     return raw ? [`## 素材 ${index + 1}\n\n${raw}`] : [];
   }).join('\n\n');
   if (rawOcr) fs.writeFileSync(path.join(directory, '关键帧文字原始记录.md'), rawOcr, { mode: 0o600 });
-  if (job.extraction?.text) {
-    const { text: summary, note, sources = [] } = job.extraction;
+  const reports = job.extraction?.reports?.length ? job.extraction.reports : job.extraction?.text ? [job.extraction] : [];
+  for (const report of reports) {
+    const { text: summary, note, sources = [] } = report;
     const links = sources.map(({ id, title, url }) => `- [${id} ${title.replace(/[\[\]\r\n]/g, ' ')}](<${url}>)`);
-    const markdown = [note, summary, links.length ? ['## 制作参考', ...links].join('\n') : ''].filter(Boolean).join('\n\n');
-    fs.writeFileSync(path.join(directory, 'AI提取结果.md'), markdown, { mode: 0o600 });
+    const header = report.key ? `# ${job.document.title} · ${report.name}\n\n[原文和音视频](原文.md)` : '';
+    const markdown = [header, note, foldDetails(summary), links.length ? ['## 制作参考', ...links].join('\n') : ''].filter(Boolean).join('\n\n');
+    const file = report.key === 'style' ? '画面与视频制作拆解.md' : report.key === 'content' ? '内容理解.md' : 'AI提取结果.md';
+    fs.writeFileSync(path.join(directory, file), markdown, { mode: 0o600 });
   }
 }
 module.exports = { prepareLocalOutput, writeLocalOutput };

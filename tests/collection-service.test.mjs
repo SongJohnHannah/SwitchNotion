@@ -33,6 +33,61 @@ function fixture(t, extra = {}) {
 }
 async function idle(service) { for (let n = 0; n < 400; n++) { if (!service.running && !service.queue.length) return; await sleep(5); } throw Error('collection test did not settle'); }
 
+test('selecting both creates two documents, shares media, and recovers the second page after interruption', async t => {
+  const document = normalizeDocument({ title: '双向样片', url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
+  let contentCalls = 0, styleCalls = 0;
+  const provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate({ messages }) {
+    if (messages[1].content.includes('## 蒸馏到我的视频')) {
+      if (++styleCalls === 1) throw Error('画面提取暂时失败');
+      yield '## 原片效果怎么做\n画面独立结果\n## 展开细节\n### 详情｜技术实现\nWebGL 参考复现';
+    } else { contentCalls++; yield '## 专业结论\n内容独立结果\n## 展开细节\n### 详情｜证据链\n可核对内容'; }
+  } };
+  const f = fixture(t, { document, provider });
+  const created = new Map(), plans = new Map(); let interrupted = false;
+  f.service.notion.write = async (job, nodes, save) => {
+    const existing = created.get(job.id);
+    if (existing) assert.equal(job.page.id, existing);
+    else {
+      job.page = { id: randomUUID(), url: 'https://www.notion.so/test' };
+      created.set(job.id, job.page.id);
+    }
+    save();
+    if (job.id.endsWith(':style') && !interrupted) { interrupted = true; throw Error('Notion 第二份正文写入中断'); }
+    plans.set(job.id, { title: job.document.title, blocks: renderDocument(job.document, nodes, job.resources, job.analyses, job.warnings, job.extraction, job.layout).blocks });
+    return job.page;
+  };
+  const { jobs: [{ id }] } = await f.service.create({ input: document.url, options: { extraction: { mode: 'both' }, denseOcr: false, keepLocal: true } });
+  await idle(f.service);
+  const job = f.service.jobs.get(id);
+  assert.equal(job.status, 'partial');
+  assert.equal(created.size, 0);
+
+  f.service.retry(id); await idle(f.service);
+  assert.equal(job.status, 'failed');
+  const persisted = JSON.parse(fs.readFileSync(path.join(f.root, 'collection/jobs', id, 'job.json'), 'utf8'));
+  assert.equal(persisted.reportWrites.content.page.id, created.get(id + ':content'));
+  assert.equal(persisted.reportWrites.style.page.id, created.get(id + ':style'));
+  assert.equal(persisted.reportWrites.style.resources, undefined);
+  f.service.jobs.set(id, persisted);
+  f.service.retry(id); await idle(f.service);
+  const finished = f.service.jobs.get(id);
+  assert.equal(finished.status, 'completed');
+  assert.equal(created.size, 2);
+  assert.equal(contentCalls, 1); assert.equal(styleCalls, 2);
+  assert.deepEqual(f.calls.filter(call => ['download:video', 'transcript', 'vision', 'upload'].includes(call)).sort(), ['download:video', 'transcript', 'upload', 'vision']);
+  assert.deepEqual(finished.pages.map(page => page.key), ['content', 'style']);
+  assert.deepEqual(f.service.status().latestCompletion.pages, finished.pages);
+  assert.deepEqual([...plans.values()].map(plan => plan.title), ['双向样片 · 内容理解', '双向样片 · 画面与视频制作拆解']);
+  assert.equal(new Set([...plans.values()].map(plan => plan.blocks[0].video.file_upload.id)).size, 1);
+  const content = fs.readFileSync(path.join(finished.exportDirectory, '内容理解.md'), 'utf8');
+  const style = fs.readFileSync(path.join(finished.exportDirectory, '画面与视频制作拆解.md'), 'utf8');
+  assert.match(content, /内容独立结果[\s\S]+<summary>证据链<\/summary>/);
+  assert.doesNotMatch(content, /画面独立结果/);
+  assert.match(style, /画面独立结果[\s\S]+<summary>技术实现<\/summary>/);
+  assert.doesNotMatch(style, /内容独立结果/);
+  assert.equal(fs.existsSync(path.join(finished.exportDirectory, 'AI提取结果.md')), false);
+});
+
 test('DeepSeek HTTP 500 preserves the collection and a retry finishes the summary on the same page', async t => {
   const document = normalizeDocument({ title: '抖音视频', url: 'https://v.douyin.com/fixture/', nodes: [
     { kind: 'video', url: 'https://example.com/video.mp4' }

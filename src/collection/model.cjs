@@ -4,6 +4,7 @@ const { randomUUID, createHash } = require('node:crypto');
 const { promptSettings } = require('./prompts.cjs');
 const kinds = new Set(['paragraph', 'heading', 'quote', 'list', 'code', 'divider', 'image', 'video', 'audio', 'link']);
 const mediaKinds = new Set(['image', 'video', 'audio']);
+const reportDetail = /^###[ \t]+详情[ \t]*[｜|][ \t]*(\S.{0,150})$/u;
 const defaults = Object.freeze({ shortcut: 'CommandOrControl+Shift+J', transcribe: true, vision: true, visionEngine: 'deepseek', denseOcr: true,
   compress: true, quality: '720p', keepLocal: false, keepHistory: false, extraction: Object.freeze(promptSettings()), types: ['text', 'image', 'video', 'audio'],
   browserPort: 19333, browserExecutable: '', browserProfile: '', proxy: '', outputDirectory: '', destination: null, favorites: [] });
@@ -97,4 +98,4 @@ function recognitionResult(item, key) {
   if (key === 'vision' && item?.vision?.ocrText && item.vision.text === item.vision.ocrText) return null;
   return item?.[key];
 }
-module.exports = { defaults, kinds, mediaKinds, hash, publicUrl, extractUrls, destination, preferences, normalizeDocument, selectedNodes, atomicJson, layoutNodes, recognitionResult };
+module.exports = { defaults, kinds, mediaKinds, reportDetail, hash, publicUrl, extractUrls, destination, preferences, normalizeDocument, selectedNodes, atomicJson, layoutNodes, recognitionResult };

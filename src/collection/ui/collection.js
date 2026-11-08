@@ -15,6 +15,7 @@ const element = (tag, cls, text) => { const node = document.createElement(tag); 
 function message(text, error = false) { $('message').textContent = text || ''; $('message').hidden = !text; $('message').classList.toggle('error', error); }
 async function request(action, input) { const response = await api.request(action, input); if (!response.ok) { message(response.error, true); throw Error(response.error); } return response.result; }
 function button(label, callback, cls = 'text') { const b = element('button', cls, label); b.type = 'button'; b.addEventListener('click', () => Promise.resolve().then(callback).catch(() => {})); return b; }
+const reportLinks = job => (job?.pages || []).map(page => button(page.name + ' ↗', () => request('open-page', { id: job.id, report: page.key })));
 function setExpanded(value) { expanded = value; $('expanded').hidden = !value; $('expand').textContent = value ? '收起选项 ⌃' : '展开选项 ⌄'; $('expand').setAttribute('aria-expanded', String(value)); void api.request('expand', { expanded: value }); if (value && activePanel === 'destination') void loadWorkspaces().catch(() => {}); }
 function setPanel(name, focus = false) {
   activePanel = name;
@@ -43,6 +44,8 @@ async function refresh() {
   $('task-status').title = state.jobs.length + ' 条收集任务，点击查看进度';
   $('keep-history').checked = state.settings.keepHistory;
   $('result-link').hidden = !state.latestCompletion;
+  $('last-result').hidden = !!state.latestCompletion?.pages?.length;
+  $('last-report-links').replaceChildren(...reportLinks(state.latestCompletion));
   $('components').textContent = (state.binaries.downloader ? '下载器已就绪' : '下载器待准备') + ' · ' + (state.binaries.ffmpeg ? '媒体处理已就绪' : '媒体处理待准备') + (state.lastError ? ' · ' + state.lastError : '');
   $('prepare').disabled = state.preparing;
   $('local-directory').textContent = '本地资料保存到：' + (state.settings.outputDirectory || state.defaultDownloadDirectory || '系统下载目录 / NotionSwitch') + ' / 链接标题';
@@ -138,7 +141,8 @@ function renderTasks() {
     if (job.classification) card.append(element('div', 'task-meta', '总结类型：' + job.classification.title));
     const actions = element('div', 'task-actions');
     if (job.preview) actions.append(button(['awaiting_selection', 'needs_login'].includes(job.status) ? '选择内容' : '查看内容', () => { selectedJob = job.id; renderSelection(job); }));
-    if (job.page) actions.append(button('打开 Notion ↗', () => request('open-page', { id: job.id })));
+    if (job.pages?.length) actions.append(...reportLinks(job));
+    else if (job.page) actions.append(button('打开 Notion ↗', () => request('open-page', { id: job.id })));
     if (job.status === 'completed' && !job.local) actions.append(button('重新收集为新记录', async () => { await request('create', { input: job.url, options: { ...readOptions(), extraction: job.options.extraction, vision: job.options.vision }, force: true }); await refresh(); }));
     if (active.includes(job.status)) actions.append(button('停止', async () => { await request('cancel', { id: job.id }); await refresh(); }));
     if (['failed', 'partial', 'cancelled', 'interrupted', 'needs_login'].includes(job.status)) actions.append(button('继续／重试', async () => { await request('retry', { id: job.id }); await refresh(); }));

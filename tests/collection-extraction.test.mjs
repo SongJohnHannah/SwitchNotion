@@ -75,7 +75,7 @@ test('pure articles use the same writing template and checkpoint every selected 
   const engine = new CollectionExtraction({ provider });
   const result = await engine.run(job, [doc.nodes[0], doc.nodes[2]], { signal: new AbortController().signal });
   assert.equal(calls.length, 3);
-  assert.ok(calls.every(call => call.messages[1].content.includes('保留数字和步骤') && call.messages[1].content.includes('写作特色与记忆点')));
+  assert.ok(calls.every(call => call.messages[1].content.includes('保留数字和步骤') && call.messages[1].content.includes('写法与迁移骨架') && call.messages[1].content.includes('记忆点')));
   assert.ok(calls.every(call => !JSON.stringify(call.messages).includes('未选择的私人段落')));
   assert.ok(calls.every(call => call.messages[1].content.includes('本次正文只覆盖节选')));
   assert.ok(calls.slice(0, 2).every(call => call.messages[1].content.includes('只输出当前范围的紧凑证据笔记')));
@@ -138,7 +138,8 @@ test('both video directions extract the script, and only the visual route search
   const provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate(input) {
     calls.push(input.messages);
     if (input.messages[0].content.includes('公开搜索词')) yield '{"content":["内容补全 不应搜索"],"visual":["https://should-not-search.example","/local/path","字幕遮罩 A / B 16:9 教程"]}';
-    else yield '## 画面与视频制作拆解\n\n## 操作步骤\n### 步骤 1｜加字幕遮罩（剪辑）\n参考 [S1] [S2] [S9]';
+    else if (input.messages[1].content.includes('## 蒸馏到我的视频')) yield '## 原片效果怎么做\n字幕遮罩\n## 展开细节\n### 详情｜技术实现与查证\n参考 [S1] [S2] [S9]';
+    else yield '## 专业结论\n跟着做字幕\n## 展开细节\n### 详情｜证据链\n原始逐字稿';
   } };
   const url = 'https://example.com/guide', unavailable = 'https://example.com/unavailable';
   let closed = 0;
@@ -158,18 +159,20 @@ test('both video directions extract the script, and only the visual route search
 
   assert.equal((await run('auto')).type, '内容理解');
   assert.deepEqual(searches, []);
-  assert.match(calls[0][1].content, /开工前要核实的规则.*口播脚本与表达/s);
+  assert.match(calls[0][1].content, /## 专业结论.*## 费曼解释/s);
   const style = await run('style');
   assert.equal(style.type, '画面与视频制作拆解');
   assert.deepEqual(searches, ['字幕遮罩 A/B 16:9 教程']);
   assert.deepEqual(reads, [url, unavailable]);
   assert.equal(closed, 1);
+  assert.match(calls[1][0].content, /怎样用代码实现/);
   assert.match(calls[1][1].content, /字幕从画面下方出现/);
   const [visuals, otherEvidence] = calls[1][1].content.split('其他素材证据节选');
   assert.match(visuals, /素材 1 · 画面识别\n字幕从画面下方出现/);
   assert.match(otherEvidence, /素材 1 · 逐字稿/);
   assert.doesNotMatch(otherEvidence, /字幕从画面下方出现/);
-  assert.match(calls[2][1].content, /口播脚本与表达.*特效做法与查证结果/s);
+  assert.match(calls[2][1].content, /## 蒸馏到我的视频.*## 给 AI 的指令/s);
+  assert.match(calls[2][1].content, /AI 参考复现路线.*技术实现与查证/s);
   assert.match(calls[2][2].content, /使用遮罩裁切字幕/);
   assert.doesNotMatch(calls[2][2].content, /加载中/);
   assert.doesNotMatch(JSON.stringify(calls[2]), /未读摘要/);
@@ -186,14 +189,13 @@ test('both video directions extract the script, and only the visual route search
   assert.match(calls[5][2].content, /使用遮罩裁切字幕/);
   assert.match(combined.text, /^# 内容理解\n[\s\S]+\n# 画面与视频制作拆解\n/);
   assert.deepEqual(combined.sources.map(source => source.url), [url]);
-  const combinedPage = renderDocument(doc, doc.nodes, { [video.id]: { uploads: [{ id: 'fixture', uploaded: true }] } },
-    { [video.id]: { transcript: { text: '原始逐字稿' } } }, [], combined, 'result-first');
-  assert.equal(combinedPage.blocks[0].type, 'video');
-  assert.deepEqual(combinedPage.blocks.filter(block => block.heading_1).map(block => block.heading_1.rich_text[0].text.content),
-    ['AI 提取结果 · 内容理解与画面分析', '内容理解', '画面与视频制作拆解']);
-  assert.deepEqual(combinedPage.blocks.filter(block => block.toggle).map(block => block.toggle.rich_text[0].text.content),
-    ['步骤 1｜加字幕遮罩（剪辑）', '步骤 1｜加字幕遮罩（剪辑）']);
-  assert.equal(combinedPage.blocks.at(-1).paragraph.rich_text[0].text.content, '原始逐字稿');
+  assert.deepEqual(combined.reports.map(report => report.key), ['content', 'style']);
+  assert.equal(combined.reports[0].sources, undefined);
+  assert.deepEqual(combined.reports[1].sources.map(source => source.url), [url]);
+  const pages = combined.reports.map(report => renderDocument(doc, doc.nodes, { [video.id]: { uploads: [{ id: 'fixture', uploaded: true }] } },
+    { [video.id]: { transcript: { text: '原始逐字稿' } } }, [], report, 'result-first').blocks);
+  assert.ok(pages.every(blocks => blocks[0].type === 'video' && blocks.at(-1).paragraph.rich_text[0].text.content === '原始逐字稿'));
+  assert.deepEqual(pages.map(blocks => blocks.find(block => block.toggle).toggle.rich_text[0].text.content), ['证据链', '技术实现与查证']);
 });
 
 test('OCR-only fallback is supplied as text evidence and an empty search plan makes no public query', async () => {
@@ -216,24 +218,41 @@ test('OCR-only fallback is supplied as text evidence and an empty search plan ma
   assert.doesNotMatch(calls[1].at(-1).content, /画面识别：/);
 });
 
-test('final notes are rewritten as a report and overlong short-video style output is compacted without truncation', async () => {
+test('the visual route accepts frames without OCR or speech and omits an unsupported script analysis', async () => {
+  const document = normalizeDocument({ url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
+  const [video] = document.nodes;
+  const job = { options: preferences({ extraction: { mode: 'style' } }), document,
+    analyses: { [video.id]: { vision: { text: '两张采样帧可见暗底与曲线。' } } },
+    resources: { [video.id]: { asset: { path: '/video.mp4', audio: true } } } };
+  const provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate({ messages }) {
+    assert.match(messages[0].content, /进入纯视觉分支/);
+    yield '## 原片效果怎么做\n暗底与发光曲线。\n## 展开细节\n### 详情｜表达手法\n这里不应出现。\n### 详情｜AI 参考复现路线\n按参考帧绘制曲线。';
+  } };
+  const result = await new CollectionExtraction({ provider }).run(job, document.nodes);
+  assert.doesNotMatch(result.text, /表达手法|不应出现/);
+  assert.match(result.text, /详情｜AI 参考复现路线\n按参考帧绘制曲线/);
+});
+
+test('final notes are rewritten as a report and an overlong opening is shortened without discarding folded evidence', async () => {
   const document = normalizeDocument({ url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
   const [video] = document.nodes;
   const job = { options: preferences({ extraction: { mode: 'style' } }), document,
     analyses: { [video.id]: { vision: { text: '单一版式的双栏字卡' } } },
     resources: { [video.id]: { asset: { path: '/video.mp4', audio: false, duration: 26, width: 960, height: 540 } } } };
-  const calls = [], compact = '## 复现目标与优先特征\nPowerPoint 双栏字卡\n## 操作步骤\n### 步骤 1｜搭双卡\n- 插入两个矩形并对齐。';
+  const calls = [], compact = '## 原片效果怎么做\n左右字卡对称。\n## 给 AI 的指令\n用参考截图制作双栏字卡小样。';
+  const details = '## 展开细节\n### 详情｜技术实现与查证\n保留可对照的字幕组件和完整的实现步骤。';
   const provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate({ messages }) {
     calls.push(messages);
     if (calls.length === 1) yield '- 尚未汇总的证据';
-    else if (calls.length === 2) yield '## 复现目标与优先特征\n' + '双栏字卡'.repeat(420);
+    else if (calls.length === 2) yield compact.replace('左右字卡对称。', '左右字卡对称。'.repeat(150)) + '\n\n' + details;
     else yield compact;
   } };
   const result = await new CollectionExtraction({ provider }).run(job, document.nodes);
   assert.match(calls[0].at(-1).content, /已读取的视频规格：\n26 秒，960 × 540 像素/);
   assert.match(calls[1].at(-1).content, /上一稿未按最终成稿格式输出/);
-  assert.match(calls[2].at(-1).content, /700–950 字符/);
-  assert.equal(result.text, compact);
+  assert.match(calls[2].at(-1).content, /只精简下列首屏/);
+  assert.doesNotMatch(calls[2].at(-1).content, /完整的实现步骤/);
+  assert.equal(result.text, compact + '\n\n' + details);
 });
 
 test('a concept summary keeps its learning framework when no runnable steps are present', async () => {
@@ -260,7 +279,7 @@ test('detailed learning summaries retain their evidence, expression analysis and
   let calls = 0;
   const provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate({ messages }) {
     calls++;
-    assert.match(messages[0].content, /完整输出适用栏目/);
+    assert.match(messages[0].content, /专业结论 → 费曼解释/);
     assert.match(messages[1].content, /## 费曼解释/);
     assert.doesNotMatch(messages.map(({ content }) => content).join('\n'), /短版|350–650/);
     yield report;
@@ -322,7 +341,7 @@ test('pure text uses article analysis once, even when visual or both directions 
 test('retrying both directions reuses the first finished result after the second fails', async () => {
   let contentCalls = 0, styleCalls = 0;
   const provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate({ messages }) {
-    if (messages[1].content.includes('特效做法与查证结果')) {
+    if (messages[1].content.includes('## 蒸馏到我的视频')) {
       if (++styleCalls === 1) throw Error('画面提取暂时失败');
       yield '## 制作\n画面结果';
     } else { contentCalls++; yield '## 教学\n内容结果'; }

@@ -17,7 +17,7 @@ const { clearCompleted, ownedExport } = require('./history.cjs');
 const { prepareLocalOutput, writeLocalOutput } = require('./local-output.cjs');
 const activeStates = new Set(['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving']);
 const deletableStates = new Set(['failed', 'partial', 'cancelled', 'interrupted', 'needs_login', 'awaiting_selection']);
-const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.visionEngine, options.compress, options.quality, options.keepLocal, options.extraction, ...(options.denseOcr && options.extraction.mode !== 'off' ? ['dense-ocr'] : [])]));
+const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.visionEngine, options.compress, options.quality, options.keepLocal, options.extraction, ...(options.extraction.mode !== 'off' ? ['separate-reports-v1', ...(options.denseOcr ? ['dense-ocr'] : [])] : [])]));
 const safeError = error => {
   const text = String(error?.message || '操作未完成，请检查连接后重试。');
   if (/(?:sk-|ntn_|secret_)[\w-]{8}|Bearer\s|Cookie\s*[:=]/i.test(text)) return '连接或处理失败，请在配置中检查后重试。';
@@ -88,7 +88,7 @@ class CollectionService extends EventEmitter {
     return { active: this.active, lastError: this.lastError, configError: this.configError || '', settings: structuredClone(this.settings), defaultDownloadDirectory: path.join(this.downloadsDirectory, 'NotionSwitch'),
       binaries: this.binaries.status(), preparing: this.preparing, latestCompletion: this.latestCompletion || null,
       jobs: [...this.jobs.values()].filter(job => !job.historyCleared && (this.settings.keepHistory || job.status !== 'completed')).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(job => ({ id: job.id, url: job.url, local: !!job.localSource, title: job.document?.title || job.url,
-        status: job.status, canDelete: deletableStates.has(job.status) && this.running?.id !== job.id && !this.queue.includes(job.id), message: job.message, createdAt: job.createdAt, page: job.page, options: job.options, warnings: job.warnings || [],
+        status: job.status, canDelete: deletableStates.has(job.status) && this.running?.id !== job.id && !this.queue.includes(job.id), message: job.message, createdAt: job.createdAt, page: job.page, pages: job.pages, options: job.options, warnings: job.warnings || [],
         classification: job.classification ? { type: job.classification.type, title: job.classification.title, tone: job.classification.tone || '', degraded: job.classification.degraded === true } : null,
         selectedIds: job.selectedIds, preview: job.document ? { incomplete: job.document.incomplete, requiresLogin: job.document.requiresLogin,
           nodes: job.document.nodes.map(n => ({ id: n.id, kind: n.kind, text: n.text.slice(0, 600), caption: n.caption.slice(0,600), level: n.level })) } : null })) };
@@ -113,8 +113,8 @@ class CollectionService extends EventEmitter {
       const existing = !force && [...this.jobs.values()].find(job => job.dedupe === key);
       if (existing) {
         if (['cancelled', 'failed', 'interrupted', 'partial'].includes(existing.status)) this.retry(existing.id);
-        if (existing.status === 'completed') this.latestCompletion = { id: existing.id, title: existing.document?.title || existing.url, page: existing.page };
-        results.push({ id: existing.id, existing: true, status: existing.status, page: existing.page }); continue;
+        if (existing.status === 'completed') this.latestCompletion = { id: existing.id, title: existing.document?.title || existing.url, page: existing.page, pages: existing.pages };
+        results.push({ id: existing.id, existing: true, status: existing.status, page: existing.page, pages: existing.pages }); continue;
       }
       const job = { version: 1, id: randomUUID(), url, dedupe: key, createdAt: new Date().toISOString(), status: 'queued', message: '等待读取内容…',
         options: structuredClone(chosen), previewOnly: preview, resources: {}, analyses: {}, warnings: [], layout: 'result-first',
@@ -167,18 +167,49 @@ class CollectionService extends EventEmitter {
     const failures = selected.filter(node => mediaKinds.has(node.kind) && (job.resources[node.id]?.error || job.analyses[node.id]?.errors?.length));
     job.warnings = [...job.document.warnings, ...failures.map(node => `素材 ${selected.indexOf(node) + 1} 处理未完成：${job.resources[node.id]?.error || job.analyses[node.id].errors.join('；')}`)];
     if (job.extraction?.error) job.warnings.push('内容提取待完成：' + job.extraction.error);
-    job.status = 'saving'; progress('正在按原文顺序保存到 Notion，并核验内容…');
-    await this.notion.write(job, selected, save, signal);
+    const both = job.options.extraction.mode === 'both' && selected.some(node => ['video', 'image'].includes(node.kind));
+    const waitingForReports = both && !job.page && job.extraction?.error;
+    const separate = job.extraction?.reports?.length && (!job.page || job.reportWrites);
+    if (!waitingForReports) {
+      job.status = 'saving'; progress(separate ? '正在分别保存两份 Notion 文档…' : '正在按原文顺序保存到 Notion，并核验内容…');
+      if (separate) await this.writeReports(job, selected, save, signal);
+      else await this.notion.write(job, selected, save, signal);
+    }
     if (job.options.keepLocal) this.exportLocal(job, selected);
     job.status = failures.length || job.document.incomplete || job.extraction?.error ? 'partial' : 'completed';
-    job.message = job.status === 'completed' ? '已保存到 Notion，正文和媒体顺序已核验。' :
+    job.message = job.status === 'completed' ? (separate ? '两份 Notion 文档已分别保存并核验。' : '已保存到 Notion，正文和媒体顺序已核验。') :
+      waitingForReports ? '已保留下载与识别进度，分析完成后将分别保存两份文档。' :
       job.extraction?.deferred ? '已保存已获取的内容；' + job.extraction.error :
       '已保存已获取的内容；' + (failures.length ? '部分素材下载、识别或上传未完成，请查看具体原因后重试。' : job.extraction?.error ? 'AI 总结未完成，请查看具体原因后重试。' : '原网页内容尚未完整获取，请检查原网页后重试。'); save();
     if (job.status === 'completed' && !job.options.keepLocal) this.releaseWorkingFiles(job);
-    this.emit('finished', { id: job.id, title: job.document.title, status: job.status, url: job.page?.url, pageId: job.page?.id });
+    this.emit('finished', { id: job.id, title: job.document.title, status: job.status, url: job.page?.url, pageId: job.page?.id, pages: job.pages });
     if (job.status === 'completed') {
-      this.latestCompletion = { id: job.id, title: job.document.title, page: job.page };
+      this.latestCompletion = { id: job.id, title: job.document.title, page: job.page, pages: job.pages };
       if (!this.settings.keepHistory) this.forgetCompleted(job);
+    }
+  }
+  async writeReports(job, nodes, save, signal) {
+    const reports = job.extraction.reports;
+    job.reportWrites ||= {};
+    for (const report of reports) {
+      const state = job.reportWrites[report.key] ||= {};
+      const shared = { id: `${job.id}:${report.key}`, createdAt: job.createdAt, options: job.options, selectedIds: job.selectedIds,
+        document: { ...job.document, title: `${job.document.title} · ${report.name}` }, resources: job.resources,
+        analyses: job.analyses, warnings: job.warnings, extraction: report, layout: job.layout };
+      // The writer keeps separate page checkpoints while the original media and recognition stay on the parent job.
+      const writeJob = Object.assign(Object.create(shared), state);
+      const saveReport = () => {
+        Object.assign(state, writeJob);
+        job.pages = reports.flatMap(({ key, name }) => {
+          const page = job.reportWrites[key]?.page;
+          return page ? [{ ...page, key, name }] : [];
+        });
+        job.page = job.pages[0];
+        job.message = `正在保存「${report.name}」${writeJob.message ? ' · ' + writeJob.message : '…'}`;
+        save();
+      };
+      await this.notion.write(writeJob, nodes, saveReport, signal);
+      saveReport();
     }
   }
   async processMedia(job, nodes, limit, save, progress, signal) {
@@ -268,7 +299,7 @@ class CollectionService extends EventEmitter {
     try {
       clearCompleted(this.root, this.directory, job.id);
       const receipt = { id: job.id, version: 1, createdAt: job.createdAt, url: job.url, dedupe: job.dedupe, status: 'completed', message: '已保存到 Notion，本地临时记录已清理。',
-        options: job.options, page: job.page, document: { title: job.document?.title || job.url, nodes: [] }, historyCleared: true, ...(job.localSource ? { localSource: { name: job.localSource.name } } : {}) };
+        options: job.options, page: job.page, pages: job.pages, document: { title: job.document?.title || job.url, nodes: [] }, historyCleared: true, ...(job.localSource ? { localSource: { name: job.localSource.name } } : {}) };
       this.jobs.set(job.id, receipt);
       const receipts = [...this.jobs.values()].filter(value => value.historyCleared); for (const old of receipts.slice(0, Math.max(0, receipts.length - 30))) this.jobs.delete(old.id);
     } catch { this.lastError = '内容已保存到 Notion，但本地临时记录尚未清理，请检查文件占用或目录权限。'; }
