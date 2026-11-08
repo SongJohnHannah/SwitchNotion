@@ -93,6 +93,14 @@ class WebSources {
     const research = purpose === 'research' && (input?.type === 'researcher' || input?.type === 'workflow' && input.isAgentResearchRequest === true);
     const config = this.settings(); if (!config.enabled || input?.useWebSearch === false || !research && input?.type && input.type !== 'personal_agent') return null;
     if (!uuid(userId) || !uuid(spaceId)) fail('缺少当前账号或工作区，未启用网络工具。');
+    return this.openSession({ config, content, priorSources, userId, spaceId, signal, allowedDomains });
+  }
+  openCollection(signal) {
+    const config = this.settings();
+    if (!config.enabled || !config.searchEnabled || !this.key()) return null;
+    return this.openSession({ config, signal });
+  }
+  openSession({ config, content, priorSources, userId, spaceId, signal, allowedDomains }) {
     const controller = new AbortController(), active = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     const domains = normalizeDomains(allowedDomains), allowed = new Set([...explicitUrls(content)].filter(value => domainAllowed(value, domains))), pages = new Map(), loading = new Map(); let searches = 0, fetches = 0, totalCharacters = 0, closed = false;
     if (priorSources && uuid(priorSources.userId) === uuid(userId) && uuid(priorSources.spaceId) === uuid(spaceId) && Array.isArray(priorSources.urls) && priorSources.urls.length <= 32)

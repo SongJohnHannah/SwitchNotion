@@ -4,6 +4,7 @@ const { randomUUID, createHash } = require('node:crypto');
 const { McpClient, validateServer } = require('./mcp-client.cjs');
 const { scopeKey } = require('./workspace-memory.cjs');
 const { approvalState } = require('./approval-state.cjs');
+const { isTableWrite } = require('./notion-blocks.cjs');
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const configuration = value => ({ ...value, servers: value?.servers?.map(({ oauth, ...server }) => ({ ...server, ...(oauth ? { oauth: { grantId: oauth.grantId, resource: oauth.resource, issuer: oauth.issuer, clientId: oauth.clientId, scope: oauth.scope } } : {}) })) });
 const definition = (name, description, properties, required) => ({ type: 'function', function: { name, description, parameters: { type: 'object', properties, required, additionalProperties: false } } });
@@ -22,7 +23,11 @@ class AiExtensions {
     try { fs.writeFileSync(file, value + '\n', { flag: 'wx', mode: 0o600, flush: true }); fs.renameSync(file, this.file); } finally { if (fs.existsSync(file)) fs.unlinkSync(file); }
   }
   servers(key, data = this.read()) { this.memory.entry(key); return data.scopes[key]?.servers || []; }
-  state(key) { const data = this.read(); return { approval: data.scopes[key]?.approval === 'each' ? 'each' : 'task', browserEnabled: data.scopes[key]?.browser === true, servers: this.servers(key, data).map(({ token, oauth, ...server }) => ({ ...server, keyConfigured: !!token, oauthConnected: !!oauth, oauthExpired: !!oauth?.expiresAt && oauth.expiresAt <= Date.now() && !oauth.refreshToken })) }; }
+  state(key) {
+    const data = this.read(), scope = data.scopes[key], mode = scope?.approval ?? 'tables';
+    return { approval: ['tables', 'task', 'each'].includes(mode) ? mode : 'task', browserEnabled: scope?.browser === true,
+      servers: this.servers(key, data).map(({ token, oauth, ...server }) => ({ ...server, keyConfigured: !!token, oauthConnected: !!oauth, oauthExpired: !!oauth?.expiresAt && oauth.expiresAt <= Date.now() && !oauth.refreshToken })) };
+  }
   async client(key, server, options) {
     if (!server.oauth) return this.clientFactory(server, options);
     if (!this.oauth) throw Error('Notion MCP OAuth 登录服务尚未就绪。');
@@ -73,7 +78,7 @@ class AiExtensions {
         if (typeof input.enabled !== 'boolean') throw Error('Notion MCP 浏览器开关无效。');
         data.scopes[input.key] = { ...data.scopes[input.key], browser: input.enabled }; this.write(data);
       } else if (action === 'approval.configure') {
-        if (!['task', 'each'].includes(input.mode)) throw Error('Notion MCP 审批方式无效。');
+        if (!['tables', 'task', 'each'].includes(input.mode)) throw Error('Notion MCP 审批方式无效。');
         data.scopes[input.key] = { ...data.scopes[input.key], approval: input.mode }; this.write(data);
       } else if (action === 'mcp.test') {
         if (!before) throw Error('Notion MCP 请先保存服务。');
@@ -99,14 +104,15 @@ class AiExtensions {
     definitions.push(...(files?.definitions || []));
     definitions.push(...(output?.definitions || []));
     const approvedSpaces = new Set(); let approvalDenied = false;
-    const mode = this.state(key).approval;
+    const mode = this.state(key).approval, approveByTask = mode !== 'each';
     return { definitions, check, onApproval: approval.observe, beforeTool: async (name, args, label) => {
-      check(); const target = !args.workspace_id || args.workspace_id === 'current' ? spaceId : args.workspace_id;
-      if (mode === 'task' && approvedSpaces.has(target)) return;
+      check(); const target = !args?.workspace_id || args.workspace_id === 'current' ? spaceId : args.workspace_id;
+      if (approveByTask && approvedSpaces.has(target)) return;
       if (approvalDenied) throw Object.assign(Error('Notion 审批本轮修改已被拒绝，未执行后续写入。'), { writeOutcome: 'not_submitted' });
+      if (mode === 'tables' && !operationScope?.startsWith('background:') && target === spaceId && isTableWrite(name, args)) return;
       const preview = JSON.stringify(args, null, 2);
       if (preview.length > 16000) throw Object.assign(Error('Notion 审批操作内容过长，无法完整显示，请将修改拆分。'), { writeOutcome: 'not_submitted' });
-      const allowed = await approval.confirm({ title: '批准 Notion 修改', message: label || name, detail: '本轮任务：' + task.slice(0, 12000) + '\n\n本次修改：\n' + preview + (mode === 'task' ? '\n\n允许后，本轮任务在这个工作区内的后续 Notion 修改继续执行。' : ''), signal }, name);
+      const allowed = await approval.confirm({ title: '批准 Notion 修改', message: label || name, detail: '本轮任务：' + task.slice(0, 12000) + '\n\n本次修改：\n' + preview + (approveByTask ? '\n\n允许后，本轮任务在这个工作区内的后续 Notion 修改继续执行。' : ''), signal }, name);
       check(); if (!allowed) { approvalDenied = true; throw Object.assign(Error('Notion 审批用户拒绝了本轮修改，未提交操作。'), { writeOutcome: 'not_submitted' }); }
       approvedSpaces.add(target);
     }, execute: async (name, args) => {

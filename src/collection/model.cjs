@@ -4,7 +4,7 @@ const { randomUUID, createHash } = require('node:crypto');
 const { promptSettings } = require('./prompts.cjs');
 const kinds = new Set(['paragraph', 'heading', 'quote', 'list', 'code', 'divider', 'image', 'video', 'audio', 'link']);
 const mediaKinds = new Set(['image', 'video', 'audio']);
-const defaults = Object.freeze({ shortcut: 'CommandOrControl+Shift+J', transcribe: true, vision: true, visionEngine: 'deepseek',
+const defaults = Object.freeze({ shortcut: 'CommandOrControl+Shift+J', transcribe: true, vision: true, visionEngine: 'deepseek', denseOcr: true,
   compress: true, quality: '720p', keepLocal: false, keepHistory: false, extraction: Object.freeze(promptSettings()), types: ['text', 'image', 'video', 'audio'],
   browserPort: 19333, browserExecutable: '', browserProfile: '', proxy: '', outputDirectory: '', destination: null, favorites: [] });
 const hash = value => createHash('sha256').update(String(value)).digest('hex');
@@ -34,7 +34,7 @@ function destination(value) {
 function preferences(input = {}, base = defaults) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !Object.hasOwn(defaults, k))) throw Error('收集设置包含未知选项。');
   const result = { ...base, ...input };
-  for (const key of ['transcribe', 'vision', 'compress', 'keepLocal', 'keepHistory']) if (typeof result[key] !== 'boolean') throw Error('收集开关无效。');
+  for (const key of ['transcribe', 'vision', 'denseOcr', 'compress', 'keepLocal', 'keepHistory']) if (typeof result[key] !== 'boolean') throw Error('收集开关无效。');
   if (!['deepseek', 'local'].includes(result.visionEngine)) throw Error('请选择有效的画面识别方式。');
   result.extraction = promptSettings(input.extraction, base.extraction || defaults.extraction);
   if (!['720p', '1080p', 'original'].includes(result.quality)) throw Error('请选择有效的画质。');
@@ -50,7 +50,16 @@ function preferences(input = {}, base = defaults) {
 }
 function normalizeDocument(value) {
   if (!value || typeof value !== 'object' || !Array.isArray(value.nodes)) throw Error('没有获取到可识别的正文。');
-  const sourceUrl = publicUrl(value.url), title = String(value.title || new URL(sourceUrl).hostname).slice(0, 300);
+  const sourceUrl = publicUrl(value.url), source = new URL(sourceUrl);
+  const douyinId = /(?:^|\.)(?:douyin\.com|iesdouyin\.com)$/i.test(source.hostname) && /^\/(?:share\/|m\/)?video\/(\d+)\/?$/.exec(source.pathname)?.[1];
+  let title = String(value.title || source.hostname).slice(0, 300), titleSource;
+  if (douyinId) {
+    const candidates = Array.isArray(value.douyinTitles) ? value.douyinTitles : [value.title];
+    const workTitle = candidates.filter(candidate => typeof candidate === 'string').map(candidate => candidate.trim().replace(/\s*[-–|｜_]\s*抖音(?:精选)?\s*$/u, '').trim())
+      .find(candidate => candidate && !/^(?:(?:[\w-]+\.)*(?:douyin|iesdouyin)\.com|抖音(?:短视频|精选)?|(?:在抖音)?记录美好生活\d*|加载中|视频详情)$/iu.test(candidate));
+    titleSource = workTitle ? 'platform' : 'unavailable';
+    title = workTitle?.slice(0, 300) || `抖音作品 ${douyinId}`;
+  }
   const nodes = value.nodes.slice(0, 5000).filter(n => kinds.has(n.kind)).map((n, i) => {
     const node = { id: 'item-' + i + '-' + hash([n.kind, n.url || n.text, i].join('|')).slice(0, 12), kind: n.kind,
       text: String(n.text || ''), caption: String(n.caption || '') };
@@ -65,7 +74,7 @@ function normalizeDocument(value) {
     if (n.expectedAudio === true) node.expectedAudio = true;
     return node;
   });
-  return { title, url: sourceUrl, author: String(value.author || '').slice(0, 200), nodes,
+  return { title, ...(titleSource ? { titleSource } : {}), url: sourceUrl, author: String(value.author || '').slice(0, 200), nodes,
     warnings: [...new Set([...(Array.isArray(value.warnings) ? value.warnings.map(String) : []), ...(value.nodes.length > 5000 ? ['正文超过 5000 项，尚未完整获取。'] : [])])],
     requiresLogin: value.requiresLogin === true, incomplete: value.incomplete === true || value.nodes.length > 5000 };
 }
@@ -83,4 +92,9 @@ function layoutNodes(nodes, layout) {
   if (layout !== 'media-at-end') return nodes;
   return [...nodes.filter(node => !['audio', 'video'].includes(node.kind)), ...nodes.filter(node => ['audio', 'video'].includes(node.kind))];
 }
-module.exports = { defaults, kinds, mediaKinds, hash, publicUrl, extractUrls, destination, preferences, normalizeDocument, selectedNodes, atomicJson, layoutNodes };
+function recognitionResult(item, key) {
+  if (key === 'ocr' && !item?.ocr?.text && item?.vision?.ocrText) return { text: item.vision.ocrText, note: '由画面识别阶段补做，仅覆盖相应采样帧。' };
+  if (key === 'vision' && item?.vision?.ocrText && item.vision.text === item.vision.ocrText) return null;
+  return item?.[key];
+}
+module.exports = { defaults, kinds, mediaKinds, hash, publicUrl, extractUrls, destination, preferences, normalizeDocument, selectedNodes, atomicJson, layoutNodes, recognitionResult };

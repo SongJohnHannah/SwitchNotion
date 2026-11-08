@@ -41,6 +41,22 @@ test('incomplete upload stays a placeholder and never attaches a pending upload'
   const rendered = renderDocument(doc, doc.nodes, { [doc.nodes[0].id]: { uploads: [{ id: randomUUID(), uploaded: false }] } });
   assert.deepEqual(rendered.blocks.map(b => b.type), ['paragraph', 'paragraph']); assert.equal(rendered.slots[doc.nodes[0].id].placeholder, true);
 });
+test('new video pages start with video, put expandable instructions first and end with transcripts', () => {
+  const doc = normalizeDocument({ url: 'https://example.com/v', nodes: [{ kind: 'paragraph', text: '原始简介' }, { kind: 'video', url: 'https://example.com/v.mp4' }] });
+  const [intro, video] = doc.nodes;
+  const extraction = { name: '内容理解', text: '## 操作步骤\n### 步骤 1｜创建项目\n' + '- 操作细节\n'.repeat(90) + '### 步骤 2｜导出\n- 检查\n## 口播脚本\n开场' };
+  const plan = renderDocument(doc, doc.nodes, { [video.id]: { uploads: [{ id: randomUUID(), uploaded: true }] } },
+    { [video.id]: { transcript: { text: '原始逐字稿' }, vision: { text: '原始字幕', ocrText: '原始字幕' } } }, [], extraction, 'result-first');
+  assert.equal(plan.blocks[0].type, 'video');
+  const toggles = plan.blocks.filter(block => block.type === 'toggle');
+  assert.deepEqual(toggles.map(block => block.toggle.children.length), [79, 11, 1]);
+  assert.match(toggles[0].toggle.rich_text[0].text.content, /步骤 1｜创建项目/);
+  assert.ok(plan.blocks.indexOf(toggles.at(-1)) < plan.slots[intro.id].start);
+  assert.equal(plan.blocks.at(-1).paragraph.rich_text[0].text.content, '原始逐字稿');
+  assert.equal(plan.blocks.filter(block => block.paragraph?.rich_text[0]?.text.content === '原始字幕').length, 1);
+  assert.ok(plan.blocks.some(block => block.heading_2?.rich_text[0]?.text.content === '关键帧文字'));
+  assert.ok(batches(plan.blocks).every(group => group.reduce((total, block) => total + 1 + (block.toggle?.children.length || 0), 0) <= 80));
+});
 test('retry fills original media positions, keeps manual edits elsewhere and does not duplicate a page or attachment', async () => {
   const store = new Map(), order = [], calls = []; let pages = 0;
   const session = { execute: async (name, args) => {
@@ -73,4 +89,32 @@ test('retry fills original media positions, keeps manual edits elsewhere and doe
   const image = repaired.find(b => b.type === 'image'); image.image.caption = [{ type: 'text', text: { content: '手动备注' } }];
   job.resources[doc.nodes[1].id].uploads = [{ id: randomUUID(), uploaded: true }];
   await assert.rejects(client.write(job, doc.nodes, () => {}), /手动修改/); assert.equal(image.in_trash, undefined);
+});
+test('a late summary and vision result are inserted above the original transcript', async () => {
+  const pageId = randomUUID(), order = [], inserted = [];
+  const session = { execute: async (name, args) => {
+    if (name === 'read_block_children') return { results: order, next_cursor: null };
+    assert.equal(name, 'append_blocks');
+    const blocks = args.blocks.map(block => ({ ...block, id: randomUUID() }));
+    if (args.after) { inserted.push(args.after); assert.ok(order.some(block => block.id === args.after)); }
+    order.splice(args.after ? order.findIndex(block => block.id === args.after) + 1 : order.length, 0, ...blocks);
+    return { verified: true, created_block_ids: blocks.map(block => block.id) };
+  } };
+  const client = new CollectionNotion({ root: '/fixture' });
+  client.connect = async () => ({ session }); client.createPage = async () => {};
+  const doc = normalizeDocument({ url: 'https://example.com/v', nodes: [{ kind: 'paragraph', text: '原始简介' }, { kind: 'video', url: 'https://example.com/v.mp4' }] });
+  const video = doc.nodes[1];
+  const job = { id: randomUUID(), layout: 'result-first', document: doc, options: preferences(), page: { id: pageId },
+    resources: { [video.id]: { uploads: [{ id: randomUUID(), uploaded: true }] } }, analyses: { [video.id]: { transcript: { text: '原始逐字稿' } } }, warnings: [] };
+  await client.write(job, doc.nodes, () => {});
+  job.analyses[video.id].vision = { text: '画面细节' };
+  job.extraction = { name: '画面分析', text: '## 操作步骤\n### 步骤 1｜做片头\n检查节奏' };
+  await client.write(job, doc.nodes, () => {});
+  await client.write(job, doc.nodes, () => {});
+  assert.equal(inserted.length, 2);
+  assert.equal(order[0].type, 'video');
+  assert.equal(order.filter(block => block.type === 'toggle').length, 1);
+  const intro = order.findIndex(block => block.paragraph?.rich_text[0].text.content === '原始简介');
+  assert.ok(order.findIndex(block => block.type === 'toggle') < intro);
+  assert.equal(order.at(-1).paragraph.rich_text[0].text.content, '原始逐字稿');
 });

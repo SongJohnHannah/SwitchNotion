@@ -19,6 +19,7 @@ function imageResults(result, expected) {
   if (result.isError) fail('识别未完成，请检查已准备的本机引擎。');
   let data;
   try { data = result.structuredContent || JSON.parse((result.content || []).filter(item => item.type === 'text').map(item => item.text).join('\n')); } catch { fail('结果不是有效 JSON。'); }
+  if (expected === 1 && data?.errcode === 0 && typeof data.text === 'string' && data.text.length <= 200000) return [data.text];
   if (data?.errcode !== 0 || !Array.isArray(data.results) || data.results.length !== expected) fail('引擎返回的图片数量不一致，未使用不完整结果。');
   return data.results.map(item => {
     if (item.errcode !== 0) fail('部分图片识别失败，请检查本机组件。');

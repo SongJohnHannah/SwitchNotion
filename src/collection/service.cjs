@@ -14,37 +14,34 @@ const { CollectionExtraction } = require('./extraction.cjs');
 const { extractionReadiness } = require('./extraction-readiness.cjs');
 const { parseInputs, describeLocal, checkLocal, localDocument, isLikelyVideoInput } = require('./local-media.cjs');
 const { clearCompleted, ownedExport } = require('./history.cjs');
-const { loadLibrary, saveLibrary, resolveTemplate, normalizeType } = require('./summary-templates.cjs');
-const { generateTemplate } = require('./classify.cjs');
 const { prepareLocalOutput, writeLocalOutput } = require('./local-output.cjs');
 const activeStates = new Set(['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving']);
 const deletableStates = new Set(['failed', 'partial', 'cancelled', 'interrupted', 'needs_login', 'awaiting_selection']);
-const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.visionEngine, options.compress, options.quality, options.keepLocal, options.extraction]));
+const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.visionEngine, options.compress, options.quality, options.keepLocal, options.extraction, ...(options.denseOcr && options.extraction.mode !== 'off' ? ['dense-ocr'] : [])]));
 const safeError = error => {
   const text = String(error?.message || '操作未完成，请检查连接后重试。');
   if (/(?:sk-|ntn_|secret_)[\w-]{8}|Bearer\s|Cookie\s*[:=]/i.test(text)) return '连接或处理失败，请在配置中检查后重试。';
   return /^[\u3400-\u9fff]|^(Notion|DeepSeek|媒体|收集|资源|目标|此|本地|请选择|请先|无法|没有|下载)/.test(text) ? text.slice(0, 500) : '操作未完成，请检查网络与组件状态后重试。';
 };
 class CollectionService extends EventEmitter {
-  constructor({ root, downloadsDirectory = path.join(os.homedir(), 'Downloads'), speech, provider, binaries, browser, media, notion, extraction } = {}) {
+  constructor({ root, downloadsDirectory = path.join(os.homedir(), 'Downloads'), speech, provider, webSources, binaries, browser, media, notion, extraction } = {}) {
     super(); this.root = root; this.downloadsDirectory = downloadsDirectory; this.directory = path.join(root, 'collection'); this.settingsFile = path.join(this.directory, 'settings.local.json');
     this.settings = preferences(); this.jobs = new Map(); this.queue = []; this.running = null; this.closed = false; this.lastError = ''; this.preparing = false;
     if (fs.existsSync(this.settingsFile)) try {
       const saved = JSON.parse(fs.readFileSync(this.settingsFile, 'utf8')), value = saved.settings || saved;
+      // The old processing options did not expose a persistent OCR off switch.
+      if ((saved.version === undefined || saved.version === 1) && value.denseOcr === false) delete value.denseOcr;
       if (saved.platform && saved.platform !== process.platform) { value.browserExecutable = ''; value.browserProfile = ''; value.outputDirectory = ''; }
       this.settings = preferences(value);
     } catch { this.configError = '收集配置无法读取，已保留原文件，请检查后恢复。'; }
     this.binaries = binaries || new CollectionBinaries({ root });
-    this.provider = provider;
     this.browser = browser || new CollectionBrowser({ root, getSettings: () => this.settings, binaries: this.binaries });
     this.media = media || new CollectionMedia({ root, browser: this.browser, binaries: this.binaries, speech, provider,
       ollama: new OllamaService(), ocr: ['win32', 'darwin'].includes(process.platform) ? new MediaOcr({ root }) : undefined });
     this.notion = notion || (process.platform === 'darwin'
       ? new (require('../compat/macos-collection-notion.cjs').MacCollectionNotion)({ root })
       : new CollectionNotion({ root }));
-    this.templateLibrary = loadLibrary(root);
-    this.templateWrite = Promise.resolve();
-    this.extractor = extraction || new CollectionExtraction({ provider, library: this.templateLibrary, saveLibrary: () => this.persistTemplates() });
+    this.extractor = extraction || new CollectionExtraction({ provider, webSources });
     const jobsDirectory = path.join(this.directory, 'jobs');
     if (fs.existsSync(jobsDirectory)) for (const name of fs.readdirSync(jobsDirectory)) {
       if (!/^[a-f\d-]{36}$/i.test(name)) continue;
@@ -53,7 +50,7 @@ class CollectionService extends EventEmitter {
         if (fs.lstatSync(path.dirname(file)).isSymbolicLink() || fs.lstatSync(file).isSymbolicLink()) continue;
         const job = JSON.parse(fs.readFileSync(file, 'utf8'));
         if (job.id !== name || job.version !== 1 || !job.options) continue;
-        job.options = preferences({ ...job.options, ...(!job.options.extraction ? { extraction: { mode: 'off' } } : {}) });
+        job.options = preferences({ denseOcr: false, ...job.options, ...(!job.options.extraction ? { extraction: { mode: 'off' } } : {}) });
         if (job.localSource) { if (!path.isAbsolute(job.localSource.path) || !/^[a-f\d]{64}$/.test(job.localSource.signature)) continue; }
         else extractUrls(job.url);
         if (activeStates.has(job.status)) { job.status = 'interrupted'; job.message = '上次运行已中断，已保留文件和写入进度，可继续。'; }
@@ -100,43 +97,16 @@ class CollectionService extends EventEmitter {
     if (this.configError) throw Error(this.configError);
     const next = preferences(input, this.settings);
     if (Object.hasOwn(input, 'destination') && next.destination) await this.notion.verifyTarget(next.destination, AbortSignal.timeout(30000));
-    this.settings = next; atomicJson(this.settingsFile, { version: 1, platform: process.platform, settings: next });
+    this.settings = next; atomicJson(this.settingsFile, { version: 2, platform: process.platform, settings: next });
     if (!next.keepHistory) for (const job of this.jobs.values()) if (job.status === 'completed' && !job.historyCleared) this.forgetCompleted(job);
     this.emit('settings'); this.emit('change'); return { message: '内容收集设置已保存，新任务使用新设置。', settings: next };
-  }
-  persistTemplates() {
-    const saved = saveLibrary(this.root, this.templateLibrary);
-    this.templateLibrary.types = saved.types;
-    return this.templateLibrary;
-  }
-  async regenerateTemplate({ type, guidance = '' }) {
-    const normalized = normalizeType(type);
-    if (!normalized) throw Error('总结类型无效。');
-    if (typeof guidance !== 'string' || guidance.length > 2000 || guidance.includes('\0')) throw Error('你的想法须为 0–2000 字。');
-    if (!this.provider) throw Error('内容总结需要 DeepSeek，请先在设置中配置。');
-    const config = this.provider.config();
-    if (config?.mode !== 'deepseek' || !this.provider.key(config)) throw Error('请先在 Switch Notion 配置 DeepSeek。');
-    const run = async () => {
-      const generated = await generateTemplate({ provider: this.provider, config, type: normalized, guidance });
-      if (!generated) throw Error('模板生成未完成，请稍后重试。');
-      const latest = loadLibrary(this.root), previous = latest.types[normalized] || resolveTemplate(this.templateLibrary, normalized) || { title: normalized, revision: 0 };
-      latest.types[normalized] = { type: normalized, title: generated.title || previous.title || normalized, template: generated.template,
-        revision: (previous.revision || 0) + 1, source: 'deepseek', updatedAt: new Date().toISOString() };
-      const saved = saveLibrary(this.root, latest);
-      this.templateLibrary.types = saved.types;
-      return { type: normalized, title: saved.types[normalized].title, revision: saved.types[normalized].revision,
-        message: `「${saved.types[normalized].title}」模板已更新；已有总结不变，之后同类型任务使用新模板。` };
-    };
-    const task = this.templateWrite.then(run, run);
-    this.templateWrite = task.catch(() => {});
-    return task;
   }
   async create({ input, options = {}, preview = false, force = false }) {
     if (this.configError) throw Error(this.configError);
     const chosen = preferences(options, this.settings);
     if (!preview && !chosen.destination) throw Error('请先选择保存到哪个 Notion 数据库或父页面。');
     const results = [];
-    const sources = parseInputs(input).map(source => source.kind === 'local' ? { source: describeLocal(source.path) } : { url: source.url });
+    const sources = parseInputs(input).map(source => source.kind === 'local' ? { source: describeLocal(source.path) } : source);
     for (const entry of sources) {
       const url = entry.url || 'local-media:' + entry.source.signature;
       const key = dedupeKey(url, chosen);
@@ -147,8 +117,8 @@ class CollectionService extends EventEmitter {
         results.push({ id: existing.id, existing: true, status: existing.status, page: existing.page }); continue;
       }
       const job = { version: 1, id: randomUUID(), url, dedupe: key, createdAt: new Date().toISOString(), status: 'queued', message: '等待读取内容…',
-        options: structuredClone(chosen), previewOnly: preview, resources: {}, analyses: {}, warnings: [], layout: 'media-at-end',
-        ...(entry.source ? { localSource: entry.source, document: localDocument(entry.source) } : {}) };
+        options: structuredClone(chosen), previewOnly: preview, resources: {}, analyses: {}, warnings: [], layout: 'result-first',
+        ...(entry.source ? { localSource: entry.source, document: localDocument(entry.source) } : {}), ...(entry.shareTitle ? { shareTitle: entry.shareTitle } : {}) };
       this.jobs.set(job.id, job); this.save(job); this.enqueue(job); results.push({ id: job.id });
     }
     return { jobs: results };
@@ -167,7 +137,13 @@ class CollectionService extends EventEmitter {
     const progress = message => { job.message = message; save(); };
     if (!job.document) {
       job.status = 'reading'; progress('正在识别链接中的正文、图片、视频和音频…');
-      job.document = await this.browser.inspect(job.url, { signal, progress }); job.warnings = [...job.document.warnings]; save();
+      job.document = await this.browser.inspect(job.url, { signal, progress });
+      if (job.shareTitle && job.document.titleSource === 'unavailable') {
+        job.document.title = job.shareTitle;
+        job.document.titleSource = 'share';
+        if (/(?:\.{3}|…)$/.test(job.shareTitle)) job.document.warnings.push('作品标题来自分享文案，文案末尾有截断。');
+      }
+      job.warnings = [...job.document.warnings]; save();
     }
     if ((job.document.requiresLogin || job.document.incomplete) && !job.allowPartial) {
       job.status = 'needs_login';
@@ -239,16 +215,24 @@ class CollectionService extends EventEmitter {
             try { analysis.transcript = await this.media.transcript(current, { signal, progress: nodeProgress }); }
             catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
           }
-          if (node.kind === 'video' && typeof this.media.ocr === 'function' && !analysis.ocr) {
+          let ocrError;
+          const denseOcr = job.options.extraction.mode !== 'off' && job.options.denseOcr;
+          if (node.kind === 'video' && typeof this.media.ocr === 'function' && (!analysis.ocr || denseOcr && !analysis.ocr.dense)) {
             markProcessing();
-            try { analysis.ocr = await this.media.ocr(current, { signal, progress: nodeProgress }); }
-            catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
+            try { analysis.ocr = await this.media.ocr(current, { signal, progress: nodeProgress, dense: !!denseOcr }); }
+            catch (error) { signal.throwIfAborted(); ocrError = safeError(error); analysis.errors.push(ocrError); } save();
           }
           const wantsVision = job.options.vision && (job.options.visionEngine === 'local' ? node.kind === 'video' : ['image', 'video'].includes(node.kind));
           if (wantsVision && !analysis.vision) {
             markProcessing();
-            const frames = analysis.ocr?.frames?.length && analysis.ocr.frames.every(item => fs.existsSync(item.frame)) ? analysis.ocr.frames : undefined;
-            try { analysis.vision = await this.media.vision(current, { signal, progress: nodeProgress, engine: job.options.visionEngine, frames, ocrText: analysis.ocr?.text }); }
+            const style = ['style', 'both'].includes(job.options.extraction.mode);
+            const frames = !style && analysis.ocr?.frames?.length && analysis.ocr.frames.every(item => fs.existsSync(item.frame)) ? analysis.ocr.frames : undefined;
+            try { analysis.vision = await this.media.vision(current, { signal, progress: nodeProgress, engine: job.options.visionEngine, frames,
+              ocrText: analysis.ocr?.text, recognizedFramePaths: analysis.ocr?.recognizedFramePaths, style, onOcr: ocr => {
+                analysis.ocr = ocr;
+                if (ocrError && !denseOcr) analysis.errors.splice(analysis.errors.lastIndexOf(ocrError), 1);
+                save();
+              } }); }
             catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
           }
           if (!resource.parts) { markProcessing(); resource.parts = await this.media.prepareUpload(current, job.options, limit, { signal, progress: nodeProgress }); save(); }
@@ -369,7 +353,7 @@ class CollectionService extends EventEmitter {
   async request(action, input = {}) {
     const allowed = { state: [], configure: ['settings'], workspaces: [], destinations: ['workspaceId', 'query', 'cursors'], create: ['input', 'options', 'preview', 'force'],
       select: ['id', 'ids', 'options', 'allowPartial'], cancel: ['id'], retry: ['id'], 'delete-task': ['id'], reread: ['id'], accounts: ['verify'], login: ['site'], prepare: [], 'create-library': ['workspaceId', 'parentId'],
-      'regenerate-template': ['type', 'guidance'], 'video-hint': ['input'] };
+      'video-hint': ['input'] };
     try {
       if (!Object.hasOwn(allowed, action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !allowed[action].includes(k))) throw Error('无法识别此项收集操作。');
       let result;
@@ -387,7 +371,6 @@ class CollectionService extends EventEmitter {
       else if (action === 'login') { if (typeof input.site !== 'string' || input.site.length > 8192) throw Error('网站地址无效。'); result = await this.browser.login(input.site, AbortSignal.timeout(60000)); }
       else if (action === 'prepare') result = await this.prepare();
       else if (action === 'create-library') result = await this.createLibrary(input.workspaceId, input.parentId);
-      else if (action === 'regenerate-template') result = await this.regenerateTemplate(input);
       else if (action === 'video-hint') result = isLikelyVideoInput(input.input);
       return { ok: true, result };
     } catch (error) { return { ok: false, error: safeError(error) }; }

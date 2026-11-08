@@ -82,6 +82,7 @@ function extractPage() {
     platform === 'youtube' ? location.pathname === '/watch' && !!new URL(location.href).searchParams.get('v') || /^\/shorts\//.test(location.pathname) || /(^|\.)youtu\.be$/.test(host) : false;
   const xVideo = isX && /\/status\/\d+/.test(location.pathname) && !document.querySelector('[data-testid="twitterArticleRichTextView"]') && !!root.querySelector('video');
   const declaredVideo = /^(?:video|video\.[a-z]+)$/i.test(document.querySelector('meta[property="og:type"]')?.content || '') && !document.querySelector('[data-testid="twitterArticleRichTextView"]');
+  let douyinTitles;
   if (videoPage || xVideo || declaredVideo) {
     const video = [...root.querySelectorAll('video')].find(visible);
     nodes.length = 0;
@@ -89,6 +90,11 @@ function extractPage() {
     const selector = platform === 'bilibili' ? '.desc-info-text,.basic-desc-info' : platform === 'youtube' ? '#description-inline-text,#description-inline-expander' :
       platform === 'douyin' ? '[data-e2e="video-desc"],[data-e2e="video-description"]' : platform === 'tiktok' ? '[data-e2e="browse-video-desc"],[data-e2e="video-desc"]' : '[data-testid="tweetText"]';
     const description = root.querySelector(selector);
+    if (platform === 'douyin' && videoPage) {
+      const meta = selector => document.querySelector(selector)?.content;
+      douyinTitles = [meta('meta[property="og:title"]'), meta('meta[name="twitter:title"]'), root.querySelector('h1')?.innerText,
+        description?.innerText, document.title].filter(Boolean);
+    }
     if (description) textNode(description, 'paragraph');
     else {
       const caption = document.querySelector('meta[property="og:description"]')?.content || document.querySelector('meta[name="description"]')?.content || '';
@@ -105,6 +111,6 @@ function extractPage() {
   if (errorPage) warnings.push('原网页返回了错误、验证或不可用提示，尚未取得原始内容。');
   if (verification) warnings.push('原站要求人工验证，请在收集浏览器中完成验证码后重新读取。');
   return { title: root.querySelector('h1')?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.querySelector('h1')?.innerText || document.title,
-    url: location.href, author: document.querySelector('meta[name="author"]')?.content || (isX ? location.pathname.match(/^\/([^/]+)\/status\//)?.[1] : '') || '', nodes, requiresLogin: blocked || verification, incomplete: blocked || preview || errorPage || verification, warnings };
+    ...(douyinTitles ? { douyinTitles } : {}), url: location.href, author: document.querySelector('meta[name="author"]')?.content || (isX ? location.pathname.match(/^\/([^/]+)\/status\//)?.[1] : '') || '', nodes, requiresLogin: blocked || verification, incomplete: blocked || preview || errorPage || verification, warnings };
 }
 module.exports = { extractPage };

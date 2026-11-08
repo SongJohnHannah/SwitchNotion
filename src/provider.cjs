@@ -1,9 +1,19 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { setTimeout: sleep } = require('node:timers/promises');
 const { applySelection } = require('./native-models.cjs');
 // Both reviewed DeepSeek models allow up to 384K output tokens (2026-10-22).
 const MAX_OUTPUT_TOKENS = 393216;
 const outputBudget = config => Math.min(MAX_OUTPUT_TOKENS, Math.max(64, Number(config.maxTokens) || MAX_OUTPUT_TOKENS));
+const HTTP_ERROR_HINTS = {
+  400: '请求格式有误。',
+  401: '认证失败，请检查 API 密钥。',
+  402: '账户余额不足，请充值后重试。',
+  403: '请求被拒绝，请检查 API 访问权限。',
+  422: '请求参数有误。',
+  429: '请求速率或并发达到上限，请稍后重试。',
+  503: '服务端繁忙，请稍后重试。'
+};
 
 async function* readSse(body, signal, onActivity = () => {}) {
   const reader = body.getReader(), decoder = new TextDecoder();
@@ -77,9 +87,10 @@ class ProviderRouter {
     const generationInfo = this.lastGeneration;
     let maxTokens = outputBudget(config);
     let repairToolJSON = false;
+    let retriedServerError = false;
     // Retry only an undispatched generation, never the agent loop or a Notion request.
     try {
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let streamedAttempts = 0; streamedAttempts < 2;) {
         combined.throwIfAborted();
         armTimeout(30000);
         this.requests++;
@@ -92,15 +103,25 @@ class ProviderRouter {
           result = await this.fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` }, body: JSON.stringify({ model: config.model, messages: attemptMessages, stream: true, stream_options: { include_usage: true }, max_tokens: maxTokens, thinking: { type: thinking ? 'enabled' : 'disabled' }, ...(thinking ? { reasoning_effort: reasoningEffort } : {}), ...(tools?.length ? { tools, ...(!thinking ? { tool_choice: 'auto' } : {}) } : {}) }), signal: combined, redirect: 'error' });
         } catch (error) { if (signal.aborted) throw error; throw Error('DeepSeek 连接失败或超时，请检查本地网络和 API 设置。'); }
         if (!result.ok) {
+          attemptInfo.httpStatus = result.status;
           if (result.status === 400) {
             let failure; try { failure = await result.json(); } catch {}
             if (/context_length_exceeded|maximum context|context length|context window/i.test(String(failure?.error?.code || '') + ' ' + String(failure?.error?.message || '').slice(0, 2000))) {
               const error = Error('DeepSeek 上下文超过服务端限制，已保留任务进度。'); error.code = 'CONTEXT_LENGTH'; throw error;
             }
-          } else await result.body?.cancel();
-          throw Error(`DeepSeek API 返回 HTTP ${result.status}，请检查密钥、余额和模型权限。`);
+          } else await result.body?.cancel().catch(() => {});
+          combined.throwIfAborted();
+          if (!retriedServerError && (result.status === 500 || result.status === 503)) {
+            retriedServerError = true;
+            clearTimeout(timeout);
+            await sleep(1000, undefined, { signal: combined });
+            continue;
+          }
+          const hint = HTTP_ERROR_HINTS[result.status] || (result.status >= 500 ? '服务端暂时异常，请稍后重试。' : '请检查 API 请求设置。');
+          throw Error(`DeepSeek API 返回 HTTP ${result.status}，${hint}`);
         }
         if (!result.body) throw Error('DeepSeek API 未返回流式响应。');
+        streamedAttempts++;
         armTimeout(120000);
         let finished = false, finishReason, textSeen = false;
         const pendingCalls = new Map();
@@ -134,7 +155,7 @@ class ProviderRouter {
         attemptInfo.toolCalls = pendingCalls.size;
         attemptInfo.argumentCharacters = [...pendingCalls.values()].reduce((total, call) => total + call.function.arguments.length, 0);
         if (pendingCalls.size) {
-          if (finishReason === 'length' && config.allowOutputExpansion !== false && maxTokens < MAX_OUTPUT_TOKENS && attempt === 0) {
+          if (finishReason === 'length' && config.allowOutputExpansion !== false && maxTokens < MAX_OUTPUT_TOKENS && streamedAttempts === 1) {
             maxTokens = MAX_OUTPUT_TOKENS;
             onRetry({ reason: 'tool_output_limit', nextMaxTokens: maxTokens });
             continue;
@@ -149,7 +170,7 @@ class ProviderRouter {
           }
           if (invalidArguments) {
             attemptInfo.invalidToolJSON = true;
-            if (!attempt) { combined.throwIfAborted(); repairToolJSON = true; onRetry({ reason: 'invalid_tool_json' }); continue; }
+            if (streamedAttempts === 1) { combined.throwIfAborted(); repairToolJSON = true; onRetry({ reason: 'invalid_tool_json' }); continue; }
             throw Error(invalidArguments);
           }
           combined.throwIfAborted();

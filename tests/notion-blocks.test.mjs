@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 const { definitions, writeTools, createSession } = createRequire(import.meta.url)('../src/notion-blocks.cjs');
 const { AgentMock } = createRequire(import.meta.url)('../src/agent-mock.cjs');
+const { AiExtensions } = createRequire(import.meta.url)('../src/ai-extensions.cjs');
+const { scopeKey } = createRequire(import.meta.url)('../src/workspace-memory.cjs');
 const P = '11111111-1111-4111-8111-111111111111', A = '22222222-2222-4222-8222-222222222222', B = '33333333-3333-4333-8333-333333333333', OTHER = '44444444-4444-4444-8444-444444444444';
 const rich = content => [{ type: 'text', text: { content } }];
 const para = content => ({ type: 'paragraph', paragraph: { rich_text: rich(content) } });
@@ -68,6 +70,41 @@ test('block catalog separates read tools and mutation tools with bounded payload
   assert.deepEqual(definitions.map(def => def.function.name), ['read_block', 'read_block_children', 'append_blocks', 'update_block', 'trash_block', 'restore_block']);
   assert.deepEqual([...writeTools], ['append_blocks', 'update_block', 'trash_block', 'restore_block']);
   assert.ok(definitions.every(def => def.function.parameters.additionalProperties === false));
+});
+
+test('table-only insertion and editing proceed by default while other writes still need approval', async () => {
+  const f = fixture(), prompts = [];
+  const extensions = new AiExtensions({ root: '.', memory: { entry() {} }, approve: async request => { prompts.push(request); return false; } });
+  const key = scopeKey({ userId: P, spaceId: A });
+  let mode;
+  extensions.read = () => ({ scopes: { [key]: { approval: mode } } });
+  const open = operationScope => extensions.open({ userId: P, spaceId: A, task: '在当前页插入表格', operationScope });
+  const approval = await open();
+  const row = { table_row: { cells: [rich('列名')] } };
+  const table = { table: { table_width: 1, children: [row] } };
+  const append = { block_id: P, blocks: [table] };
+  await approval.beforeTool('append_blocks', append);
+  const created = await f.session.execute('append_blocks', append);
+  assert.equal(created.verified, true);
+  const children = await f.session.execute('read_block_children', { block_id: created.created_block_ids[0] });
+  const cellEdit = { block_id: children.results[0].id, block_revision: children.results[0].block_revision, block: { table_row: { cells: [rich('新列名')] } } };
+  await approval.beforeTool('update_block', cellEdit);
+  assert.equal((await f.session.execute('update_block', cellEdit)).verified, true);
+  assert.equal(prompts.length, 0);
+
+  for (const [name, args] of [
+    ['append_blocks', { ...append, blocks: [table, para('其他内容')] }],
+    ['append_blocks', { ...append, workspace_id: OTHER }],
+    ['trash_block', { block_id: cellEdit.block_id, block_revision: cellEdit.block_revision }],
+    ['update_block', { ...cellEdit, block: para('普通段落') }]
+  ]) {
+    await assert.rejects((await open()).beforeTool(name, args), /拒绝/);
+  }
+  await assert.rejects((await open('background:fixture')).beforeTool('append_blocks', append), /拒绝/);
+  for (mode of ['task', 'each']) {
+    await assert.rejects((await open()).beforeTool('append_blocks', append), /拒绝/);
+  }
+  assert.equal(prompts.length, 7);
 });
 
 test('block children paginate and returned revisions can safely update the selected child', async () => {

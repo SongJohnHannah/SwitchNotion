@@ -37,6 +37,21 @@ test('research web sessions require an internal purpose plus an audited native c
   assert.equal(reads, 2); assert.equal(f.sources.sessions.size, 0);
 });
 
+test('collection research honors both switches and only reads URLs discovered in its own search', async t => {
+  const url = 'https://example.com/article';
+  const f = fixture(t, async () => html('合成制作教程'), { deepseekKey: () => 'fixture',
+    fetchJson: async () => ({ status: 200, json: async () => ({ results: [{ url, title: '操作教程' }] }) }) });
+  assert.equal(f.sources.openCollection(), null);
+  f.sources.save({ enabled: 'enabled' });
+  assert.equal(f.sources.openCollection(), null);
+  f.sources.save({ enabled: 'enabled', searchEnabled: 'enabled' });
+  const session = f.sources.openCollection();
+  await assert.rejects(session.execute('read_web_page', { url }), /不属于本轮搜索/);
+  await session.execute('search_web', { query: '字幕遮罩教程' });
+  assert.match((await session.execute('read_web_page', { url })).text, /合成制作教程/);
+  session.close();
+});
+
 test('public URL and address validation rejects local aliases, reserved ranges, credentials, schemes and ports', () => {
   for (const url of ['file:///tmp/a', 'data:text/plain,x', 'http://127.1/', 'http://2130706433/', 'http://0x7f000001/', 'http://[::1]/', 'http://[::ffff:127.0.0.1]/',
     'http://10.1.2.3/', 'http://192.168.1.1/', 'http://169.254.169.254/latest/', 'http://100.64.0.1/', 'https://user:password@example.com/', 'https://example.com:3000/',

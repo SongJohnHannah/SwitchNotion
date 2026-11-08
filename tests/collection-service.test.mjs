@@ -10,6 +10,7 @@ const { CollectionService } = require('../src/collection/service.cjs');
 const { CollectionMedia } = require('../src/collection/media.cjs');
 const { normalizeDocument, preferences } = require('../src/collection/model.cjs');
 const { renderDocument } = require('../src/collection/notion.cjs');
+const { ProviderRouter } = require('../src/provider.cjs');
 const { transcribeGpuFile } = require('../src/speech/windows-operator/module/src/speech/gpu-file.cjs');
 const parent = path.resolve(import.meta.dirname, '../.notion-switch');
 function fixture(t, extra = {}) {
@@ -31,6 +32,39 @@ function fixture(t, extra = {}) {
   return { root, service, calls, saved, document, destination };
 }
 async function idle(service) { for (let n = 0; n < 400; n++) { if (!service.running && !service.queue.length) return; await sleep(5); } throw Error('collection test did not settle'); }
+
+test('DeepSeek HTTP 500 preserves the collection and a retry finishes the summary on the same page', async t => {
+  const document = normalizeDocument({ title: '抖音视频', url: 'https://v.douyin.com/fixture/', nodes: [
+    { kind: 'video', url: 'https://example.com/video.mp4' }
+  ] });
+  const summary = '## 核心观点\n根据逐字稿生成的总结';
+  const summaryFailures = [500, 500, 503];
+  const provider = new ProviderRouter({ fetchImpl: async () => {
+    if (summaryFailures.length) return new Response(null, { status: summaryFailures.shift() });
+    return new Response('data: ' + JSON.stringify({ choices: [{ delta: { content: summary }, finish_reason: 'stop' }] }) + '\n\ndata: [DONE]\n\n');
+  } });
+  provider.config = () => ({ mode: 'deepseek' });
+  provider.key = () => 'fixture';
+  const { service, calls } = fixture(t, { document, provider });
+  const { jobs: [{ id }] } = await service.create({ input: document.url, options: { vision: false, extraction: { mode: 'auto' } } });
+  await idle(service);
+  const job = service.jobs.get(id);
+  assert.equal(job.status, 'partial');
+  assert.equal(job.classification.type, '内容理解');
+  assert.equal(job.message, '已保存已获取的内容；AI 总结未完成，请查看具体原因后重试。');
+  assert.match(job.warnings.join('\n'), /内容提取待完成：DeepSeek API 返回 HTTP 500.*服务端.*稍后重试/);
+  assert.equal(provider.requests, 2);
+  const pageId = job.page.id;
+
+  service.retry(id);
+  await idle(service);
+  assert.equal(job.status, 'completed');
+  assert.equal(job.extraction.text, summary);
+  assert.equal(job.page.id, pageId);
+  assert.equal(provider.requests, 4);
+  assert.equal(calls.filter(call => call === 'download:video').length, 1);
+  assert.equal(calls.filter(call => call === 'transcript').length, 1);
+});
 
 test('failed video download defers summary despite a page title and recovers on the same page', async t => {
   let fail = true, summaries = 0;
@@ -192,9 +226,14 @@ test('a busy download folder keeps the failed task and recovery journal availabl
 });
 test('saved extraction preference persists offline and keeps the destination', async t => {
   const f = fixture(t); f.service.notion.verifyTarget = async () => { throw Error('Notion 离线'); };
-  await f.service.configure({ extraction: { mode: 'auto', preference: '重点总结主播的口播风格' } });
+  fs.mkdirSync(f.service.directory, { recursive: true });
+  fs.writeFileSync(f.service.settingsFile, JSON.stringify({ version: 1, settings: { ...f.service.settings, denseOcr: false } }));
+  const migrated = new CollectionService({ root: f.root, binaries: { status: () => ({}) }, browser: {}, media: {}, notion: {} });
+  assert.equal(migrated.settings.denseOcr, true); migrated.close();
+  await f.service.configure({ denseOcr: false, extraction: { mode: 'auto', preference: '重点总结主播的口播风格' } });
   const restored = new CollectionService({ root: f.root, binaries: { status: () => ({}) }, browser: {}, media: {}, notion: {} });
   assert.equal(restored.settings.extraction.preference, '重点总结主播的口播风格'); assert.equal(restored.settings.extraction.mode, 'auto');
+  assert.equal(restored.settings.denseOcr, false);
   assert.deepEqual(restored.settings.destination, f.destination); restored.close();
 });
 test('successful no-history collection clears only its own records and keeps a session-only Notion receipt', async t => {
@@ -331,6 +370,31 @@ test('an OCR failure leaves the task partial with a visible reason', async t => 
   const job = [...f.service.jobs.values()].find(item => item.status === 'partial');
   assert.ok(job); assert.ok(job.warnings.some(warning => /本地文字识别未完成/.test(warning)));
 });
+test('a Douyin work retains its share title when the source page exposes only its site name', async t => {
+  const f = fixture(t, { document: normalizeDocument({ title: 'www.douyin.com', url: 'https://www.douyin.com/video/123456', nodes: [{ kind: 'video', url: 'https://www.douyin.com/video/123456' }] }) });
+  const { jobs: [{ id }] } = await f.service.create({ input: '复制打开抖音，看看【某作者的作品】具体作品标题... [https://v.douyin.com/demo/](https://v.douyin.com/demo/)', preview: true });
+  await idle(f.service);
+  const job = f.service.jobs.get(id);
+  assert.equal(job.document.title, '具体作品标题...');
+  assert.equal(job.document.titleSource, 'share');
+  assert.match(job.document.warnings.join(' '), /截断/);
+  const original = normalizeDocument({ title: 'www.douyin.com', douyinTitles: ['抖音', '实际作品标题 - 抖音'], url: 'https://www.douyin.com/video/123456', nodes: [] });
+  assert.equal(original.title, '实际作品标题');
+  assert.equal(original.titleSource, 'platform');
+});
+test('vision-stage OCR recovers an initial OCR failure and is exported separately', async t => {
+  const recovered = { text: '视频时间 3.3 秒：补做字幕', note: '由画面识别阶段补做。', engine: 'mediaocr' };
+  const f = fixture(t, { media: {
+    ocr: async () => { throw Error('本地文字识别未完成：引擎未准备'); },
+    vision: async (_asset, options) => { if (options.onOcr && !options.ocrText) options.onOcr(recovered); return { text: '画面描述' }; }
+  } });
+  const { jobs: [{ id }] } = await f.service.create({ input: 'https://example.com/article', options: { vision: true, transcribe: false, keepLocal: true } });
+  await idle(f.service);
+  const job = f.service.jobs.get(id), video = f.document.nodes.find(node => node.kind === 'video');
+  assert.equal(job.status, 'completed');
+  assert.deepEqual(job.analyses[video.id].ocr, recovered);
+  assert.match(fs.readFileSync(path.join(job.exportDirectory, '关键帧文字.md'), 'utf8'), /补做字幕/);
+});
 test('a resumed task uses the currently configured vision engine', async t => {
   const engines = [];
   const f = fixture(t, { media: { vision: async (_asset, options) => { engines.push(options.engine); if (options.engine === 'local') throw Error('本地识别失败'); return { text: 'API 画面', engine: 'deepseek' }; } } });
@@ -342,19 +406,6 @@ test('a resumed task uses the currently configured vision engine', async t => {
   assert.ok(engines.includes('deepseek')); assert.equal(job.options.visionEngine, 'deepseek');
   const video = f.document.nodes.find(node => node.kind === 'video');
   assert.equal(job.analyses[video.id].vision.text, 'API 画面');
-});
-test('regenerating a type template updates the saved library without touching jobs', async t => {
-  const generated = [];
-  const provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate(input) { generated.push(input);
-    yield JSON.stringify({ title: '宠物护理', template: '# 宠物护理\n## 步骤\n' + '内容'.repeat(200) + '\n## 注意\n' + '注意'.repeat(50) }); } };
-  const f = fixture(t, { provider });
-  const first = await f.service.request('regenerate-template', { type: '宠物护理', guidance: '步骤要能照着做' });
-  assert.equal(first.ok, true); assert.equal(first.result.revision, 1);
-  const saved = JSON.parse(fs.readFileSync(path.join(f.root, 'collection', 'summary-templates.json'), 'utf8'));
-  assert.equal(saved.types['宠物护理'].title, '宠物护理'); assert.match(generated[0].messages[1].content, /步骤要能照着做/);
-  const second = await f.service.request('regenerate-template', { type: '宠物护理' });
-  assert.equal(second.ok, true); assert.equal(second.result.revision, 2);
-  assert.equal(f.calls.includes('write'), false);
 });
 test('video-hint detects video input through the request allowlist', async t => {
   const f = fixture(t);

@@ -204,11 +204,29 @@ function buildPlan(info, current, output) {
   return { version: 2, spaceId: info.spaceId, userId: info.userId, changes };
 }
 const field = (value, name) => name === 'title' ? value.properties?.title || [] : name === 'content' ? value.content || [] : name === 'alive' ? value.alive !== false : value[name];
+function comparableTitle(title) {
+  if (!Array.isArray(title)) return title;
+  const runs = [];
+  // Notion can join adjacent text with the same formatting when saving.
+  for (const span of title) {
+    if (!Array.isArray(span) || typeof span[0] !== 'string' || !Array.isArray(span[1] ?? [])) return title;
+    const fixed = atomic(span);
+    if (!span[0] && !fixed) continue;
+    const format = hash([span[1] ?? [], ...span.slice(2)]);
+    const previous = runs.at(-1);
+    if (!fixed && previous && !previous.fixed && previous.format === format) previous.text += span[0];
+    else runs.push({ text: span[0], format, fixed });
+  }
+  return runs;
+}
 function matches(change, entry, reverse = false) {
   const expected = reverse ? change.before || { ...change.after, alive: false } : change.after, actual = entry?.value;
   return editable(entry) && actual && actual.id === expected.id && actual.space_id === expected.space_id && actual.type === expected.type &&
     actual.parent_table === expected.parent_table && actual.parent_id === expected.parent_id &&
-    (actual.alive !== false) === (expected.alive !== false) && change.fields.every(name => hash(field(actual, name)) === hash(field(expected, name)));
+    (actual.alive !== false) === (expected.alive !== false) && change.fields.every(name => {
+      const observed = field(actual, name), planned = field(expected, name);
+      return name === 'title' ? hash(comparableTitle(observed)) === hash(comparableTitle(planned)) : hash(observed) === hash(planned);
+    });
 }
 async function readPlan(store, plan, signal) {
   if (store.spaceId !== plan.spaceId || store.userId !== plan.userId) fail('编辑记录与当前登录账号或工作区不匹配。');

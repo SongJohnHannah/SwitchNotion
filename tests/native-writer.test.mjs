@@ -34,7 +34,10 @@ function fixture(t, options = {}) {
     if (!options.dropWrite && !(options.dropUndoWrite && writes.length > 1)) for (const { operations } of payload.transactions) for (const operation of operations) {
       const { pointer, path: keys, command, args } = operation;
       if (command === 'set' && !keys.length) blocks.set(pointer.id, structuredClone(args));
-      else if (command === 'set') { assert.deepEqual(keys, ['properties', 'title']); blocks.get(pointer.id).properties.title = structuredClone(args); }
+      else if (command === 'set') {
+        assert.deepEqual(keys, ['properties', 'title']);
+        blocks.get(pointer.id).properties.title = options.normalizeTitle ? options.normalizeTitle(args) : structuredClone(args);
+      }
       else if (command === 'update') Object.assign(blocks.get(pointer.id), args);
       else if (command === 'listAfter') { const content = blocks.get(pointer.id).content; content.splice(args.after ? content.indexOf(args.after) + 1 : 0, 0, args.id); }
       else if (command === 'listRemove') { const content = blocks.get(pointer.id).content; const at = content.indexOf(args.id); if (at >= 0) content.splice(at, 1); }
@@ -196,6 +199,24 @@ test('the native undoAgentServiceTurn request restores the original paragraph', 
   const response = await f.route.call('undoAgentServiceTurn', { threadId: THREAD, spaceId: SPACE, sessionIdleEventId: result.value.sessionIdleEventId });
   assert.equal(response.status, 200); assert.deepEqual(f.blocks.get(ANCHOR).properties.title, [['']]);
   assert.equal(result.value.undoReady, true); assert.equal(f.generations.length, 1);
+});
+
+test('Writer verifies a partial edit and undo when Notion merges adjacent plain text spans', async t => {
+  const f = fixture(t, { normalizeTitle: spans => [[spans.map(span => span[0]).join('')]] });
+  const original = [['开头原文结尾']];
+  f.blocks.get(ANCHOR).properties.title = structuredClone(original);
+  const input = f.input();
+  input.prebuiltPromptType = 'rewrite';
+  input.threadContext.selection.text = '原文';
+  input.threadContext.selection.value.start.index = 2;
+  input.threadContext.selection.value.end.index = 4;
+  const { value } = await f.run(input);
+  assert.deepEqual(f.blocks.get(ANCHOR).properties.title, [['开头合成续写927，准备发布。结尾']]);
+  assert.equal(value.status, 'edited');
+  assert.equal(value.undoReady, true);
+  assert.equal((await f.undo(value)).status, 200);
+  assert.deepEqual(f.blocks.get(ANCHOR).properties.title, original);
+  assert.equal(f.writes.length, 2);
 });
 
 test('editing part of a formatted paragraph preserves prefix, suffix, links and block properties, and undo restores original runs', async t => {

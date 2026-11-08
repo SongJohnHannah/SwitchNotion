@@ -10,14 +10,14 @@
   <header><img class="brand-logo" src="../../app-icon.png" alt="NotionSwitch 小熊"><strong>快捷收集</strong><span id="shortcut" class="key"></span><button id="hide" class="icon" aria-label="收起窗口">×</button></header>
   <main>
     <form id="capture-form" class="capture-card">
-      <div class="capture-heading"><h1>收集到你的知识库</h1><span>支持拖入本地音视频</span></div>
-      <label class="sr-only" for="links">网页链接或本地音视频路径</label>
-      <textarea id="links" rows="2" placeholder="粘贴链接或拖入本地音视频，路径逐行追加…" spellcheck="false"></textarea>
+      <div class="capture-heading"><h1>收集到你的知识库</h1><span>支持拖入本地图片和音视频</span></div>
+      <label class="sr-only" for="links">网页链接或本地文件路径</label>
+      <textarea id="links" rows="2" placeholder="粘贴链接或拖入本地图片、音视频…" spellcheck="false"></textarea>
       <div class="destination-row"><span>保存到</span><button id="destination-pill" type="button" class="destination">选择工作区、数据库或页面 ⌄</button></div>
-      <div class="capture-actions"><div class="collect-group"><button type="submit" class="primary" id="collect">全部收集 ↵</button><button type="button" id="prompt-open" class="prompt-trigger" aria-haspopup="dialog" aria-controls="prompt-dialog">提取要求</button></div><button type="button" id="preview" class="secondary">识别后选择</button></div>
+      <div class="capture-actions"><button type="submit" class="primary" id="collect" aria-haspopup="dialog" aria-controls="prompt-dialog">提取 ↵</button></div>
     </form>
     <div class="compact-footer"><button id="task-status" type="button" class="task-status" aria-controls="tasks-section" aria-expanded="false" hidden></button><span id="queue-state">支持网页链接和本地音视频路径</span><button id="expand" class="text" aria-expanded="false" aria-controls="expanded">展开选项 ⌄</button></div>
-    <div class="prompt-status"><button id="prompt-status" class="text">✧ 自动识别类型 · 按内容套模板</button><button id="last-result" class="text" hidden>打开刚保存的 Notion ↗</button></div>
+    <div class="result-link" id="result-link" hidden><button id="last-result" class="text">打开刚保存的 Notion ↗</button></div>
     <p id="message" role="status" hidden></p>
 
     <div id="expanded" hidden>
@@ -46,6 +46,7 @@
           <label class="option-card"><span><strong>图片与画面识别</strong><small>使用 DeepSeek 分析图片及视频关键帧</small></span><input id="vision" type="checkbox" checked></label>
           <label class="option-card"><span><strong>本地千问识别视频</strong><small>使用本机千问 3.8 27B VL（IQ3_S）分析视频关键帧，文字由本机 mediaocr 提取，画面不上传</small></span><input id="vision-local" type="checkbox"></label>
           <label class="option-card"><span><strong>压缩视频</strong><small>减小文件体积，保留完整时长</small></span><input id="compress" type="checkbox" checked></label>
+          <label class="option-card"><span><strong>精扫画面文字</strong><small>用本机 OCR 加密取样，识别教程字卡、字幕和界面小字</small></span><input id="dense-ocr" type="checkbox" checked></label>
         </div>
         <div class="setting-group"><h3>画质与内容</h3><div class="options-grid">
           <label>压缩画质<select id="quality"><option value="720p">清晰优先 · 720p</option><option value="1080p">更清晰 · 1080p</option><option value="original">保留原始分辨率</option></select></label>
@@ -81,24 +82,20 @@
     </div>
   </main>
   <dialog id="prompt-dialog" aria-labelledby="prompt-title"><form id="prompt-form">
-    <div class="dialog-heading"><div><span class="eyebrow">内容总结</span><h2 id="prompt-title">让 AI 按内容类型总结</h2></div><button id="prompt-close" type="button" class="icon" aria-label="关闭提取要求">×</button></div>
-    <p class="dialog-intro">先保存原文、逐字稿与关键帧文字；AI 会判断内容类型并套用对应模板。额外偏好会附加在所有类型之后。</p>
-    <label for="extraction-mode">提取方式</label><select id="extraction-mode"><option value="auto">自动识别类型 · 按内容套模板</option><option value="off">仅保存原文 · 不生成总结</option></select>
-    <label class="spaced-label" for="prompt-editor">额外总结偏好（可选）</label><textarea id="prompt-editor" rows="6" maxlength="4000" placeholder="例如：重点总结主播的解说风格；或：只保留可执行步骤" spellcheck="false"></textarea>
-    <p class="hint">提取模板由应用按内容类型自动生成并保存在本机，可在任务上重新生成；历史总结不受影响。修改后对下一次收集生效。</p><p id="prompt-error" role="status" hidden></p>
-    <div class="dialog-actions"><button id="prompt-cancel" type="button" class="secondary">取消</button><button id="prompt-save" type="submit" class="primary">保存并使用</button></div>
-  </form></dialog>
-  <dialog id="vision-dialog" aria-labelledby="vision-title">
-    <div class="dialog-heading"><h2 id="vision-title">要分析画面吗？</h2></div>
-    <p class="dialog-intro">识别主播状态、口播风格与画面风格；关键帧文字仍会照常识别。默认不分析，避免额外耗时。</p>
-    <div class="dialog-actions"><button id="vision-skip" type="button" class="secondary">不识别</button><button id="vision-run" type="button" class="primary">识别画面</button></div>
-  </dialog>
-  <dialog id="template-dialog" aria-labelledby="template-title"><form id="template-form">
-    <div class="dialog-heading"><div><span class="eyebrow">总结模板</span><h2 id="template-title">重新生成「<span id="template-type"></span>」模板</h2></div><button id="template-close" type="button" class="icon" aria-label="关闭模板设置">×</button></div>
-    <p class="dialog-intro">只更新这一类内容的总结模板；已写入 Notion 的历史总结不会改变，之后同类型任务使用新模板。</p>
-    <label for="template-guidance">你的想法（可选）</label><textarea id="template-guidance" rows="6" maxlength="2000" placeholder="例如：美食按配料、步骤、火候、失败补救来写；步骤要能直接照着做" spellcheck="false"></textarea>
-    <p id="template-error" role="status" hidden></p>
-    <div class="dialog-actions"><button id="template-cancel" type="button" class="secondary">取消</button><button id="template-save" type="submit" class="primary">重新生成模板</button></div>
+    <div class="dialog-heading"><h2 id="prompt-title">选择本次提取方向</h2><button id="prompt-close" type="button" class="icon" aria-label="关闭提取方向">×</button></div>
+    <fieldset class="extraction-choices"><legend class="sr-only">提取方向</legend>
+      <label class="option-card"><span><strong>按内容理解</strong><small>学会作者讲的内容。教学整理成可展开的步骤，文章分析写法和逻辑。</small></span><input type="radio" id="extraction-content" name="extraction-mode" value="auto" checked></label>
+      <label class="option-card"><span><strong>按画面分析</strong><small>学习怎样做出类似效果。查找特效和软件，拆解画面、脚本和制作步骤。</small></span><input type="radio" id="extraction-style" name="extraction-mode" value="style"></label>
+      <label class="option-card"><span><strong>全选 · 两个方案都要</strong><small>有视频或图片时，两份结果分开写在同一页。</small></span><input type="radio" id="extraction-both" name="extraction-mode" value="both"></label>
+    </fieldset>
+    <p class="hint" id="extraction-style-help" hidden>画面使用「处理选项」中所选的识别引擎。DeepSeek 接收图片或视频关键帧，本地千问只识别视频。特效研究使用配置中心的联网搜索开关。</p>
+    <details id="extraction-extra" class="extraction-extra"><summary>更多选项</summary>
+      <label class="inline-option"><input type="checkbox" id="extraction-vision">按内容理解时补看视频画面里的演示</label>
+      <label class="inline-option"><input type="checkbox" id="extraction-preview">先识别并勾选素材</label>
+      <label class="inline-option"><input type="checkbox" id="extraction-off">仅保存原始素材</label>
+      <label class="spaced-label" for="prompt-editor">本次侧重点（可选）</label><textarea id="prompt-editor" rows="2" maxlength="4000" placeholder="例如：重点拆解字幕动效和开场钩子" spellcheck="false"></textarea>
+    </details>
+    <div class="dialog-actions"><button id="prompt-cancel" type="button" class="secondary">取消</button><button id="prompt-save" type="submit" class="primary">开始提取</button></div>
   </form></dialog>
   <dialog id="wechat-help" aria-labelledby="wechat-help-title">
     <div class="dialog-heading"><h2 id="wechat-help-title">微信视频号怎么收集？</h2><button id="wechat-help-close" class="icon" aria-label="关闭视频号说明">×</button></div>

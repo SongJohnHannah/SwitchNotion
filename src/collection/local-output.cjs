@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { atomicJson, layoutNodes, selectedNodes } = require('./model.cjs');
+const { atomicJson, layoutNodes, selectedNodes, recognitionResult } = require('./model.cjs');
 const { ownedExport } = require('./history.cjs');
 function prepareLocalOutput(job, downloadsDirectory) {
   if (job.exportOwned && job.exportDirectory) {
@@ -43,10 +43,25 @@ function writeLocalOutput(job) {
     }
   }
   fs.writeFileSync(path.join(directory, '原文.md'), text.join('\n'), { mode: 0o600 });
-  const analysisText = key => nodes.filter(n => job.analyses[n.id]?.[key]).map(n => '## 素材 ' + (nodes.indexOf(n) + 1) + '\n\n' + (job.analyses[n.id][key].text || job.analyses[n.id][key].note || '')).join('\n\n');
-  for (const [key, name] of [['transcript', '逐字稿.md'], ['vision', '图片与画面识别.md']]) {
+  const analysisText = key => nodes.flatMap((node, index) => {
+    const evidence = recognitionResult(job.analyses[node.id], key);
+    if (!evidence) return [];
+    const body = key === 'ocr' ? [evidence.note, evidence.text].filter(Boolean).join('\n\n') : evidence.text || evidence.note || '';
+    return [`## 素材 ${index + 1}\n\n${body}`];
+  }).join('\n\n');
+  for (const [key, name] of [['transcript', '逐字稿.md'], ['vision', '图片与画面识别.md'], ['ocr', '关键帧文字.md']]) {
     const value = analysisText(key); if (value) fs.writeFileSync(path.join(directory, name), value, { mode: 0o600 });
   }
-  if (job.extraction?.text) fs.writeFileSync(path.join(directory, 'AI提取结果.md'), job.extraction.text, { mode: 0o600 });
+  const rawOcr = nodes.flatMap((node, index) => {
+    const raw = job.analyses[node.id]?.ocr?.rawText;
+    return raw ? [`## 素材 ${index + 1}\n\n${raw}`] : [];
+  }).join('\n\n');
+  if (rawOcr) fs.writeFileSync(path.join(directory, '关键帧文字原始记录.md'), rawOcr, { mode: 0o600 });
+  if (job.extraction?.text) {
+    const { text: summary, note, sources = [] } = job.extraction;
+    const links = sources.map(({ id, title, url }) => `- [${id} ${title.replace(/[\[\]\r\n]/g, ' ')}](<${url}>)`);
+    const markdown = [note, summary, links.length ? ['## 制作参考', ...links].join('\n') : ''].filter(Boolean).join('\n\n');
+    fs.writeFileSync(path.join(directory, 'AI提取结果.md'), markdown, { mode: 0o600 });
+  }
 }
 module.exports = { prepareLocalOutput, writeLocalOutput };

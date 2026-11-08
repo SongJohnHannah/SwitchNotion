@@ -19,6 +19,12 @@ const richTypes = new Set(['paragraph', 'heading_1', 'heading_2', 'heading_3', '
 const childTypes = new Set(['paragraph', 'heading_1', 'heading_2', 'heading_3', 'heading_4', 'bulleted_list_item', 'numbered_list_item', 'quote', 'to_do', 'toggle', 'callout', 'column', 'column_list', 'synced_block', 'table', 'tab']);
 const mediaTypes = new Set(['image', 'video', 'audio', 'file', 'pdf']);
 const supported = new Set([...richTypes, ...mediaTypes, 'equation', 'bookmark', 'embed', 'divider', 'breadcrumb', 'table_of_contents', 'table', 'table_row', 'column', 'column_list', 'synced_block', 'link_to_page', 'tab']);
+const blockType = block => block?.type || Object.keys(block || {}).find(key => supported.has(key));
+const isTableBlock = block => ['table', 'table_row'].includes(blockType(block));
+function isTableWrite(name, args) {
+  if (name === 'update_block') return isTableBlock(args?.block);
+  return name === 'append_blocks' && Array.isArray(args?.blocks) && args.blocks.length > 0 && args.blocks.every(isTableBlock);
+}
 const fail = message => { throw Error('Notion ' + message); };
 const object = (value, label) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${label} 必须是对象。`);
@@ -81,7 +87,7 @@ function validateBlock(input, { update = false, depth = 0, counter = { count: 0 
   if (++counter.count > 100 || depth > 2) fail('单次最多 100 个块，最多两层嵌套；请分批追加。');
   object(input, 'block');
   if (depth === 0 && Buffer.byteLength(JSON.stringify(input)) > 400000) fail('单次块内容不超过 400KB，请分段修改。');
-  const type = input.type || Object.keys(input).find(k => supported.has(k));
+  const type = blockType(input);
   if (!supported.has(type)) fail('不支持该块类型；子页面和数据库请使用专用工具。');
   keys(input, ['object', 'type', type], 'block');
   if (input.object !== undefined && input.object !== 'block') fail('block.object 必须为 block。');
@@ -350,4 +356,4 @@ function createSession({ request, authorize, mutate, signal }) {
   };
   return { execute };
 }
-module.exports = { definitions, writeTools, createSession, matchesBlockContent };
+module.exports = { definitions, writeTools, createSession, matchesBlockContent, isTableWrite };

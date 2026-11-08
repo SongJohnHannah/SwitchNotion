@@ -5,6 +5,18 @@ import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 const require = createRequire(import.meta.url), {CollectionMedia} = require('../src/collection/media.cjs'), {createSpeechPlatform} = require('../src/speech/platform.cjs');
+test('a local reference image is copied without audio or video probing', async t => {
+  const { describeLocal } = require('../src/collection/local-media.cjs');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'collection-image-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, '参考图.png');
+  const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aHioAAAAASUVORK5CYII=', 'base64');
+  fs.writeFileSync(file, bytes);
+  const media = new CollectionMedia({ root: directory });
+  media.probe = () => assert.fail('images have no audio or video stream to probe');
+  const imported = await media.importLocal(describeLocal(file), path.join(directory, 'working'));
+  assert.equal(imported.kind, 'image'); assert.deepEqual(fs.readFileSync(imported.path), bytes);
+});
 test('local Qwen vision sends ordered frames to Ollama and starts the service when it is down', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'notion-switch-vision-')); const first = path.join(directory, '0.jpg'), second = path.join(directory, '1.jpg');
   fs.writeFileSync(first, 'first-frame'); fs.writeFileSync(second, 'second-frame');
@@ -12,15 +24,45 @@ test('local Qwen vision sends ordered frames to Ollama and starts the service wh
   const ollama = { available: async () => false, ensure: async () => { calls.push('ensure'); return 'http://127.0.0.1:21434'; } };
   const media = new CollectionMedia({ ollama, fetchImpl: async (url, options) => { requests.push({ url, body: JSON.parse(options.body) }); return { ok: true, json: async () => ({ message: { content: '第一张和第二张的画面分析' } }) }; } });
   try {
-    assert.equal(await media.localVision([{ frame: first, time: 0 }, { frame: second, time: 30 }], undefined, value => progress.push(value)), '第一张和第二张的画面分析');
+    assert.equal(await media.localVision([{ frame: first, time: 0 }, { frame: second, time: 30 }], undefined, value => progress.push(value), { ocrPaths: new Set([first]) }), '第一张和第二张的画面分析');
     assert.deepEqual(calls, ['ensure']); assert.match(progress.join(' '), /正在启动本机 Ollama/);
     const body = requests[0].body, content = body.messages[0].content;
     assert.equal(requests[0].url, 'http://127.0.0.1:21434/api/chat'); assert.equal(body.model, 'qwen3.8-27b-vl:latest'); assert.equal(body.stream, false);
     assert.deepEqual(body.messages[0].images, [first, second].map(frame => Buffer.from(frame === first ? 'first-frame' : 'second-frame').toString('base64')));
-    assert.match(content, /视频时间 30\.0 秒/); assert.match(content, /请描述以下视频关键帧/);
+    assert.match(content, /关键帧 1 · 视频时间 0\.0 秒 · 已有本机 OCR 文字/);
+    assert.match(content, /关键帧 2 · 视频时间 30\.0 秒 · 无本机 OCR 文字/);
+    assert.match(content, /遮罩或叠加的视觉线索/);
     const thinking = new CollectionMedia({ fetchImpl: async () => ({ ok: true, json: async () => ({ message: { content: '', thinking: '思考后的画面描述' } }) }) });
     assert.equal(await thinking.localVision([{ frame: first, time: 0 }]), '思考后的画面描述');
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+test('vision only suppresses text transcription for the exact frames covered by OCR', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'collection-frame-coverage-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const frames = [1, 2].map(time => ({ time, frame: path.join(directory, time + '.jpg') }));
+  for (const item of frames) fs.writeFileSync(item.frame, `frame-${item.time}`);
+  const messages = [];
+  const provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate(input) { messages.push(input.messages); yield '可见画面'; } };
+  const media = new CollectionMedia({ provider });
+  media.extractFrames = async () => frames;
+  await media.runVision({ kind: 'video' }, { style: true, ocrText: '旧批次已识别文字', recognizedFramePaths: [frames[0].frame, '/old-frame.jpg'] });
+  const content = messages[0][1].content;
+  assert.match(content[0].text, /每张图都可描述字幕排版/);
+  assert.match(content[1].text, /关键帧 1 · 视频时间 1\.0 秒 · 已有本机 OCR 文字/);
+  assert.match(content[3].text, /关键帧 2 · 视频时间 2\.0 秒 · 无本机 OCR 文字/);
+  assert.equal(content[2].type, 'image_url');
+  assert.equal(content[4].type, 'image_url');
+  media.ocrEngine = {};
+  media.ocrFrames = async () => { throw Error('fixture OCR unavailable'); };
+  assert.equal((await media.runVision({ kind: 'video' })).text, '可见画面');
+  assert.match(messages[1][1].content[1].text, /无本机 OCR 文字/);
+  media.ocrFrames = async () => ({ text: '第二帧字幕', note: '基于两张采样帧。', frames, recognizedFramePaths: [frames[1].frame] });
+  await media.runVision({ kind: 'video' }, { onOcr(result) {
+    assert.equal(result.text, '第二帧字幕');
+    assert.match(result.note, /由画面识别阶段补做/);
+    assert.equal(messages.length, 2, 'OCR is persisted before the visual request');
+  } });
+  assert.match(messages[2][1].content[3].text, /已有本机 OCR 文字/);
 });
 test('mediaocr extracts frame text while the local model only describes the picture', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'notion-switch-ocr-')); const frame = path.join(directory, '0.jpg');
@@ -35,6 +77,43 @@ test('mediaocr extracts frame text while the local model only describes the pict
     const unavailable = new CollectionMedia({ ocr: { recognize: async () => null } });
     await assert.rejects(unavailable.frameText(frame), /尚未准备/);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+test('dense OCR samples short text and keeps the separate times of repeated lines', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'collection-dense-ocr-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const media = new CollectionMedia({ binaries: { find: () => 'ffmpeg' }, ocr: {}, runImpl: async (_exe, args) => {
+    assert.match(args[args.indexOf('-vf') + 1], /fps=2:/);
+    assert.equal(args[args.indexOf('-frames:v') + 1], '5');
+    for (let i = 0; i < 5; i++) fs.writeFileSync(args.at(-1).replace('%05d', String(i).padStart(5, '0')), 'frame');
+  } });
+  media.recognizeFrameTexts = async () => ['相同', '相同', '短字卡 1280', '', '相同'];
+  const result = await media.ocr({ kind: 'video', path: path.join(directory, 'demo.mp4'), duration: 2.5 }, { dense: true });
+  assert.equal(result.dense, true);
+  assert.match(result.text, /约 0\.0–0\.5、2\.0 秒：相同/);
+  assert.match(result.text, /约 1\.0 秒：短字卡 1280/);
+  assert.match(result.rawText, /约 2\.0 秒：相同/);
+  assert.deepEqual(fs.readdirSync(directory), []);
+});
+test('OCR line cleanup joins supported English fragments and preserves conflicting numbers with their times', () => {
+  const { organizeOcr } = require('../src/collection/ocr-text.cjs');
+  const texts = [
+    '直到一切突然改变。\nUNTIL EVERYTHING CHANGES AT\nONCE\n正确率 61%',
+    '直到一切突然改变\nUNTIL EVERYTHING CHANGES AT ONCE\n正确率 63%',
+    '直到一切突然改变。\nDAY 3O',
+    '另一句。',
+    '直到一切突然改变。'
+  ];
+  const result = organizeOcr(texts.map((_, index) => ({ time: index / 2 })), texts, .5);
+  assert.match(result.cleaned, /0\.0–1\.0、2\.0 秒：直到一切突然改变。/);
+  assert.match(result.cleaned, /0\.0–0\.5 秒：UNTIL EVERYTHING CHANGES AT ONCE/);
+  assert.match(result.raw, /CHANGES AT\nONCE/);
+  assert.match(result.cleaned, /0\.0 秒：正确率 61% \[待核实\]/);
+  assert.match(result.cleaned, /0\.5 秒：正确率 63% \[待核实\]/);
+  assert.match(result.cleaned, /1\.0 秒：DAY 3O \[待核实\]/);
+  const split = organizeOcr([{ time: 4.5 }, { time: 5 }], [
+    'UNTIL EVERYTHING CHANGES AT\nONCE', 'UNTIL EVERY\nTHING CHANGES AT\nONCE'
+  ], .5);
+  assert.equal(split.cleaned, '视频时间约 4.5–5.0 秒：UNTIL EVERYTHING CHANGES AT ONCE');
 });
 test('one OCR session is shared across vision runs until it is closed', async () => {
   let opens = 0, closes = 0;
@@ -59,8 +138,9 @@ test('mediaocr reuses one client session for every frame', async () => {
   const session = await ocr.openSession();
   assert.equal((await session.recognize('/a.jpg')).pages[0].text, '帧文字');
   assert.deepEqual(await session.recognizeMany(['/a.jpg', '/b.jpg']), ['多图文字', '多图文字']);
+  assert.deepEqual(await session.recognizeMany(['/a.jpg']), ['帧文字']);
   await session.close(); await session.close();
-  assert.deepEqual(events, ['start', 'close']); assert.equal(requests.length, 2);
+  assert.deepEqual(events, ['start', 'close']); assert.equal(requests.length, 3);
   assert.deepEqual(requests[0].arguments, { image_paths: ['/a.jpg'], compact: true });
   assert.deepEqual(requests[1].arguments, { image_paths: ['/a.jpg', '/b.jpg'], compact: true });
 });

@@ -30,7 +30,7 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
   service.mediaTranscripts = mediaTranscripts;
   app.on('will-quit', () => mediaTranscripts.job?.controller.abort());
   app.on('will-quit', () => mediaTranscripts.ocr.preparation?.controller.abort());
-  const collection = setupCollection({ root, speech: speech.provider, platform, openSettings: () => open(), createWindow: options => {
+  const collection = setupCollection({ root, speech: speech.provider, webSources: service.webSources, platform, openSettings: () => open(), createWindow: options => {
     constructingSettings = true;
     try { const auxiliary = new BrowserWindow(options); settingsContents.add(auxiliary.webContents); return auxiliary; }
     finally { constructingSettings = false; }

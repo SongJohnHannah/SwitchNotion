@@ -150,7 +150,7 @@ async function showMcp(container, key) {
   const browser = element('input'); browser.type = 'checkbox'; browser.checked = response.result.browserEnabled; const browserLabel = element('label', 'check-label'); browserLabel.append(browser, document.createTextNode('启用本工作区 AI 网页操作（独立窗口）')); container.append(browserLabel);
   browser.addEventListener('change', () => operation(container, async () => { const response = await api.browserConfigure({ key, enabled: browser.checked }); if (!response.ok) toast(response.error); await showMcp(container, key); }));
   const approval = element('select'); approval.setAttribute('aria-label', 'Notion 页面修改审批');
-  for (const [value, label] of [['task', '页面修改：每轮任务按工作区确认'], ['each', '页面修改：每项操作分别确认']]) { const option = element('option', '', label); option.value = value; approval.append(option); } approval.value = response.result.approval; container.append(approval);
+  for (const [value, label] of [['tables', '当前工作区普通表格自动允许，其余每轮确认'], ['task', '页面修改：每轮任务按工作区确认'], ['each', '页面修改：每项操作分别确认']]) { const option = element('option', '', label); option.value = value; approval.append(option); } approval.value = response.result.approval; container.append(approval);
   approval.addEventListener('change', () => operation(container, async () => { const response = await api.approvalConfigure({ key, mode: approval.value }); if (!response.ok) toast(response.error); await showMcp(container, key); }));
   container.append(element('p', 'field-help', '服务只用于本工作区。每次执行 MCP 工具会弹出确认框；密钥保存在本机，不发送给模型。'));
   const form = item => {
