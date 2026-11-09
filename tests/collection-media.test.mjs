@@ -131,7 +131,13 @@ test('mediaocr reuses one client session for every frame', async () => {
   const { MediaOcr } = require('../src/mediaocr.cjs');
   const events = [], requests = [];
   const client = { start: async () => events.push('start'), tools: async () => [{ name: 'ocr_image', inputSchema: { properties: { image_paths: {} } } }],
-    request: async (_method, params) => { requests.push(params); const paths = params.arguments.image_paths; return paths.length > 1 ? { structuredContent: { errcode: 0, results: paths.map(() => ({ errcode: 0, text: '多图文字' })) } } : { structuredContent: { errcode: 0, text: '帧文字', confidence: .9 } }; },
+    request: async (_method, params) => {
+      requests.push(params);
+      const { image_paths: paths, compact } = params.arguments;
+      if (!compact) return { structuredContent: { errcode: 0, text: '位置文字', width: 200, height: 100,
+        lines: [{ text: '位置文字', confidence: .95, box: { left: 20, top: 20, right: 80, bottom: 40 } }, { text: '无效坐标', box: { left: 30, right: 10 } }] } };
+      return paths.length > 1 ? { structuredContent: { errcode: 0, results: paths.map(() => ({ errcode: 0, text: '多图文字' })) } } : { structuredContent: { errcode: 0, text: '帧文字', confidence: .9 } };
+    },
     child: null, close: () => events.push('close') };
   const ocr = new MediaOcr({ root: '/fixture', clientFactory: () => client });
   ocr.available = () => true;
@@ -139,10 +145,65 @@ test('mediaocr reuses one client session for every frame', async () => {
   assert.equal((await session.recognize('/a.jpg')).pages[0].text, '帧文字');
   assert.deepEqual(await session.recognizeMany(['/a.jpg', '/b.jpg']), ['多图文字', '多图文字']);
   assert.deepEqual(await session.recognizeMany(['/a.jpg']), ['帧文字']);
+  assert.deepEqual(await session.recognizeMany(['/a.jpg'], { positions: true }), [{ text: '位置文字',
+    lines: [{ text: '位置文字', confidence: .95, left: .1, top: .2, right: .4, bottom: .4 }] }]);
   await session.close(); await session.close();
-  assert.deepEqual(events, ['start', 'close']); assert.equal(requests.length, 3);
+  assert.deepEqual(events, ['start', 'close']); assert.equal(requests.length, 4);
   assert.deepEqual(requests[0].arguments, { image_paths: ['/a.jpg'], compact: true });
   assert.deepEqual(requests[1].arguments, { image_paths: ['/a.jpg', '/b.jpg'], compact: true });
+  assert.deepEqual(requests[3].arguments, { image_paths: ['/a.jpg'], compact: false });
+});
+test('nearby OCR confirms chart membership by position and leaves conflicting or unreadable regions unverified', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'collection-neighbors-'));
+  t.after(() => fs.rmdirSync(directory));
+  const media = new CollectionMedia({ ocr: {} });
+  const line = (text, x, y) => ({ text, confidence: .98, left: x - .02, right: x + .02, top: y - .01, bottom: y + .01 });
+  const chart = [line('高效用', .16, .24), line('中等效用', .42, .37), line('低效用', .73, .45),
+    line('练习测试', .12, .77), line('分散练习', .20, .77), line('精细追问', .34, .77), line('自我解释', .42, .77),
+    line('交错练习', .50, .77), line('关键词', .65, .75), line('记忆法', .65, .79), line('反复读', .73, .77), line('总结摘要', .81, .77)];
+  const swapped = chart.map(row => row.text === '分散练习' ? { ...row, text: '交错练习' } : row.text === '交错练习' ? { ...row, text: '分散练习' } : row);
+  let scanDirectory, times, conflict = false;
+  media.extractFrames = async (_asset, options) => {
+    scanDirectory = options.directory;
+    times = options.times;
+    assert.equal(options.maxSide, 1920);
+    return times.map((time, index) => {
+      const frame = path.join(scanDirectory, `frame-${index}.jpg`);
+      fs.writeFileSync(frame, '');
+      return { time, frame };
+    });
+  };
+  media.ensureOcrSession = async () => ({
+    recognizeMany: async (files, { positions }) => {
+      assert.ok(positions);
+      return files.map((_, index) => {
+        const time = times[index];
+        if ([4, 5].includes(time)) return { lines: chart };
+        if (conflict && [6, 9].includes(time)) return { lines: swapped };
+        if ([142, 143].includes(time)) return { lines: [line('第三，想重读，隔几天再读', .48, .14),
+          ...(!conflict ? [line('隔几天再读', .77, .54)] : [])] };
+        if (time === 141) return { lines: [line('第三，未经重复的误识别', .77, .54)] };
+        return { lines: [] };
+      });
+    }
+  });
+  const asset = { path: path.join(directory, 'source.mp4'), duration: 145, kind: 'video' };
+  const vision = '**关键帧 1 · 2 秒**\n柱状图分组标签看不清。\n**关键帧 2（139 秒）**\n右卡较暗，内容不可辨。';
+  const confirmed = await media.verifyFrameEvidence(asset, { vision });
+  assert.equal(confirmed.frames, 13);
+  assert.ok(times.every(time => time >= 0 && time < asset.duration));
+  assert.match(confirmed.chartProof, /中等效用（3项）：精细追问、自我解释、交错练习；低效用（3项）：关键词记忆法/);
+  assert.match(confirmed.text, /142.0 秒（邻帧 OCR）：第三，想重读，隔几天再读/);
+  assert.doesNotMatch(confirmed.text, /误识别|待核实/);
+  assert.ok(!fs.existsSync(scanDirectory));
+  conflict = true;
+  const uncertain = await media.verifyFrameEvidence(asset, { vision });
+  assert.equal(uncertain.chartProof, '');
+  assert.deepEqual(uncertain.unresolved, [{ time: 2, kind: 'chart' }, { time: 139, kind: 'text' }]);
+  assert.doesNotMatch(uncertain.text, /误识别/);
+  assert.ok(!fs.existsSync(scanDirectory));
+  assert.equal((await media.verifyFrameEvidence(asset, { vision: '视频时间 3 秒：无法确认转场方式' })).frames, 0);
+  assert.equal((await media.verifyFrameEvidence(asset, { vision: '视频时间 3 秒：字卡文字清楚可辨认' })).frames, 0);
 });
 test('Ollama unloads the local model when released', async () => {
   const { OllamaService } = require('../src/collection/ollama.cjs');

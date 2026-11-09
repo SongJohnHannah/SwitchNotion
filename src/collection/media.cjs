@@ -6,6 +6,7 @@ const { download } = require('./network.cjs');
 const { run, workerEnvironment, nodeExecutable } = require('./process.cjs');
 const { mediaKinds } = require('./model.cjs');
 const { organizeOcr } = require('./ocr-text.cjs');
+const { verificationTargets, verificationResult } = require('./frame-verification.cjs');
 const { GpuOperatorClient } = require('../speech/operator-client.cjs');
 const { downloadError } = require('./download-error.cjs');
 function clock(value) { const match = String(value).match(/(\d+):(\d+):(\d+(?:\.\d+)?)/); return match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) : 0; }
@@ -209,11 +210,11 @@ class CollectionMedia {
     this.localVisionQueue = result.catch(() => {});
     return result;
   }
-  async extractFrames(asset, { signal, maxSide = 1024, style = false } = {}) {
-    const directory = path.join(path.dirname(asset.path), style ? 'style-frames' : 'frames'); fs.mkdirSync(directory, { recursive: true });
+  async extractFrames(asset, { signal, maxSide = 1024, style = false, directory = path.join(path.dirname(asset.path), style ? 'style-frames' : 'frames'), times } = {}) {
+    fs.mkdirSync(directory, { recursive: true });
     const duration = asset.duration || 0;
     const count = Math.min(60, Math.max(1, Math.ceil(duration / (style ? 8 : 30)), style ? Math.min(4, Math.ceil(duration)) : 1));
-    const times = asset.kind === 'video' ? Array.from({ length: count }, (_, i) => Math.max(0, Math.min(duration - .05, (i + (style ? .5 : 0)) * duration / count))) : [0];
+    times ||= asset.kind === 'video' ? Array.from({ length: count }, (_, i) => Math.max(0, Math.min(duration - .05, (i + (style ? .5 : 0)) * duration / count))) : [0];
     const frames = [];
     for (let j = 0; j < times.length; j++) {
       const frame = path.join(directory, 'frame-' + j + '.jpg');
@@ -231,6 +232,29 @@ class CollectionMedia {
     if (asset.kind !== 'video') throw Error('关键帧文字识别只用于视频。');
     if (!this.localOcr) throw Error('本机 mediaocr 尚未准备，请在设置中准备 OCR 组件。');
     const task = this.ocrQueue.then(() => this.runOcr(asset, options), () => this.runOcr(asset, options));
+    this.ocrQueue = task.catch(() => {});
+    return task;
+  }
+  async verifyFrameEvidence(asset, { ocr, vision, signal, progress = () => {} } = {}) {
+    if (!this.localOcr || asset.kind !== 'video' || !Number.isFinite(asset.duration) || asset.duration <= .05) return null;
+    const targets = verificationTargets({ ocr, vision, duration: asset.duration });
+    if (!targets.length) return verificationResult([], [], []);
+    const task = this.ocrQueue.then(async () => {
+      signal?.throwIfAborted();
+      const session = await this.ensureOcrSession(signal);
+      if (typeof session?.recognizeMany !== 'function') return null;
+      const times = [...new Set(targets.flatMap(target => target.times))].sort((a, b) => a - b);
+      const directory = fs.mkdtempSync(path.join(path.dirname(asset.path), 'ocr-neighbors-'));
+      try {
+        progress(`正在补扫 ${targets.length} 处字卡或图表，核对邻帧文字和位置…`);
+        const frames = await this.extractFrames(asset, { signal, directory, times, maxSide: 1920 });
+        const results = await session.recognizeMany(frames.map(frame => frame.frame), { signal, positions: true });
+        return verificationResult(targets, frames, results);
+      } finally {
+        for (const name of fs.readdirSync(directory)) if (/^frame-\d+\.jpg$/u.test(name)) fs.unlinkSync(path.join(directory, name));
+        fs.rmdirSync(directory);
+      }
+    });
     this.ocrQueue = task.catch(() => {});
     return task;
   }

@@ -42,7 +42,13 @@ test('selecting both creates two documents, shares media, and recovers the secon
       yield '## 原片效果怎么做\n画面独立结果\n## 展开细节\n### 详情｜技术实现\nWebGL 参考复现';
     } else { contentCalls++; yield '## 专业结论\n内容独立结果\n## 展开细节\n### 详情｜证据链与底层原理\n- 可核对内容'; }
   } };
-  const f = fixture(t, { document, provider });
+  let neighborChecks = 0;
+  const f = fixture(t, { document, provider, media: { verifyFrameEvidence: async (asset, { vision }) => {
+    neighborChecks++;
+    assert.equal(asset.kind, 'video');
+    assert.equal(vision, '画面识别结果');
+    return { text: '邻帧文字确认', resolvedLines: 1 };
+  } } });
   const created = new Map(), plans = new Map(); let interrupted = false;
   f.service.notion.write = async (job, nodes, save) => {
     const existing = created.get(job.id);
@@ -74,6 +80,8 @@ test('selecting both creates two documents, shares media, and recovers the secon
   assert.equal(finished.status, 'completed');
   assert.equal(created.size, 2);
   assert.equal(contentCalls, 1); assert.equal(styleCalls, 2);
+  assert.equal(neighborChecks, 1);
+  assert.match(fs.readFileSync(path.join(finished.exportDirectory, '关键帧文字.md'), 'utf8'), /邻帧文字确认/);
   assert.deepEqual(f.calls.filter(call => ['download:video', 'transcript', 'vision', 'upload'].includes(call)).sort(), ['download:video', 'transcript', 'upload', 'vision']);
   assert.deepEqual(finished.pages.map(page => page.key), ['content', 'style']);
   assert.deepEqual(f.service.status().latestCompletion.pages, finished.pages);

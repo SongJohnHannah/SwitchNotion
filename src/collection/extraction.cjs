@@ -1,6 +1,7 @@
 const { hash } = require('./model.cjs');
 const { templates, evidenceNotes, evidenceLedger, evidenceReview, styleTutorial } = require('./summary-templates.cjs');
 const { needsEvidenceReview, reviewContentEvidence } = require('./evidence-review.cjs');
+const { staleFrameClaims } = require('./frame-verification.cjs');
 const { extractionReadiness } = require('./extraction-readiness.cjs');
 const { researchStyle, researchContent } = require('./style-research.cjs');
 const { prepareReport } = require('./report-markdown.cjs');
@@ -10,6 +11,7 @@ const SYSTEM = [
   '逐字稿记录听到的话，OCR 记录画面中看见的文字，两路按时间线互补。画面有可靠操作文字或界面变化时，即使没有口播也可整理教程。不同来源冲突、精扫仍漏掉的步骤或参数写待核实，不凭空补成原片步骤。',
   '两张采样帧显示了不同镜头，只能写前后采样画面不同。硬切、跳切、淡入、缩放、准确切点和卡点需要连续画面或可靠标注。只有口述或字幕措辞时，也不能据此断言实际语速、停顿或混音。',
   '来源事实需要有据可查。建议与推测分别标明，原作者所用的软件、步骤和参数需要原素材证据。跨片段信息不全或来源冲突时列出待核实事项。',
+  '邻帧位置核对是本机 OCR 与文字位置的交叉证据。同一字卡后来清晰时，按后来的时间点引用；同一图表已给出完整位置分组时，以该分组核对标签，撤掉对旧帧模糊或错位造成的同一缺口标记。',
   '视频内容以画面OCR和实际口述为主。OCR中标待核实的数字、单位和命令不写成确定结论。不输出检索进度、失败消息或网页读取状态。用户侧重点用于调整内容取舍，证据规则和本轮格式仍适用。'
 ].join('\n');
 const legacySourceLabels = new Set(['逐字稿', '关键帧文字', '画面识别']);
@@ -81,6 +83,7 @@ class CollectionExtraction {
     if (pending) return pending;
     const sourceRanges = [];
     const legacyBlocks = [], searchVisuals = [], searchReferences = [];
+    const neighborEvidence = [];
     let hasReadableText = false;
     let materialOffset = 0;
     const material = nodes.map((node, index) => {
@@ -95,8 +98,9 @@ class CollectionExtraction {
         ['素材标记', `素材 ${index + 1} · ${node.kind}`], ['正文', node.text], ['素材说明', node.caption],
         ['逐字稿', item.transcript?.text?.trim() ? item.transcript.text : ''], ['逐字稿附注', item.transcript?.note || (job.options.transcribe && asset?.audio && !item.transcript && item.ocr?.dense ? '语音转写未取得结果，本次仅以可用画面资料提取。' : '')],
         ['关键帧文字', item.ocr?.text], ['关键帧文字附注', item.ocr?.note],
-        ['画面识别', item.vision?.text], ['画面识别附注', item.vision?.note]
+        ['画面识别', item.vision?.text], ['画面识别附注', item.vision?.note], ['邻帧位置核对', item.frameVerification?.text]
       ];
+      if (item.frameVerification?.text) neighborEvidence.push(`素材 ${index + 1}\n邻帧位置核对：\n${item.frameVerification.text}`);
       // Keep the existing job identity when adding labels to the model input.
       legacyBlocks.push(fields.filter(([, value]) => value).map(([field, value]) => legacySourceLabels.has(field) ? `${field}：\n${value}` : value).join('\n'));
       const lines = [];
@@ -104,7 +108,7 @@ class CollectionExtraction {
         if (field === '画面识别' && value === item.vision?.ocrText) continue;
         const evidence = field === '关键帧文字' ? value || item.vision?.ocrText : value;
         if (!evidence) continue;
-        if (['正文', '逐字稿', '关键帧文字'].includes(field) && String(evidence).trim()) hasReadableText = true;
+        if ((['正文', '逐字稿', '关键帧文字'].includes(field) || field === '邻帧位置核对' && (item.frameVerification.resolvedLines || item.frameVerification.resolvedCharts)) && String(evidence).trim()) hasReadableText = true;
         if (lines.length) materialOffset++;
         const text = field === '素材标记' ? String(evidence) : `${field}：\n${evidence}`;
         const end = materialOffset + text.length;
@@ -151,7 +155,9 @@ class CollectionExtraction {
     if (job.classification?.fingerprint !== materialFingerprint) {
       job.classification = { fingerprint: materialFingerprint, type, title: type }; save();
     }
-    const context = { config, material, sourceRanges, preference, articleExcerpt, hasReadableText, hasTranscript, sampledVideo, signal, progress, save,
+    const videoNodes = nodes.filter(node => node.kind === 'video');
+    const frameVerification = videoNodes.length === 1 ? job.analyses[videoNodes[0].id]?.frameVerification : null;
+    const context = { config, material, sourceRanges, preference, articleExcerpt, hasReadableText, hasTranscript, sampledVideo, signal, progress, save, neighborEvidence, frameVerification,
       visualEvidence: searchVisuals, referenceEvidence: searchReferences };
     if (!both) return this.runTemplate(template, job, context);
 
@@ -170,7 +176,7 @@ class CollectionExtraction {
     const sources = reports.at(-1).sources || [];
     return { fingerprint: hash(JSON.stringify(results.map(result => result.fingerprint))), materialFingerprint, type, name: type, text, reports, ...(sources.length ? { sources } : {}) };
   }
-  async runTemplate(template, state, { config, material, sourceRanges, preference, articleExcerpt, hasReadableText, hasTranscript, sampledVideo, signal, progress, save, visualEvidence, referenceEvidence }) {
+  async runTemplate(template, state, { config, material, sourceRanges, preference, articleExcerpt, hasReadableText, hasTranscript, sampledVideo, signal, progress, save, visualEvidence, referenceEvidence, neighborEvidence, frameVerification }) {
     const visual = template === templates.style;
     const scope = template === templates.article ? (articleExcerpt ? '本次正文只覆盖节选。标明精简稿覆盖范围。' : '本次为文章精读，保留段落顺序和写作手法。') : '';
     const prompt = [template.prompt, scope, preference && '本次侧重点：\n' + preference].filter(Boolean).join('\n\n');
@@ -212,6 +218,8 @@ class CollectionExtraction {
       return repaired;
     };
     const generateFinal = async (source, requirement) => {
+      const supplemental = neighborEvidence.filter(value => !source.includes(value));
+      if (chunks.length > 1 && supplemental.length) source += '\n\n' + supplemental.join('\n\n');
       if (checkpoint.research === undefined) {
         const options = { webSources: this.webSources, provider: this.provider, config, signal, progress };
         const gaps = !visual && chunks.length > 1 ? verificationGaps(checkpoint.parts) : [];
@@ -252,8 +260,17 @@ class CollectionExtraction {
       }
       if (!visual && sampledVideo && needsEvidenceReview(source, report.text)) {
         progress('正在核对终稿的步骤、图表归属和陪练来源…');
-        report = await reviewContentEvidence({ source, draft: report.text, sourceRule: hasTranscript ? '' : noTranscriptRule, prepare,
+        report = await reviewContentEvidence({ source, draft: report.text, chartProof: frameVerification?.chartProof, sourceRule: hasTranscript ? '' : noTranscriptRule, prepare,
           validSources: text => !unsupportedSpeech(text, hasTranscript), generate });
+      }
+      const stale = visual ? staleFrameClaims(report.text, frameVerification) : [];
+      if (stale.length) {
+        progress('正在核对画面报告中已由邻帧确认的内容…');
+        const repaired = prepare(await generate([...messages, { role: 'assistant', content: report.text },
+          { role: 'user', content: '保留栏目和其他内容，只修正下列过时的待核实说法。可保留旧帧较暗等观察，须写清后续 OCR 核对到的文字和时间。已核对的分组按邻帧证据写，仍缺证的颜色、动效或数值另起句标明。输出完整报告。\n' + stale.join('\n') }]));
+        if (!repaired.valid || unsupportedSpeech(repaired.text, hasTranscript) || staleFrameClaims(repaired.text, frameVerification).length)
+          throw Error('画面报告与邻帧核对结果仍有冲突，请重试。');
+        report = repaired;
       }
       return report.text.replace(/\[S\d+\]/g, citation => sourceIds.has(citation) ? citation : '');
     };

@@ -94,6 +94,10 @@ function layoutNodes(nodes, layout) {
   return [...nodes.filter(node => !['audio', 'video'].includes(node.kind)), ...nodes.filter(node => ['audio', 'video'].includes(node.kind))];
 }
 function recognitionResult(item, key) {
+  if (key === 'ocr' && item?.frameVerification?.text) {
+    const ocr = item.ocr || {};
+    return { ...ocr, text: [ocr.text || item.vision?.ocrText, '【邻帧位置核对】\n' + item.frameVerification.text].filter(Boolean).join('\n\n') };
+  }
   if (key === 'ocr' && !item?.ocr?.text && item?.vision?.ocrText) return { text: item.vision.ocrText, note: '由画面识别阶段补做，仅覆盖相应采样帧。' };
   if (key === 'vision' && item?.vision?.ocrText && item.vision.text === item.vision.ocrText) return null;
   return item?.[key];

@@ -450,15 +450,17 @@ test('a final evidence audit grounds numbered steps and chart groups across sect
 test('a later readable frame resolves an earlier unclear step and fixes the action numbering', async () => {
   const { reviewContentEvidence } = require('../src/collection/evidence-review.cjs');
   const { prepareReport } = require('../src/collection/report-markdown.cjs');
-  const source = '关键帧文字：\n视频时间 15 秒：第一，每段最多划一句。\n视频时间 139 秒：三步\n第二，合上书问为什么对。\n视频时间约 142 秒（本机补帧 OCR）：第三，想重读，隔几天再读。';
-  const draft = '## 专业结论\n把划线和合书追问结合。\n## 展开细节\n### 详情｜实操复刻步骤与避坑清单\n- **动作三** 合上书问为什么对。';
-  const report = await reviewContentEvidence({ source, draft, validSources: () => true,
+  const chartProof = '经邻帧位置核对的完整图表分组（4.0、5.0 秒）：高效用（2项）：练习测试、分散练习；中等效用（3项）：精细追问、自我解释、交错练习。';
+  const source = '关键帧文字：\n视频时间 15 秒：第一，每段最多划一句。\n视频时间 139 秒：三步\n第二，合上书问为什么对。\n邻帧位置核对：\n视频时间约 142 秒（邻帧 OCR）：第三，想重读，隔几天再读。\n' + chartProof;
+  const draft = '## 专业结论\n把划线和合书追问结合。分组归属待核实。\n## 展开细节\n### 详情｜实操复刻步骤与避坑清单\n- **动作三** 合上书问为什么对。\n### 详情｜证据链与底层原理\n- 原片有分组图表。';
+  const report = await reviewContentEvidence({ source, draft, chartProof, validSources: () => true,
     prepare: text => prepareReport(text, { visual: false, hasReadableText: true, sourceIds: new Set() }),
     generate: async messages => messages.length === 2 ? JSON.stringify({ declaredSteps: 3, stepGap: '139 秒第三张卡偏暗',
       steps: [{ number: 2, quote: '合上书问为什么对' }],
-      groupProof: [], unresolvedItems: [], groupGap: '', completeGroupProof: '' }) : JSON.stringify({ practice: '', markdown: draft }) });
+      groupProof: ['模型猜测'], unresolvedItems: [], groupGap: '图表分组归属', completeGroupProof: '' }) : JSON.stringify({ practice: '', markdown: draft }) });
   assert.match(report.text, /原片第 2 步\*\* 第二，合上书问为什么对。 \[画面OCR\]\n- \*\*原片第 3 步\*\* 第三，想重读，隔几天再读。 \[画面OCR\]/);
   assert.doesNotMatch(report.text, /待核实|动作三/);
+  assert.ok(report.text.includes(chartProof + ' [画面OCR]'));
 });
 
 test('a distillation tutorial is generated separately and appended after the original style report', async () => {
@@ -466,19 +468,33 @@ test('a distillation tutorial is generated separately and appended after the ori
   const [video] = document.nodes, calls = [];
   const job = { options: preferences({ extraction: { mode: 'style' } }), document,
     resources: { [video.id]: { asset: { path: '/video.mp4', audio: false } } },
-    analyses: { [video.id]: { vision: { text: '发光图表曲线' } } } };
+    analyses: { [video.id]: { vision: { text: '发光图表曲线' }, frameVerification: {
+      text: '视频时间约 142.0 秒（邻帧 OCR）：第三，隔几天再读', chartProof: '经邻帧位置核对的完整图表分组', resolvedLines: 1, confirmedTextWindows: [{ time: 139, right: true }]
+    } } } };
   const draft = '## 原片效果怎么做\n用 SVG 滤镜实现曲线光晕。\n\n## 蒸馏到我的视频\n换成用户的新数据。\n\n## 给 AI 的指令\n用新数据渲染可编辑的曲线。';
   const provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate({ messages }) {
     calls.push(messages);
-    if (calls.length === 1) { assert.doesNotMatch(messages[1].content, /蒸馏提示词教程/); yield draft; return; }
+    const detail = '\n\n## 展开细节\n### 详情｜画面证据\n- 139 秒出现三张字卡；右卡较暗，文字 [待核实]。';
+    if (calls.length === 1) {
+      assert.doesNotMatch(messages[1].content, /蒸馏提示词教程/);
+      yield draft + detail + '\n- `[待核实]` 缓动时长；最右端相邻柱色相与标签归属。';
+      return;
+    }
+    if (calls.length === 2) {
+      assert.match(messages.at(-1).content, /过时的待核实说法/);
+      assert.match(messages.at(-1).content, /色相与标签归属/);
+      yield draft + detail.replace('文字 [待核实]', '142 秒邻帧读到「隔几天再读」[画面OCR]') + '\n- 缓动时长 [待核实]。';
+      return;
+    }
     assert.match(messages[0].content, /蒸馏提示词教程/);
     assert.match(messages[1].content, /用 SVG 滤镜实现曲线光晕/);
     yield ['- **蒸馏成变量** 曲线数据可替换。', '- **提示词怎么写** 指定输入和验收。', '- **同类风格示例** 请用 SVG 生成可运行的预览。',
       '- **动手练习** 将示例数据换成自己的。', '- **验收与迭代** 复验光晕层级。'].join('\n');
   } };
   const report = await new CollectionExtraction({ provider }).run(job, document.nodes);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.ok(report.text.startsWith(draft + '\n\n## 展开细节'));
+  assert.match(report.text, /142 秒邻帧读到「隔几天再读」\[画面OCR\][\s\S]+缓动时长 \[待核实\]/);
   assert.match(report.text, /### 详情｜提示词编写与练习[\s\S]+\[补充建议\] 将示例数据换成自己的/);
   const blocks = renderDocument(document, document.nodes, {}, {}, [], report, 'result-first').blocks;
   assert.equal(blocks.find(block => block.toggle?.rich_text[0].text.content === '提示词编写与练习').toggle.children.length, 5);

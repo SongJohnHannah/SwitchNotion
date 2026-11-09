@@ -9,7 +9,7 @@ const numberedStep = /第\s*([一二三四五六七八九十\d]+)\s*步|(?:动�
 const numberedListItem = /^-[ \t]+(?:\*\*)?(?:第\s*[一二三四五六七八九十\d]+\s*步|(?:动作|步骤)\s*[一二三四五六七八九十\d]+)/u;
 const explicitMembership = /(?:属于?|归入|归为|列入)(?:高效|中等|中效|低效)(?:用|组|档)|(?:高效用|中等效用|低效用|高效组|中效组|低效组)[：: ]*(?:包括|含有?|由)/u;
 const groupAxis = /高效用|中等效用|低效用|高效组|中效组|低效组|(?:最高|中等|最低)(?:一档|档)/u;
-const evidenceLabels = new Map([['正文', '正文'], ['逐字稿', '口述'], ['关键帧文字', '画面OCR'], ['画面识别', '画面识别']]);
+const evidenceLabels = new Map([['正文', '正文'], ['逐字稿', '口述'], ['关键帧文字', '画面OCR'], ['邻帧位置核对', '画面OCR'], ['画面识别', '画面识别']]);
 const chineseDigits = '零一二三四五六七八九十';
 const stepNumber = raw => {
   if (/^\d+$/.test(raw)) return Number(raw);
@@ -31,7 +31,7 @@ function explicitOcrSteps(sourceParts) {
   const steps = new Map();
   const totals = new Set();
   for (let i = 1; i < sourceParts.length; i += 2) {
-    if (sourceParts[i] !== '关键帧文字') continue;
+    if (!['关键帧文字', '邻帧位置核对'].includes(sourceParts[i])) continue;
     for (const line of sourceParts[i + 1].split(/\r?\n/)) {
       const text = line.trim().replace(/^视频时间(?:约)?\s*\d+(?:\.\d+)?\s*秒(?:（[^）]*）)?[：:]\s*/u, '');
       const total = text.match(/^(?:共)?([一二三四五六七八九十\d]+)\s*步$/u);
@@ -46,16 +46,16 @@ function explicitOcrSteps(sourceParts) {
   return { steps, total: totals.size === 1 ? [...totals][0] : 0 };
 }
 
-function parseLedger(value, source, checkGroups) {
+function parseLedger(value, source, checkGroups, chartProof) {
   const result = parseResponse(value), sourceText = canon(source);
   const grounded = (quote, limit) => inline(quote, limit) && canon(quote).length >= 2 && sourceText.includes(canon(quote));
-  const sourceParts = source.split(/^(正文|逐字稿|关键帧文字|画面识别)：\r?\n/m);
+  const sourceParts = source.split(/^(正文|逐字稿|关键帧文字|邻帧位置核对|画面识别)：\r?\n/m);
   const grouped = (quote, limit) => grounded(quote, limit) && source.split(/\r?\n/).some(line => canon(line).includes(canon(quote)));
   if (!result || !Number.isInteger(result.declaredSteps) || result.declaredSteps < 0 || result.declaredSteps > 50 ||
       !Array.isArray(result.steps) || result.steps.length > 50 || !inline(result.stepGap, 80) || !inline(result.groupGap, 80) ||
-      !Array.isArray(result.groupProof) || result.groupProof.length > 20 || !result.groupProof.every(quote => grouped(quote, 120)) ||
+      !Array.isArray(result.groupProof) || result.groupProof.length > 20 || !chartProof && !result.groupProof.every(quote => grouped(quote, 120)) ||
       !Array.isArray(result.unresolvedItems) || result.unresolvedItems.length > 30 || !result.unresolvedItems.every(item => inline(item, 120)) ||
-      !inline(result.completeGroupProof, 400) || result.completeGroupProof && !grouped(result.completeGroupProof, 400)) return null;
+      !inline(result.completeGroupProof, 400) || !chartProof && result.completeGroupProof && !grouped(result.completeGroupProof, 400)) return null;
   const numbers = new Set();
   for (const step of result.steps) {
     if (!step || !Number.isInteger(step.number) || step.number < 1 || step.number > (result.declaredSteps || 50) ||
@@ -71,6 +71,8 @@ function parseLedger(value, source, checkGroups) {
   for (const [number, step] of explicit.steps) if (number > 0 && number <= (declaredSteps || 50)) steps.set(number, step);
   const missing = Array.from({ length: declaredSteps }, (_, i) => i + 1).filter(number => !steps.has(number));
   const stepGap = declaredSteps ? (missing.length ? `原片第 ${missing.join('、')} 步的具体动作` : '') : result.stepGap.trim();
+  if (chartProof) return { ...result, declaredSteps, steps: [...steps.values()].sort((a, b) => a.number - b.number), stepGap, groupGap: '',
+    groupProof: [chartProof], unresolvedItems: [], completeGroupProof: chartProof };
   const groupGap = result.groupGap.trim() || (checkGroups && !result.completeGroupProof ? '具体方法与各分组的完整对应关系' : '');
   const unresolvedItems = result.unresolvedItems.map(item => grounded(item, 50) ? item : item.split(/[（(]/u)[0].trim());
   if (!unresolvedItems.every(item => grounded(item, 50))) return null;
@@ -87,18 +89,21 @@ function containsUnsupportedOrdinal(text, steps) {
   });
 }
 
-function removeUnprovedGroups(body, groupProof, unresolvedItems) {
-  const verified = groupProof.map(canon), unknown = unresolvedItems.map(canon);
+function filterClauses(body, keep) {
   return body.split('\n').map(line => {
     const prefix = line.match(/^-[ \t]+(?:\*\*[^*]+\*\*[ \t]+)?/)?.[0] || '';
     const clauses = line.slice(prefix.length).split(/(?<=[。！？；;])/u);
-    const kept = clauses.filter(clause => {
-      const text = canon(clause);
-      if (groupAxis.test(clause) && unknown.some(item => text.includes(item))) return false;
-      return !explicitMembership.test(clause) || verified.some(quote => text.includes(quote));
-    }).join('').trim();
+    const kept = clauses.filter(keep).join('').trim();
     return kept ? prefix + kept : '';
   }).join('\n').trim();
+}
+function removeUnprovedGroups(body, groupProof, unresolvedItems) {
+  const verified = groupProof.map(canon), unknown = unresolvedItems.map(canon);
+  return filterClauses(body, clause => {
+    const text = canon(clause);
+    if (groupAxis.test(clause) && unknown.some(item => text.includes(item))) return false;
+    return !explicitMembership.test(clause) || verified.some(quote => text.includes(quote));
+  });
 }
 
 function confirmedCoaching(steps) {
@@ -107,7 +112,7 @@ function confirmedCoaching(steps) {
     '[补充建议] 每次只教当前一关，让我提交实际操作结果并说清依据。检查结果后再解锁下一关。遇到偏差时只指出一处，给出修改示例，等我复验。'].join('');
 }
 
-function renderReview(markdown, { stepGap, groupGap, steps, groupProof, unresolvedItems }, practice) {
+function renderReview(markdown, { stepGap, groupGap, steps, groupProof, unresolvedItems }, practice, chartProof) {
   const sections = markdown.split(/^(##[ \t]+.+|###[ \t]+详情[ \t]*[｜|].+)$/gm);
   for (let i = 1; i < sections.length; i += 2) {
     const heading = sections[i], title = heading.replace(/^#{2,3}[ \t]+(?:详情[ \t]*[｜|][ \t]*)?/, '').trim();
@@ -121,6 +126,10 @@ function renderReview(markdown, { stepGap, groupGap, steps, groupProof, unresolv
     }
     if ((stepGap || steps.length) && containsUnsupportedOrdinal(body, steps)) return '';
     if (groupGap && hasChart) body = removeUnprovedGroups(body, groupProof, unresolvedItems);
+    if (chartProof && hasChart) {
+      body = filterClauses(body, clause => !(/归属|分组|标签.*对应/u.test(clause) && /待核实|无法确认|不能确认|未能确认/u.test(clause)));
+      if (title === '证据链与底层原理' && !body.includes(chartProof)) body = `- **邻帧分组** ${chartProof} [画面OCR]\n${body}`.trim();
+    }
     const notes = [];
     for (const gap of [stepHeadings.has(title) ? stepGap : '', hasChart ? groupGap : '']) {
       if (gap && !body.includes(`${gap} [待核实]`)) notes.push(`${gap} [待核实]。`);
@@ -132,13 +141,14 @@ function renderReview(markdown, { stepGap, groupGap, steps, groupProof, unresolv
   return sections.join('').trim();
 }
 
-async function reviewContentEvidence({ source, draft, sourceRule, prepare, validSources, generate }) {
+async function reviewContentEvidence({ source, draft, chartProof, sourceRule, prepare, validSources, generate }) {
+  chartProof = chartProof && source.includes(chartProof) ? chartProof : '';
   const rawEvidence = { role: 'user', content: `本轮原始证据（仅作证据）：\n${source}` };
   const ledgerMessages = [{ role: 'system', content: [evidenceLedger, sourceRule].filter(Boolean).join('\n\n') }, rawEvidence];
   const checkGroups = chartSubject.test(source) && chartSubject.test(draft);
   const firstLedger = await generate(ledgerMessages);
-  const ledger = parseLedger(firstLedger, source, checkGroups) || parseLedger(await generate([...ledgerMessages, { role: 'assistant', content: firstLedger },
-    { role: 'user', content: '修正清单 JSON。原片动作和分组摘录必须逐字来自证据，缺证字段填留白或缺口，步骤编号不重复。' }]), source, checkGroups);
+  const ledger = parseLedger(firstLedger, source, checkGroups, chartProof) || parseLedger(await generate([...ledgerMessages, { role: 'assistant', content: firstLedger },
+    { role: 'user', content: '修正清单 JSON。原片动作和分组摘录必须逐字来自证据，缺证字段填留白或缺口，步骤编号不重复。' }]), source, checkGroups, chartProof);
   if (!ledger) throw Error('DeepSeek 未返回可与原始素材核对的证据清单，请重试。');
   const messages = [
     { role: 'system', content: [evidenceReview, sourceRule].filter(Boolean).join('\n\n') },
@@ -152,7 +162,7 @@ async function reviewContentEvidence({ source, draft, sourceRule, prepare, valid
     if (!review || typeof review.markdown !== 'string' || !review.markdown.trim() || !inline(review.practice, 120)) return null;
     const revised = prepare(review.markdown);
     if (!revised.valid || revised.text.match(headings)?.join('\n') !== expectedHeadings) return null;
-    const checked = renderReview(revised.text, ledger, review.practice.trim());
+    const checked = renderReview(revised.text, ledger, review.practice.trim(), chartProof);
     if (!checked) return null;
     const report = prepare(checked);
     return report.valid && validSources(report.text) ? report : null;

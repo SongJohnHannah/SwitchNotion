@@ -266,6 +266,18 @@ class CollectionService extends EventEmitter {
               } }); }
             catch (error) { signal.throwIfAborted(); analysis.errors.push(safeError(error)); } save();
           }
+          if (node.kind === 'video' && job.options.extraction.mode !== 'off' && typeof this.media.verifyFrameEvidence === 'function') {
+            const ocr = analysis.ocr?.text || analysis.vision?.ocrText, vision = analysis.vision?.text;
+            const fingerprint = hash(JSON.stringify([ocr, vision]));
+            if ((ocr || vision) && analysis.frameVerification?.fingerprint !== fingerprint) {
+              delete analysis.frameVerification;
+              try {
+                const result = await this.media.verifyFrameEvidence(current, { ocr, vision, signal, progress: nodeProgress });
+                if (result) analysis.frameVerification = { ...result, fingerprint };
+              } catch { signal.throwIfAborted(); nodeProgress('邻帧补扫未完成，继续使用已取得的识别结果。'); }
+              save();
+            }
+          }
           if (!resource.parts) { markProcessing(); resource.parts = await this.media.prepareUpload(current, job.options, limit, { signal, progress: nodeProgress }); save(); }
           resource.uploads ||= [];
           for (let i = 0; i < resource.parts.length; i++) {

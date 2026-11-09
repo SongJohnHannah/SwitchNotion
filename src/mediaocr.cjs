@@ -19,13 +19,22 @@ function imageResults(result, expected) {
   if (result.isError) fail('识别未完成，请检查已准备的本机引擎。');
   let data;
   try { data = result.structuredContent || JSON.parse((result.content || []).filter(item => item.type === 'text').map(item => item.text).join('\n')); } catch { fail('结果不是有效 JSON。'); }
-  if (expected === 1 && data?.errcode === 0 && typeof data.text === 'string' && data.text.length <= 200000) return [data.text];
-  if (data?.errcode !== 0 || !Array.isArray(data.results) || data.results.length !== expected) fail('引擎返回的图片数量不一致，未使用不完整结果。');
-  return data.results.map(item => {
+  const entries = expected === 1 && typeof data?.text === 'string' ? [data] : data?.results;
+  if (data?.errcode !== 0 || !Array.isArray(entries) || entries.length !== expected) fail('引擎返回的图片数量不一致，未使用不完整结果。');
+  return entries.map(item => {
     if (item.errcode !== 0) fail('部分图片识别失败，请检查本机组件。');
     if (typeof item.text !== 'string' || item.text.length > 200000) fail('结果正文无效。');
-    return item.text;
+    return item;
   });
+}
+function positionedImage({ text, width, height, lines }) {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0 || !Array.isArray(lines)) return { text, lines: [] };
+  return { text, lines: lines.slice(0, 200).flatMap(({ text: line, confidence, box } = {}) => {
+    if (typeof line !== 'string' || !line.trim() || line.length > 300 || !box) return [];
+    const { left, right, top, bottom } = box;
+    if (![left, right, top, bottom].every(Number.isFinite) || left < 0 || top < 0 || right <= left || bottom <= top || right > width + 1 || bottom > height + 1) return [];
+    return [{ text: line.trim(), confidence: Number.isFinite(confidence) ? confidence : null, left: left / width, right: right / width, top: top / height, bottom: bottom / height }];
+  }) };
 }
 function layout(root, platform = process.platform, arch = process.arch) {
   const directory = path.resolve(root, 'mediaocr', REVISION, platform + '-' + arch);
@@ -109,16 +118,16 @@ class MediaOcr {
           catch (error) { callSignal?.throwIfAborted(); if (/^Notion 附件 OCR mediaocr/.test(error.message)) throw error; fail('本机 MCP 通道或识别未完成，请重新准备后重试。'); }
           callSignal?.throwIfAborted(); return imageResult(result);
         },
-        async recognizeMany(files, { signal: callSignal } = {}) {
+        async recognizeMany(files, { signal: callSignal, positions = false } = {}) {
           if (!Array.isArray(files) || !files.length) return [];
           const texts = [];
           for (let at = 0; at < files.length; at += 20) {
             const chunk = files.slice(at, at + 20);
             callSignal?.throwIfAborted();
             let result;
-            try { result = await client.request('tools/call', { name: 'ocr_image', arguments: { image_paths: chunk, compact: true } }); }
+            try { result = await client.request('tools/call', { name: 'ocr_image', arguments: { image_paths: chunk, compact: !positions } }); }
             catch (error) { callSignal?.throwIfAborted(); if (/^Notion 附件 OCR mediaocr/.test(error.message)) throw error; fail('本机 MCP 通道或识别未完成，请重新准备后重试。'); }
-            callSignal?.throwIfAborted(); texts.push(...imageResults(result, chunk.length));
+            callSignal?.throwIfAborted(); texts.push(...imageResults(result, chunk.length).map(item => positions ? positionedImage(item) : item.text));
           }
           return texts;
         },
