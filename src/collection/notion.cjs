@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { NotionRouter } = require('../notion-routing.cjs');
 const { hash, destination, mediaKinds, recognitionResult, reportDetail } = require('./model.cjs');
+const { verificationTitle } = require('./report-markdown.cjs');
 const { matchesBlockContent } = require('../notion-blocks.cjs');
 const { canonical } = require('../notion-mutations.cjs');
 const analysisKeys = ['transcript', 'ocr', 'vision'];
@@ -11,16 +12,16 @@ function analysisItemHashes(analyses) {
     return result ? [[id + ':' + key, hash(JSON.stringify(result))]] : [];
   })));
 }
-const textSpans = (text, href) => {
+const textSpans = (text, href, bold) => {
   const result = []; const value = String(text || '');
-  for (let i = 0; i < value.length; i += 2000) result.push({ type: 'text', text: { content: value.slice(i, i + 2000), ...(href && href.length <= 2000 ? { link: { url: href } } : {}) } });
+  for (let i = 0; i < value.length; i += 2000) result.push({ type: 'text', text: { content: value.slice(i, i + 2000), ...(href && href.length <= 2000 ? { link: { url: href } } : {}) }, ...(bold ? { annotations: { bold: true } } : {}) });
   return result;
 };
 const paragraph = text => ({ object: 'block', type: 'paragraph', paragraph: { rich_text: textSpans(text) } });
 function textBlocks(node) {
   if (node.kind === 'divider') return [{ object: 'block', type: 'divider', divider: {} }];
   const type = node.kind === 'heading' ? 'heading_' + (node.level || 2) : node.kind === 'quote' ? 'quote' : node.kind === 'list' ? 'bulleted_list_item' : node.kind === 'code' ? 'code' : 'paragraph';
-  const spans = node.spans?.length ? node.spans.flatMap(s => textSpans(s.text, s.href)) : textSpans(node.text);
+  const spans = node.spans?.length ? node.spans.flatMap(s => textSpans(s.text, s.href, s.bold)) : textSpans(node.text);
   if (!spans.length) return [];
   const blocks = []; let group = [], bytes = 0;
   const flush = () => { if (group.length) blocks.push({ object: 'block', type, [type]: { rich_text: group, ...(type === 'code' ? { language: 'plain text' } : {}) } }); group = []; bytes = 0; };
@@ -28,10 +29,20 @@ function textBlocks(node) {
   flush();
   return blocks;
 }
+function reportListSpans(text, citations) {
+  const prefix = text.match(/^\*\*([^*]+)\*\*/);
+  const spans = prefix ? [{ text: prefix[1], bold: true }] : [];
+  const body = prefix ? text.slice(prefix[0].length) : text;
+  for (const part of citations ? body.split(/(\[S\d+\])/g) : [body]) {
+    if (part) spans.push({ text: part, href: citations?.get(part) });
+  }
+  return spans;
+}
 function extractionBlocks(extraction) {
   if (!extraction?.text) return [];
   const blocks = textBlocks({ kind: 'heading', level: 1, text: 'AI 提取结果 · ' + extraction.name });
   if (extraction.note) blocks.push(paragraph(extraction.note));
+  const citations = extraction.referencesInDetails ? new Map(extraction.sources?.map(({ id, url }) => [`[${id}]`, url])) : null;
   let code = false, detail;
   const flushDetail = () => {
     if (!detail) return;
@@ -45,7 +56,7 @@ function extractionBlocks(extraction) {
   for (const line of extraction.text.split(/\r?\n/)) {
     if (/^\s*```/.test(line)) { code = !code; continue; }
     if (!line.trim()) continue;
-    const heading = !code && line.match(/^(#{1,3})\s+(.+)/), bullet = !code && line.match(/^(?:[-*+] |\d+[.)] )(.+)/);
+    const heading = code ? null : line.match(/^(#{1,3})\s+(.+)/), bullet = code ? null : line.match(/^(?:[-*+] |\d+[.)] )(.+)/);
     if (heading) {
       flushDetail();
       const title = line.trimEnd().match(reportDetail)?.[1];
@@ -55,10 +66,12 @@ function extractionBlocks(extraction) {
       }
     }
     const target = detail?.children || blocks;
-    target.push(...textBlocks({ kind: code ? 'code' : heading ? 'heading' : bullet ? 'list' : line.startsWith('> ') ? 'quote' : 'paragraph', level: heading?.[1].length, text: heading?.[2] || bullet?.[1] || (line.startsWith('> ') ? line.slice(2) : line) }));
+    target.push(...textBlocks({ kind: code ? 'code' : heading ? 'heading' : bullet ? 'list' : line.startsWith('> ') ? 'quote' : 'paragraph', level: heading?.[1].length,
+      text: heading?.[2] || bullet?.[1] || (!code && line.startsWith('> ') ? line.slice(2) : line),
+      ...(bullet ? { spans: reportListSpans(bullet[1], detail?.title === verificationTitle ? citations : null) } : {}) }));
   }
   flushDetail();
-  if (extraction.sources?.length) {
+  if (!extraction.referencesInDetails && extraction.sources?.length) {
     blocks.push(...textBlocks({ kind: 'heading', level: 2, text: '制作参考' }));
     for (const { id, title, url } of extraction.sources) blocks.push(...textBlocks({ kind: 'list', spans: [{ text: `[${id}] ${title}`, href: url }] }));
   }

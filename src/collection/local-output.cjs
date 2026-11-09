@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { atomicJson, layoutNodes, selectedNodes, recognitionResult, reportDetail } = require('./model.cjs');
+const { verificationTitle } = require('./report-markdown.cjs');
 const { ownedExport } = require('./history.cjs');
 function prepareLocalOutput(job, downloadsDirectory) {
   if (job.exportOwned && job.exportDirectory) {
@@ -18,7 +19,7 @@ function prepareLocalOutput(job, downloadsDirectory) {
   }
   throw Error('同名资料文件夹过多，请选择其他下载目录。');
 }
-function foldDetails(markdown) {
+function foldDetails(markdown, citations) {
   const lines = [];
   let detail = false, code = false;
   for (const line of markdown.split(/\r?\n/)) {
@@ -27,11 +28,11 @@ function foldDetails(markdown) {
       const title = line.trimEnd().match(reportDetail)?.[1];
       if (title) {
         lines.push('<details>', '<summary>' + title.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;') + '</summary>', '');
-        detail = true; continue;
+        detail = title; continue;
       }
     }
     if (/^\s*```/.test(line)) code = !code;
-    lines.push(line);
+    lines.push(citations && detail === verificationTitle ? line.replace(/\[(S\d+)\]/g, (tag, id) => citations.has(id) ? `[${id}](<${citations.get(id)}>)` : tag) : line);
   }
   if (detail) lines.push('', '</details>');
   return lines.join('\n');
@@ -78,9 +79,10 @@ function writeLocalOutput(job) {
   const reports = job.extraction?.reports?.length ? job.extraction.reports : job.extraction?.text ? [job.extraction] : [];
   for (const report of reports) {
     const { text: summary, note, sources = [] } = report;
-    const links = sources.map(({ id, title, url }) => `- [${id} ${title.replace(/[\[\]\r\n]/g, ' ')}](<${url}>)`);
+    const citations = report.referencesInDetails ? new Map(sources.map(({ id, url }) => [id, url])) : null;
+    const links = citations ? [] : sources.map(({ id, title, url }) => `- [${id} ${title.replace(/[\[\]\r\n]/g, ' ')}](<${url}>)`);
     const header = report.key ? `# ${job.document.title} · ${report.name}\n\n[原文和音视频](原文.md)` : '';
-    const markdown = [header, note, foldDetails(summary), links.length ? ['## 制作参考', ...links].join('\n') : ''].filter(Boolean).join('\n\n');
+    const markdown = [header, note, foldDetails(summary, citations), links.length ? ['## 制作参考', ...links].join('\n') : ''].filter(Boolean).join('\n\n');
     const file = report.key === 'style' ? '画面与视频制作拆解.md' : report.key === 'content' ? '内容理解.md' : 'AI提取结果.md';
     fs.writeFileSync(path.join(directory, file), markdown, { mode: 0o600 });
   }

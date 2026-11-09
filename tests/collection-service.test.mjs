@@ -40,7 +40,7 @@ test('selecting both creates two documents, shares media, and recovers the secon
     if (messages[1].content.includes('## 蒸馏到我的视频')) {
       if (++styleCalls === 1) throw Error('画面提取暂时失败');
       yield '## 原片效果怎么做\n画面独立结果\n## 展开细节\n### 详情｜技术实现\nWebGL 参考复现';
-    } else { contentCalls++; yield '## 专业结论\n内容独立结果\n## 展开细节\n### 详情｜证据链\n可核对内容'; }
+    } else { contentCalls++; yield '## 专业结论\n内容独立结果\n## 展开细节\n### 详情｜证据链与底层原理\n- 可核对内容'; }
   } };
   const f = fixture(t, { document, provider });
   const created = new Map(), plans = new Map(); let interrupted = false;
@@ -81,7 +81,7 @@ test('selecting both creates two documents, shares media, and recovers the secon
   assert.equal(new Set([...plans.values()].map(plan => plan.blocks[0].video.file_upload.id)).size, 1);
   const content = fs.readFileSync(path.join(finished.exportDirectory, '内容理解.md'), 'utf8');
   const style = fs.readFileSync(path.join(finished.exportDirectory, '画面与视频制作拆解.md'), 'utf8');
-  assert.match(content, /内容独立结果[\s\S]+<summary>证据链<\/summary>/);
+  assert.match(content, /内容独立结果[\s\S]+<summary>证据链与底层原理<\/summary>/);
   assert.doesNotMatch(content, /画面独立结果/);
   assert.match(style, /画面独立结果[\s\S]+<summary>技术实现<\/summary>/);
   assert.doesNotMatch(style, /内容独立结果/);
@@ -92,7 +92,7 @@ test('DeepSeek HTTP 500 preserves the collection and a retry finishes the summar
   const document = normalizeDocument({ title: '抖音视频', url: 'https://v.douyin.com/fixture/', nodes: [
     { kind: 'video', url: 'https://example.com/video.mp4' }
   ] });
-  const summary = '## 核心观点\n根据逐字稿生成的总结';
+  const summary = '## 专业结论\n根据逐字稿生成的总结';
   const summaryFailures = [500, 500, 503];
   const provider = new ProviderRouter({ fetchImpl: async () => {
     if (summaryFailures.length) return new Response(null, { status: summaryFailures.shift() });
