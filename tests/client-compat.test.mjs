@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { assertReviewedBuild, reviewedBuilds } from '../scripts/prepare-desktop.mjs';
+import { adaptResponse } from '../src/compat/response.cjs';
 const { adaptClient } = createRequire(import.meta.url)('../src/client-compat.cjs');
 const { compatibleModule, matchModule } = createRequire(import.meta.url)('../src/client-module-compat.cjs');
 const asset = '95271-adc4a76136e50ec0.js';
@@ -44,6 +45,21 @@ test('a chunk carrying two candidate speech modules fails closed', () => {
 test('a single speech module with unreviewed bytes remains rejected', () => {
   const chunk = '(globalThis.rspackChunknotion_next||=[]).push([[89269],{372201(a,b,c){return 1}}]);';
   assert.equal(matchModule(chunk, '89269-0123456789abcdef.js'), null);
+});
+test('the November recording asset activates local capture and drain while changed recorder bytes are rejected', async t => {
+  const name = '89269-6baf204843ed9648.js', recording = cached(name);
+  if (!recording) return t.skip('Reviewed third-party Notion asset is not distributed with the source.');
+  const options = { localSpeechEnabled: true, inputMode: 'microphone' };
+  const result = await adaptResponse(new Response(recording), name, options);
+  assert.deepEqual(result.kinds, ['recording']);
+  assert.equal(result.changed, true);
+  const patched = await result.response.text();
+  assert.match(patched, /static async startDictation\(e\)\{e=\{\.\.\.e,includeSystemAudio:!1\}/);
+  assert.match(patched, /transcriptionDrainEnabled:!0/);
+  assert.match(patched, /transport:i\(697264\),send:i\(216735\)\.\$g,encode:i\(392719\)\.Rk/);
+  assert.match(patched, /static stopDictationAfterLocalFlush\(e\)/);
+  assert.equal(adaptClient(recording, name), recording);
+  await assert.rejects(adaptResponse(new Response(recording.replace('onAudioDiagnosticsFindings:', 'changedAudioDiagnosticsFindings:')), name, options), /Unreviewed/);
 });
 test('the updated desktop build is pinned while unknown versions and changed hashes remain blocked', () => {
   assert.doesNotThrow(() => assertReviewedBuild('7.40.1', '36cc65c5d17811f6bbe90aa0444be3f3f267f3151ea59988411e8f94dba9ff73'));
