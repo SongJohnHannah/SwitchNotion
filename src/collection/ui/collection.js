@@ -1,16 +1,33 @@
 'use strict';
 const api = window.collection, $ = id => document.getElementById(id);
 let state, chosen, expanded = false, activePanel = 'destination', selectedJob, destinationResults = [], cursors = {}, searchTimer, refreshTimer, searchVersion = 0, checkingAccounts = false;
-let redistillSource;
+let redistillSource, queueAction;
 const names = { paragraph: '正文', heading: '标题', quote: '引用', list: '列表', code: '代码', divider: '分隔', link: '链接', image: '图片', video: '视频', audio: '音频' };
-const statuses = { queued: '等待下载', reading: '识别中', downloading: '下载中', waiting_processing: '等待整理', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需检查原网页', completed: '已保存', partial: '处理未完成', failed: '失败', cancelled: '已停止', interrupted: '可继续' };
+const statuses = { queued: '等待下载', reading: '识别中', downloading: '下载中', waiting_processing: '等待整理', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需检查原网页', completed: '已保存', partial: '处理未完成', failed: '失败', paused: '已暂停', cancelled: '已停止', interrupted: '可继续' };
 const active = ['queued', 'reading', 'downloading', 'waiting_processing', 'processing', 'uploading', 'saving'];
+const resumable = ['failed', 'partial', 'paused', 'cancelled', 'interrupted', 'needs_login'];
 function taskStatus() {
   const processing = state.jobs.filter(job => active.includes(job.status)).length;
   const attention = state.jobs.filter(job => !active.includes(job.status) && job.status !== 'completed').length;
   const completed = state.jobs.length - processing - attention;
   const text = [processing ? '处理中 ' + processing : '', attention ? '未完成 ' + attention : '', completed ? '已完成 ' + completed : ''].filter(Boolean).join(' · ');
   return { text, tone: attention ? 'attention' : processing ? 'busy' : 'done' };
+}
+function renderQueueControls() {
+  if (!state) return;
+  const busy = !!queueAction || state.pausing;
+  $('queue-controls').hidden = !state.jobs.some(job => job.status !== 'completed');
+  $('pause-all').disabled = busy || !state.jobs.some(job => active.includes(job.status));
+  $('resume-all').disabled = busy || !state.jobs.some(job => resumable.includes(job.status));
+  $('pause-all').textContent = queueAction === 'pause-all' || state.pausing ? '暂停中…' : '全部暂停';
+  $('resume-all').textContent = queueAction === 'resume-all' ? '继续中…' : '全部继续';
+}
+async function runQueueAction(action) {
+  if (queueAction) return;
+  queueAction = action; renderQueueControls();
+  message(action === 'pause-all' ? '正在暂停全部下载和整理，保留已完成进度…' : '正在将全部未完成任务加入队列…');
+  try { const result = await request(action); await refresh(); message(result.message); }
+  catch {} finally { queueAction = undefined; renderQueueControls(); }
 }
 const element = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
 function message(text, error = false) { $('message').textContent = text || ''; $('message').hidden = !text; $('message').classList.toggle('error', error); }
@@ -45,6 +62,7 @@ async function refresh() {
   $('task-status').hidden = !state.jobs.length; $('queue-state').hidden = !!state.jobs.length;
   $('task-status').className = 'task-status ' + tasks.tone; $('task-status').textContent = tasks.text;
   $('task-status').title = state.jobs.length + ' 条收集任务，点击查看进度';
+  renderQueueControls();
   $('keep-history').checked = state.settings.keepHistory;
   $('result-link').hidden = !state.latestCompletion;
   $('last-result').hidden = !!state.latestCompletion?.pages?.length;
@@ -150,7 +168,7 @@ function renderTasks() {
     if (job.status === 'completed' && !job.local) actions.append(button('重新收集为新记录', async () => { await request('create', { input: job.url, options: { ...readOptions(), extraction: job.options.extraction, vision: job.options.vision }, force: true }); await refresh(); }));
     if (job.canRedistill) actions.append(button('按视频制作再蒸馏', () => openRedistill({ id: job.id, title: job.title })));
     if (active.includes(job.status)) actions.append(button('停止', async () => { await request('cancel', { id: job.id }); await refresh(); }));
-    if (['failed', 'partial', 'cancelled', 'interrupted', 'needs_login'].includes(job.status)) actions.append(button('继续／重试', async () => { await request('retry', { id: job.id }); await refresh(); }));
+    if (resumable.includes(job.status)) actions.append(button('继续／重试', async () => { await request('retry', { id: job.id }); await refresh(); }));
     if (job.canDelete) {
       const remove = button('删除任务', async () => {
         remove.disabled = true;
@@ -240,6 +258,8 @@ linksInput.addEventListener('drop', event => {
 $('links').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('capture-form').requestSubmit(); } });
 $('expand').addEventListener('click', () => setExpanded(!expanded)); $('destination-pill').addEventListener('click', () => { setPanel('destination'); setExpanded(true); }); $('hide').addEventListener('click', () => api.request('hide'));
 $('task-status').addEventListener('click', () => { $('tasks-section').open = true; setExpanded(true); $('tasks-section').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+$('pause-all').addEventListener('click', () => void runQueueAction('pause-all'));
+$('resume-all').addEventListener('click', () => void runQueueAction('resume-all'));
 $('tasks-section').addEventListener('toggle', () => $('task-status').setAttribute('aria-expanded', String($('tasks-section').open)));
 for (const tab of document.querySelectorAll('[data-tab]')) {
   tab.addEventListener('click', () => setPanel(tab.dataset.tab));

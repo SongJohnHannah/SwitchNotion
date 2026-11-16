@@ -1,4 +1,5 @@
 const { hash } = require('./model.cjs');
+const { MAX_OUTPUT_TOKENS } = require('../provider.cjs');
 const { templates, evidenceNotes, evidenceLedger, evidenceReview, styleTutorial } = require('./summary-templates.cjs');
 const { needsEvidenceReview, reviewContentEvidence } = require('./evidence-review.cjs');
 const { staleFrameClaims } = require('./frame-verification.cjs');
@@ -198,8 +199,8 @@ class CollectionExtraction {
       (template === templates.article ? '\n仅依据本轮提供的证据笔记润色，按原顺序给精简稿并注明覆盖范围。' : '');
     const generate = async messages => {
       let text = '';
-      for await (const delta of this.provider.generate({ config: { ...config, model: 'deepseek-flash', thinking: 'disabled', maxTokens: 8192, allowOutputExpansion: false }, messages, signal })) text += delta;
-      if (!text.trim() || text.length > 100000) throw Error('DeepSeek 未返回有效的内容提取结果，请重试。');
+      for await (const delta of this.provider.generate({ config: { ...config, model: 'deepseek-flash', thinking: 'disabled', maxTokens: MAX_OUTPUT_TOKENS, allowOutputExpansion: false }, messages, signal })) text += delta;
+      if (!text.trim()) throw Error('DeepSeek 未返回有效的内容提取结果，请重试。');
       return text.trim();
     };
     const generateNotes = async (source, requirement, includesTranscript) => {

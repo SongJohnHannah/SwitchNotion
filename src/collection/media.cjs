@@ -8,6 +8,7 @@ const { mediaKinds } = require('./model.cjs');
 const { organizeOcr } = require('./ocr-text.cjs');
 const { verificationTargets, verificationResult } = require('./frame-verification.cjs');
 const { GpuOperatorClient } = require('../speech/operator-client.cjs');
+const { MAX_OUTPUT_TOKENS } = require('../provider.cjs');
 const { downloadError } = require('./download-error.cjs');
 function clock(value) { const match = String(value).match(/(\d+):(\d+):(\d+(?:\.\d+)?)/); return match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) : 0; }
 const inputArgs = file => ['-protocol_whitelist', 'file,pipe,crypto,data', '-format_whitelist', 'mov,matroska,webm,avi,asf,mpeg,mpegts,aac,ac3,aiff,wav,ogg,flac,mp3,gif,apng,png_pipe,jpeg_pipe,webp_pipe,bmp_pipe,tiff_pipe,image2,image2pipe,hevc,h264', '-i', file];
@@ -346,7 +347,7 @@ class CollectionMedia {
     const content = [{ type: 'text', text: describeVisual }];
     for (const [index, frame] of frames.entries()) content.push({ type: 'text', text: visionMarker(frame, offset + index + 1, asset.kind === 'video', ocrPaths) },
       { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + fs.readFileSync(frame.frame).toString('base64') } });
-    let text = ''; for await (const delta of this.provider.generate({ config: { ...config, model: 'deepseek-flash', thinking: 'disabled', maxTokens: 8192 }, messages: [
+    let text = ''; for await (const delta of this.provider.generate({ config: { ...config, model: 'deepseek-flash', thinking: 'disabled', maxTokens: MAX_OUTPUT_TOKENS }, messages: [
       { role: 'system', content: visionSystem }, { role: 'user', content }], signal })) text += delta;
     return text.trim();
   }

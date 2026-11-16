@@ -8,7 +8,34 @@ const require = createRequire(import.meta.url);
 const { parseInputs, describeLocal, checkLocal } = require('../src/collection/local-media.cjs');
 const { preferences, normalizeDocument, layoutNodes } = require('../src/collection/model.cjs');
 const { CollectionExtraction } = require('../src/collection/extraction.cjs');
+const { ProviderRouter, MAX_OUTPUT_TOKENS } = require('../src/provider.cjs');
 const { renderDocument } = require('../src/collection/notion.cjs');
+
+test('extraction uses the supported output budget instead of truncating reports at 8192 tokens', async () => {
+  const budgets = [];
+  const provider = new ProviderRouter({ root: '', fetchImpl: async (_url, options) => {
+    const request = JSON.parse(options.body); budgets.push(request.max_tokens);
+    const complete = request.max_tokens === MAX_OUTPUT_TOKENS;
+    const content = complete ? '## 专业结论\n- 完整观点。\n\n## 展开细节\n### 详情｜证据链与底层原理\n- 完整保留最后一步。' : '## 专业结论\n- 未完成';
+    return new Response('data: ' + JSON.stringify({ choices: [{ index: 0, delta: { content }, finish_reason: complete ? 'stop' : 'length' }] }) + '\n\ndata: [DONE]\n\n');
+  } });
+  provider.config = () => ({ mode: 'deepseek', maxTokens: 1024 }); provider.key = () => 'fixture-key';
+  const document = normalizeDocument({ url: 'https://example.com/article', nodes: [{ kind: 'paragraph', text: '完整文章的原文证据。' }] });
+  const job = { document, options: preferences(), resources: {}, analyses: {} };
+  const result = await new CollectionExtraction({ provider }).run(job, document.nodes, { signal: new AbortController().signal });
+  assert.match(result.text, /完整保留最后一步/);
+  assert.deepEqual(budgets, [MAX_OUTPUT_TOKENS]);
+});
+
+test('complete extraction reports over 100,000 characters are retained without an extra local output ceiling', async () => {
+  const detail = '原文证据。'.repeat(21000) + '结尾证据已保留。';
+  const provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture-key', async *generate() {
+    yield '## 专业结论\n- 完整观点。\n\n## 展开细节\n### 详情｜证据链与底层原理\n' + detail;
+  } };
+  const document = normalizeDocument({ url: 'https://example.com/article', nodes: [{ kind: 'paragraph', text: '完整文章的原文证据。' }] });
+  const result = await new CollectionExtraction({ provider }).run({ document, options: preferences(), resources: {}, analyses: {} }, document.nodes);
+  assert.ok(result.text.length > 100000); assert.ok(result.text.endsWith('结尾证据已保留。'));
+});
 
 test('video metadata and expand controls cannot reach classification or summary before media evidence exists', async () => {
   const engine = new CollectionExtraction({ provider: { config: () => assert.fail('incomplete sources must not reach the provider') } });

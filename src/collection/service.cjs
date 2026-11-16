@@ -17,7 +17,8 @@ const { clearCompleted, ownedExport } = require('./history.cjs');
 const { prepareLocalOutput, writeLocalOutput } = require('./local-output.cjs');
 const { loadLocalCollection, checkRetainedAsset, inside } = require('./reprocessing.cjs');
 const activeStates = new Set(['queued', 'reading', 'downloading', 'waiting_processing', 'processing', 'uploading', 'saving']);
-const deletableStates = new Set(['failed', 'partial', 'cancelled', 'interrupted', 'needs_login', 'awaiting_selection']);
+const resumableStates = new Set(['failed', 'partial', 'cancelled', 'interrupted', 'paused', 'needs_login']);
+const deletableStates = new Set([...resumableStates, 'awaiting_selection']);
 const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.visionEngine, options.compress, options.quality, options.keepLocal, options.extraction, ...(options.extraction.mode !== 'off' ? ['separate-reports-v1', ...(options.denseOcr ? ['dense-ocr'] : [])] : [])]));
 const safeError = error => {
   const text = String(error?.message || '操作未完成，请检查连接后重试。');
@@ -28,7 +29,7 @@ class CollectionService extends EventEmitter {
   constructor({ root, downloadsDirectory = path.join(os.homedir(), 'Downloads'), speech, provider, webSources, binaries, browser, media, notion, extraction } = {}) {
     super(); this.root = root; this.downloadsDirectory = downloadsDirectory; this.directory = path.join(root, 'collection'); this.settingsFile = path.join(this.directory, 'settings.local.json');
     this.settings = preferences(); this.jobs = new Map(); this.queue = []; this.processingQueue = []; this.downloading = null; this.running = null;
-    this.downloadTask = null; this.processingTask = null; this.mediaIdleTask = null; this.closed = false; this.lastError = ''; this.preparing = false;
+    this.downloadTask = null; this.processingTask = null; this.mediaIdleTask = null; this.pauseTask = null; this.pausing = false; this.closed = false; this.lastError = ''; this.preparing = false;
     if (fs.existsSync(this.settingsFile)) try {
       const saved = JSON.parse(fs.readFileSync(this.settingsFile, 'utf8')), value = saved.settings || saved;
       // The old processing options did not expose a persistent OCR off switch.
@@ -88,7 +89,7 @@ class CollectionService extends EventEmitter {
     atomicJson(path.join(this.location(job), 'job.json'), job); this.emit('change');
   }
   status() {
-    return { active: this.active, lastError: this.lastError, configError: this.configError || '', settings: structuredClone(this.settings), defaultDownloadDirectory: path.join(this.downloadsDirectory, 'NotionSwitch'),
+    return { active: this.active, pausing: this.pausing, lastError: this.lastError, configError: this.configError || '', settings: structuredClone(this.settings), defaultDownloadDirectory: path.join(this.downloadsDirectory, 'NotionSwitch'),
       binaries: this.binaries.status(), preparing: this.preparing, latestCompletion: this.latestCompletion ? { ...this.latestCompletion, canRedistill: this.canRedistill(this.jobs.get(this.latestCompletion.id)) } : null,
       jobs: [...this.jobs.values()].filter(job => !job.historyCleared && (this.settings.keepHistory || job.status !== 'completed')).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(job => ({ id: job.id, url: job.url, local: !!job.localSource, title: job.document?.title || job.url,
         status: job.status, canDelete: deletableStates.has(job.status) && !this.busy(job.id), canRedistill: this.canRedistill(job), message: job.message, createdAt: job.createdAt, page: job.page, pages: job.pages, options: job.options, warnings: job.warnings || [],
@@ -115,7 +116,7 @@ class CollectionService extends EventEmitter {
       const key = dedupeKey(url, chosen);
       const existing = !force && [...this.jobs.values()].find(job => job.dedupe === key);
       if (existing) {
-        if (['cancelled', 'failed', 'interrupted', 'partial'].includes(existing.status)) this.retry(existing.id);
+        if (['cancelled', 'failed', 'interrupted', 'partial', 'paused'].includes(existing.status)) this.retry(existing.id);
         if (existing.status === 'completed') this.latestCompletion = { id: existing.id, title: existing.document?.title || existing.url, page: existing.page, pages: existing.pages };
         results.push({ id: existing.id, existing: true, status: existing.status, page: existing.page, pages: existing.pages }); continue;
       }
@@ -144,7 +145,7 @@ class CollectionService extends EventEmitter {
     const key = hash(JSON.stringify(['local-style-v1', source.referencePage.id, Object.values(source.resources).map(resource => resource.asset), chosen.destination, chosen.visionEngine, chosen.extraction]));
     const existing = [...this.jobs.values()].find(job => job.dedupe === key);
     if (existing) {
-      if (['failed', 'partial', 'cancelled', 'interrupted'].includes(existing.status)) this.retry(existing.id);
+      if (['failed', 'partial', 'cancelled', 'interrupted', 'paused'].includes(existing.status)) this.retry(existing.id);
       if (existing.status === 'completed') this.latestCompletion = { id: existing.id, title: existing.document.title, page: existing.page, pages: existing.pages };
       return { id: existing.id, existing: true, message: existing.status === 'completed' ? '已有这份制作拆解，可直接打开 Notion。' : '已复用现有重新蒸馏任务。' };
     }
@@ -161,8 +162,9 @@ class CollectionService extends EventEmitter {
     job.status = 'queued'; job.message = '等待按顺序读取和下载…'; this.save(job); this.queue.push(job.id); this.pumpDownloads();
   }
   failJob(job, controller, error) {
-    job.status = controller.signal.aborted ? 'cancelled' : 'failed';
-    job.message = controller.signal.aborted ? '已停止后续处理；已保存的内容和进度保留。' : safeError(error); this.save(job);
+    const paused = controller.signal.aborted && controller.signal.reason?.code === 'COLLECTION_PAUSED';
+    job.status = paused ? 'paused' : controller.signal.aborted ? 'cancelled' : 'failed';
+    job.message = paused ? '已暂停；已下载素材和已完成进度保留。' : controller.signal.aborted ? '已停止后续处理；已保存的内容和进度保留。' : safeError(error); this.save(job);
   }
   releaseIdleMedia() {
     if (this.closed || this.active || this.mediaIdleTask) return;
@@ -170,7 +172,7 @@ class CollectionService extends EventEmitter {
       .finally(() => { this.mediaIdleTask = null; });
   }
   pumpDownloads() {
-    if (this.downloading || this.closed) return;
+    if (this.downloading || this.closed || this.pausing) return;
     const id = this.queue.shift(); if (!id) return;
     const job = this.jobs.get(id), controller = new AbortController(); this.downloading = { id, controller };
     this.downloadTask = (async () => {
@@ -190,7 +192,7 @@ class CollectionService extends EventEmitter {
     })();
   }
   pump() {
-    if (this.running || this.closed) return;
+    if (this.running || this.closed || this.pausing) return;
     const id = this.processingQueue.shift(); if (!id) return;
     const job = this.jobs.get(id), controller = new AbortController(); this.running = { id, controller };
     this.processingTask = (async () => {
@@ -447,18 +449,49 @@ class CollectionService extends EventEmitter {
     job.options = chosen; job.dedupe = key;
     job.selectedIds = ids; job.allowPartial = allowPartial === true; job.previewOnly = false; this.save(job); this.enqueue(job); return { id };
   }
-  cancel(id) {
+  cancel(id, { pause = false } = {}) {
     const job = this.jobs.get(id); if (!job) throw Error('任务不存在。');
     this.queue = this.queue.filter(value => value !== id);
     this.processingQueue = this.processingQueue.filter(value => value !== id);
-    if (this.downloading?.id === id) this.downloading.controller.abort(Error('用户停止任务。'));
-    if (this.running?.id === id) this.running.controller.abort(Error('用户停止任务。'));
-    if (this.running?.id !== id && this.downloading?.id !== id && job.status !== 'completed') { job.status = 'cancelled'; job.message = '已停止，文件和已有页面保留。'; this.save(job); }
+    const reason = Object.assign(Error(pause ? '用户暂停全部任务。' : '用户停止任务。'), pause ? { code: 'COLLECTION_PAUSED' } : {});
+    if (this.downloading?.id === id) this.downloading.controller.abort(reason);
+    if (this.running?.id === id) this.running.controller.abort(reason);
+    if (this.running?.id !== id && this.downloading?.id !== id && job.status !== 'completed') {
+      job.status = pause ? 'paused' : 'cancelled'; job.message = pause ? '已暂停；已下载素材和已完成进度保留。' : '已停止，文件和已有页面保留。'; this.save(job);
+    }
     return { id };
+  }
+  pauseAll() {
+    if (this.pauseTask) return this.pauseTask;
+    if (this.closed) throw Error('应用正在退出，任务进度已保留。');
+    const ids = [...new Set([...this.queue, ...this.processingQueue, ...[this.downloading?.id, this.running?.id].filter(Boolean)])];
+    const tasks = [this.downloadTask, this.processingTask]; this.pausing = true;
+    this.pauseTask = Promise.resolve().then(async () => {
+      try {
+        for (const id of ids) this.cancel(id, { pause: true });
+        await Promise.allSettled(tasks);
+        const paused = ids.filter(id => this.jobs.get(id)?.status === 'paused').length;
+        return { paused, message: paused ? `已暂停 ${paused} 个任务，已下载素材和已完成进度保留。` : '当前没有需要暂停的任务。' };
+      } finally {
+        this.pausing = false; this.pauseTask = null; this.emit('change');
+        this.pumpDownloads(); this.pump(); this.releaseIdleMedia();
+      }
+    });
+    this.emit('change'); return this.pauseTask;
+  }
+  async resumeAll() {
+    if (this.pauseTask) await this.pauseTask;
+    if (this.closed) throw Error('应用正在退出，任务进度已保留。');
+    const jobs = [...this.jobs.values()].filter(job => !job.historyCleared && resumableStates.has(job.status) && !this.busy(job.id))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    for (const job of jobs) this.retry(job.id);
+    const awaitingSelection = [...this.jobs.values()].filter(job => !job.historyCleared && job.status === 'awaiting_selection').length;
+    const message = jobs.length ? `已继续 ${jobs.length} 个任务，按顺序补齐未完成步骤。` : '当前没有可继续的任务。';
+    return { resumed: jobs.length, awaitingSelection, message: message + (awaitingSelection ? ` 另有 ${awaitingSelection} 个任务需要先选择内容。` : '') };
   }
   retry(id) {
     const job = this.jobs.get(id);
-    if (!job || !['failed', 'partial', 'cancelled', 'interrupted', 'needs_login'].includes(job.status)) throw Error('此任务当前不需要重试。');
+    if (!job || !resumableStates.has(job.status) || this.busy(id)) throw Error('此任务当前不需要重试。');
     // A resumed task follows the engine currently configured, while keeping the
     // job's own destination, extraction and per-collection vision choice.
     job.options.visionEngine = this.settings.visionEngine;
@@ -498,7 +531,7 @@ class CollectionService extends EventEmitter {
   }
   async request(action, input = {}) {
     const allowed = { state: [], configure: ['settings'], workspaces: [], destinations: ['workspaceId', 'query', 'cursors'], create: ['input', 'options', 'preview', 'force'],
-      select: ['id', 'ids', 'options', 'allowPartial'], cancel: ['id'], retry: ['id'], 'delete-task': ['id'], reread: ['id'], accounts: ['verify'], login: ['site'], prepare: [], 'create-library': ['workspaceId', 'parentId'],
+      select: ['id', 'ids', 'options', 'allowPartial'], cancel: ['id'], retry: ['id'], 'pause-all': [], 'resume-all': [], 'delete-task': ['id'], reread: ['id'], accounts: ['verify'], login: ['site'], prepare: [], 'create-library': ['workspaceId', 'parentId'],
       'video-hint': ['input'], redistill: ['id', 'directory', 'preference', 'destination', 'visionEngine'] };
     try {
       if (!Object.hasOwn(allowed, action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !allowed[action].includes(k))) throw Error('无法识别此项收集操作。');
@@ -512,6 +545,8 @@ class CollectionService extends EventEmitter {
       else if (action === 'select') result = this.select(input.id, input);
       else if (action === 'cancel') result = this.cancel(input.id);
       else if (action === 'retry') result = this.retry(input.id);
+      else if (action === 'pause-all') result = await this.pauseAll();
+      else if (action === 'resume-all') result = await this.resumeAll();
       else if (action === 'delete-task') result = this.deleteTask(input.id);
       else if (action === 'reread') result = this.reread(input.id);
       else if (action === 'accounts') { if (input.verify !== undefined && typeof input.verify !== 'boolean') throw Error('登录检测选项无效。'); result = await this.browser.accounts(AbortSignal.timeout(45000), { verify: input.verify === true }); }
@@ -525,7 +560,7 @@ class CollectionService extends EventEmitter {
   close() {
     if (this.closed) return this.closing;
     this.closed = true; this.running?.controller.abort(Error('应用退出，任务进度保留。')); this.downloading?.controller.abort(Error('应用退出，任务进度保留。'));
-    this.closing = Promise.allSettled([this.downloadTask, this.processingTask, this.mediaIdleTask])
+    this.closing = Promise.allSettled([this.downloadTask, this.processingTask, this.mediaIdleTask, this.pauseTask])
       .then(() => Promise.allSettled([this.media.closeOcrSession?.(), this.media.unloadLocalModel?.()]));
     return this.closing;
   }

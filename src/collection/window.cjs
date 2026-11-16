@@ -89,6 +89,6 @@ function setupCollection({ root, speech, webSources, createWindow, openSettings,
     if (done && typeof done.then === 'function') { event.preventDefault(); void done.finally(() => app.quit()); }
   });
   app.on('will-quit', () => { if (registered) globalShortcut.unregister(registered); });
-  return { service, open, status: () => ({ active: service.active, ocrWorkers: service.settings.ocrWorkers, shortcutError }) };
+  return { service, open, status: () => ({ active: service.active, pausing: service.pausing, ocrWorkers: service.settings.ocrWorkers, shortcutError }) };
 }
 module.exports = { setupCollection };

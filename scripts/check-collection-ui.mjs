@@ -48,6 +48,15 @@ try {
         if (data.duplicate) data.latestCompletion = { id: 'completed-fixture', page };
       }
       if (action === 'configure') Object.assign(data.settings, input.settings);
+      if (action === 'pause-all' || action === 'resume-all') {
+        if (window._delayQueueAction) await new Promise(resolve => { window._releaseQueueAction = resolve; });
+        const states = action === 'pause-all' ? ['queued', 'reading', 'downloading', 'waiting_processing', 'processing', 'uploading', 'saving'] :
+          ['failed', 'partial', 'paused', 'cancelled', 'interrupted', 'needs_login'];
+        const jobs = data.jobs.filter(job => states.includes(job.status));
+        for (const job of jobs) { job.status = action === 'pause-all' ? 'paused' : 'queued'; job.message = action === 'pause-all' ? '已暂停，进度保留。' : '等待按顺序处理…'; }
+        data.active = data.jobs.filter(job => ['queued', 'waiting_processing'].includes(job.status)).length;
+        result = { [action === 'pause-all' ? 'paused' : 'resumed']: jobs.length, message: action === 'pause-all' ? '已暂停全部任务。' : '已继续全部未完成任务。' };
+      }
       if (action === 'local-collection') result = { path: 'C:\\资料\\已收集视频' };
       if (action === 'redistill') result = { id: 'redistilled-fixture', message: '已加入重新蒸馏队列。' };
       return { ok: true, result };
@@ -59,6 +68,26 @@ try {
   await page.getByText('openClaw / 资料收集 ⌄', { exact: true }).waitFor();
   await page.screenshot({ path: path.join(output, 'compact.png') });
   assert.equal(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight), true, 'compact window must not scroll at its default size');
+  await page.evaluate(() => {
+    window._initialQueueJobs = structuredClone(window._collectionFixture.jobs);
+    window._collectionFixture.jobs.push({ ...structuredClone(window._collectionFixture.jobs[0]), id: 'failed-fixture', status: 'failed', message: '内容提取未完成', warnings: [] });
+    window._delayQueueAction = true; window._changeCollection();
+  });
+  await page.waitForFunction(() => !document.getElementById('resume-all').disabled);
+  await page.locator('#pause-all').click(); await page.waitForFunction(() => typeof window._releaseQueueAction === 'function');
+  assert.equal(await page.locator('#pause-all').isDisabled(), true); assert.equal(await page.locator('#resume-all').isDisabled(), true);
+  await page.evaluate(() => document.getElementById('pause-all').click());
+  assert.equal((await page.evaluate(() => window._collectionCalls)).filter(call => call.action === 'pause-all').length, 1, 'double-click must not dispatch a second bulk operation');
+  await page.evaluate(() => { window._delayQueueAction = false; window._releaseQueueAction(); });
+  await page.waitForFunction(() => !document.getElementById('resume-all').disabled);
+  assert.equal(await page.locator('#pause-all').isDisabled(), true);
+  await page.locator('#resume-all').click(); await page.waitForFunction(() => !document.getElementById('pause-all').disabled);
+  assert.equal(await page.locator('#resume-all').isDisabled(), true);
+  const bulkCalls = (await page.evaluate(() => window._collectionCalls)).filter(call => ['pause-all', 'resume-all'].includes(call.action));
+  assert.deepEqual(bulkCalls.map(call => [call.action, call.input]), [['pause-all', {}], ['resume-all', {}]]);
+  assert.equal(await page.evaluate(() => window._collectionFixture.jobs.every(job => job.status === 'queued')), true, 'bulk continue must include paused and failed tasks');
+  await page.screenshot({ path: path.join(output, 'queue-controls.png') });
+  await page.evaluate(() => { window._collectionFixture.jobs = window._initialQueueJobs; window._collectionFixture.active = 1; window._changeCollection(); });
   const dropped = ['C:\\媒体资料\\拖入 视频.mp4', '/Users/me/Downloads/拖入 音频.m4a'];
   await page.locator('#links').fill('https://example.com/existing');
   const dragFiles = async (paths, type = 'drop', target = 'links') => page.evaluate(({ paths, type, target }) => {
@@ -209,6 +238,7 @@ try {
   await page.locator('#status-filter').selectOption('all');
   await page.evaluate(() => { window._collectionFixture.jobs = []; window._changeCollection(); });
   await page.locator('#tasks-section').waitFor({ state: 'hidden' });
+  await page.locator('#queue-controls').waitFor({ state: 'hidden' });
   for (const width of [480, 580, 620, 820]) {
     await page.setViewportSize({ width, height: 818 });
     for (const name of ['destination', 'options', 'accounts', 'advanced']) {

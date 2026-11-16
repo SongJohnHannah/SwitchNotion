@@ -36,6 +36,95 @@ async function until(check) { for (let n = 0; n < 600; n++) { if (check()) retur
 function gate() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 const sourceDocument = url => normalizeDocument({ title: '队列样片', url, nodes: [{ kind: 'video', url: url + '/video.mp4' }] });
 
+test('bulk pause stops both queues and bulk resume reuses completed downloads and transcription in source order', async t => {
+  const f = fixture(t), acquire = f.service.media.acquire, vision = f.service.media.vision;
+  const downloads = [], transcripts = [], writes = []; let blocked = true;
+  f.service.browser.inspect = async url => sourceDocument(url);
+  f.service.media.acquire = async (node, directory, options) => {
+    const label = new URL(node.sourceUrl).pathname.slice(1); downloads.push(label);
+    if (blocked && label === 'three') await sleep(30000, null, { signal: options.signal });
+    return { ...await acquire(node, directory, options), label };
+  };
+  f.service.media.transcript = async asset => { transcripts.push(asset.label); return { text: '已完成的逐字稿' }; };
+  f.service.media.vision = async (asset, options) => {
+    if (blocked && asset.label === 'one') await sleep(30000, null, { signal: options.signal });
+    return vision(asset, options);
+  };
+  const write = f.service.notion.write;
+  f.service.notion.write = async (job, ...args) => { writes.push(new URL(job.url).pathname.slice(1)); return write(job, ...args); };
+  const result = await f.service.create({ input: ['one', 'two', 'three', 'four'].map(name => 'https://example.com/' + name).join('\n') });
+  const ids = result.jobs.map(job => job.id);
+  await until(() => f.service.jobs.get(ids[1]).status === 'waiting_processing' && f.service.downloading?.id === ids[2] && transcripts.includes('one'));
+  const paused = await f.service.request('pause-all');
+  assert.equal(paused.ok, true); assert.equal(paused.result.paused, 4); assert.equal(f.service.active, 0);
+  assert.ok(ids.every(id => f.service.jobs.get(id).status === 'paused'));
+  assert.deepEqual(f.service.queue, []); assert.deepEqual(f.service.processingQueue, []); assert.deepEqual(writes, []);
+  for (const id of ids.slice(0, 2)) {
+    const job = f.service.jobs.get(id), saved = JSON.parse(fs.readFileSync(path.join(f.service.location(job), 'job.json')));
+    assert.equal(saved.status, 'paused'); assert.ok(Object.values(saved.resources).every(resource => fs.existsSync(resource.asset.path)));
+  }
+  blocked = false;
+  const resumed = await f.service.request('resume-all'); assert.equal(resumed.ok, true); assert.equal(resumed.result.resumed, 4);
+  await idle(f.service);
+  assert.deepEqual(writes, ['one', 'two', 'three', 'four']);
+  assert.deepEqual(downloads, ['one', 'two', 'three', 'three', 'four']);
+  assert.deepEqual(transcripts, ['one', 'two', 'three', 'four']);
+  assert.ok(ids.every(id => f.service.jobs.get(id).status === 'completed'));
+});
+
+test('bulk resume waits for an in-flight bulk pause before starting another attempt', async t => {
+  const f = fixture(t), draining = gate(), acquire = f.service.media.acquire, attempts = []; let first = true, stopped = false;
+  f.service.browser.inspect = async url => sourceDocument(url);
+  f.service.media.acquire = async (node, directory, options) => {
+    attempts.push(node.sourceUrl);
+    if (first) {
+      first = false;
+      await new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => {
+        stopped = true; void draining.promise.then(() => reject(options.signal.reason));
+      }, { once: true }));
+    }
+    return acquire(node, directory, options);
+  };
+  try {
+    const created = await f.service.create({ input: 'https://example.com/one\nhttps://example.com/two' });
+    await until(() => attempts.length === 1);
+    const pausing = f.service.request('pause-all'); await until(() => stopped);
+    let resumed = false; const continuing = f.service.request('resume-all').then(result => { resumed = true; return result; });
+    await sleep(10); assert.equal(resumed, false); assert.equal(attempts.length, 1); assert.equal(f.service.status().pausing, true);
+    draining.resolve();
+    assert.equal((await pausing).result.paused, 2); assert.equal((await continuing).result.resumed, 2);
+    await idle(f.service);
+    assert.deepEqual(attempts, ['https://example.com/one', 'https://example.com/one', 'https://example.com/two']);
+    assert.ok(created.jobs.every(({ id }) => f.service.jobs.get(id).status === 'completed'));
+  } finally { draining.resolve(); }
+});
+
+test('bulk resume retries every resumable state once, skips completed and selection tasks, and keeps creation order', async t => {
+  const f = fixture(t), current = gate(), reads = [], acquire = f.service.media.acquire;
+  f.service.browser.inspect = async url => sourceDocument(url);
+  f.service.media.acquire = async (node, ...args) => { reads.push(node.sourceUrl); return acquire(node, ...args); };
+  f.service.media.vision = async () => { await current.promise; return { text: '画面证据' }; };
+  const activeResult = await f.service.create({ input: 'https://example.com/active' });
+  await until(() => f.service.running?.id === activeResult.jobs[0].id);
+  const states = ['failed', 'partial', 'cancelled', 'interrupted', 'paused', 'needs_login', 'awaiting_selection', 'completed'];
+  const seeded = states.map((status, index) => ({ version: 1, id: randomUUID(), url: 'https://example.com/' + status, status,
+    createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, states.length - index)).toISOString(), options: structuredClone(f.service.settings),
+    document: sourceDocument('https://example.com/' + status), resources: {}, analyses: {}, warnings: [],
+    ...(status === 'awaiting_selection' ? { previewOnly: true } : {}), ...(status === 'completed' ? { page: { id: randomUUID() } } : {}) }));
+  for (const job of seeded) { f.service.jobs.set(job.id, job); f.service.save(job); }
+  try {
+    const resumed = await f.service.request('resume-all');
+    assert.equal(resumed.ok, true); assert.equal(resumed.result.resumed, 6); assert.equal(resumed.result.awaitingSelection, 1);
+    assert.equal((await f.service.request('resume-all')).result.resumed, 0);
+    current.resolve(); await idle(f.service);
+    assert.deepEqual(reads.slice(1), seeded.slice(0, 6).reverse().map(job => job.url));
+    assert.ok(seeded.slice(0, 6).every(job => job.status === 'completed'));
+    assert.equal(seeded[6].status, 'awaiting_selection'); assert.equal(seeded[7].status, 'completed');
+    assert.equal(f.saved.length, 7);
+    assert.equal((await f.service.request('pause-all', { id: seeded[0].id })).ok, false);
+  } finally { current.resolve(); }
+});
+
 test('one task uses unchanged transcription and selected OCR count for recognition and verification', async t => {
   const seen = [], document = sourceDocument('https://example.com/parallel');
   const f = fixture(t, { document, media: {

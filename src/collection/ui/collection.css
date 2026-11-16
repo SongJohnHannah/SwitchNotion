@@ -14,6 +14,7 @@ dialog{width:min(660px,calc(100vw - 40px));max-height:calc(100vh - 40px);border:
 @media(max-width:520px){.accounts{grid-template-columns:1fr}.favorites{grid-template-columns:1fr}.type-options{grid-template-columns:repeat(2,1fr)}}
 .brand-logo{width:34px;height:34px;object-fit:contain;flex-shrink:0}
 .capture-actions .primary{flex:1}
+.queue-controls{display:flex;gap:2px;flex-shrink:0;margin-left:auto}.queue-controls .text{font-size:11px;min-height:30px;padding:5px 7px}.paused .badge{background:#edf2fa;color:#627d9f}
 .result-link .text{font-size:11px;min-height:24px;padding:3px 0}
 #last-report-links{display:inline-flex;gap:12px;flex-wrap:wrap}
 .extraction-choices{display:grid;gap:9px;border:0;padding:0;margin:0;min-width:0}
