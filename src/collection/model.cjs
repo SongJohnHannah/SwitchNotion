@@ -89,7 +89,17 @@ function selectedNodes(document, options, selectedIds) {
 function atomicJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temp = file + '.' + randomUUID() + '.tmp';
-  fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flush: true }); fs.renameSync(temp, file);
+  fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flush: true });
+  const delays = [10, 25, 50, 100];
+  for (let attempt = 0; ; attempt++) {
+    try { fs.renameSync(temp, file); return; }
+    catch (error) {
+      if (!['EPERM', 'EBUSY'].includes(error.code) || attempt >= delays.length) throw error;
+      // Windows readers/scanners can briefly deny replacement. Keep the old
+      // checkpoint and retry the same atomic rename, never delete the target.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delays[attempt]);
+    }
+  }
 }
 function layoutNodes(nodes, layout) {
   if (layout !== 'media-at-end') return nodes;

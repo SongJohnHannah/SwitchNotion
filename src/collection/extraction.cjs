@@ -240,7 +240,7 @@ class CollectionExtraction {
       const wrongSource = unsupportedSpeech(report.text, hasTranscript);
       if (!report.valid || wrongSource) {
         report = prepare(await generate([...messages, { role: 'assistant', content: first },
-          { role: 'user', content: [!report.valid && '上一稿未按最终成稿格式输出。按终稿模板的栏目和顺序重写，展开区的每条内容必须归入非空的「### 详情｜标题」。没有适用内容时省略栏目。引用范围遵循当前路线，禁用代码围栏。',
+          { role: 'user', content: [!report.valid && '上一稿未按最终成稿格式输出。按终稿模板的栏目和顺序重写，展开区的每条内容必须归入非空的「### 详情｜标题」。没有适用内容时省略栏目。引用范围遵循当前路线，禁用代码围栏。\n具体未通过项：\n' + report.problems.slice(0, 12).map(problem => '- ' + problem).join('\n'),
             wrongSource && '上一稿的语音来源标注没有依据。根据原始证据重写对应内容。' + noTranscriptRule].filter(Boolean).join('\n') }]));
         if (unsupportedSpeech(report.text, hasTranscript)) throw Error('DeepSeek 终稿仍含无转写依据的口述标注，请重试。');
         if (!report.valid) throw Error('DeepSeek 未返回符合标题与折叠规则的正式提取结果，请重试。');
