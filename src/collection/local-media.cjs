@@ -8,7 +8,7 @@ const audio = new Set(['.mp3', '.m4a', '.wav', '.aac', '.flac', '.ogg', '.opus',
 const image = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif']);
 const localKind = ext => video.has(ext) ? 'video' : audio.has(ext) ? 'audio' : image.has(ext) ? 'image' : null;
 function parseInputs(value, { platform = process.platform, home = os.homedir() } = {}) {
-  if (typeof value !== 'string' || value.length > 65536) throw Error('请输入网页链接或本地图片、音视频路径，最多 30 项。');
+  if (typeof value !== 'string' || value.length > 65536) throw Error('请输入网页链接或本地图片、音视频路径，最多 100 项。');
   const paths = platform === 'win32' ? path.win32 : path.posix, result = [];
   for (let line of value.split(/\r?\n/).map(text => text.trim()).filter(Boolean)) {
     if (/^file:/i.test(line.replace(/^['"]|['"]$/g, ''))) {
@@ -29,7 +29,7 @@ function parseInputs(value, { platform = process.platform, home = os.homedir() }
     result.push({ kind: 'local', path: paths.normalize(line) });
   }
   const unique = [...new Map(result.map(source => [source.url || source.path, source])).values()];
-  if (!unique.length || unique.length > 30) throw Error('请输入 1 到 30 个网页链接或本地图片、音视频路径。');
+  if (!unique.length || unique.length > 100) throw Error('请输入 1 到 100 个网页链接或本地图片、音视频路径。');
   return unique;
 }
 function videoExtension(file) { return video.has(path.extname(String(file).replace(/[?#].*$/, '')).toLowerCase()); }

@@ -6,6 +6,7 @@ const kinds = new Set(['paragraph', 'heading', 'quote', 'list', 'code', 'divider
 const mediaKinds = new Set(['image', 'video', 'audio']);
 const reportDetail = /^###[ \t]+详情[ \t]*[｜|][ \t]*(\S.{0,150})$/u;
 const defaults = Object.freeze({ shortcut: 'CommandOrControl+Shift+J', transcribe: true, vision: true, visionEngine: 'deepseek', denseOcr: true,
+  ocrWorkers: process.platform === 'win32' ? 4 : 1,
   compress: true, quality: '720p', keepLocal: false, keepHistory: false, extraction: Object.freeze(promptSettings()), types: ['text', 'image', 'video', 'audio'],
   browserPort: 19333, browserExecutable: '', browserProfile: '', proxy: '', outputDirectory: '', destination: null, favorites: [] });
 const hash = value => createHash('sha256').update(String(value)).digest('hex');
@@ -21,7 +22,7 @@ function extractUrls(value) {
     while (url.endsWith(close) && url.split(close).length > url.split(open).length) url = url.slice(0, -1);
   } return url; };
   const result = [...new Set(urls.map(url => publicUrl(trim(url))))];
-  if (!result.length || result.length > 30) throw Error('请粘贴 1 到 30 个链接，也可直接粘贴分享文案。');
+  if (!result.length || result.length > 100) throw Error('请粘贴 1 到 100 个链接，也可直接粘贴分享文案。');
   return result;
 }
 function destination(value) {
@@ -37,6 +38,7 @@ function preferences(input = {}, base = defaults) {
   const result = { ...base, ...input };
   for (const key of ['transcribe', 'vision', 'denseOcr', 'compress', 'keepLocal', 'keepHistory']) if (typeof result[key] !== 'boolean') throw Error('收集开关无效。');
   if (!['deepseek', 'local'].includes(result.visionEngine)) throw Error('请选择有效的画面识别方式。');
+  if (![1, 2, 3, 4].includes(result.ocrWorkers)) throw Error('OCR worker 数须为 1 到 4。');
   result.extraction = promptSettings(input.extraction, base.extraction || defaults.extraction);
   if (!['720p', '1080p', 'original'].includes(result.quality)) throw Error('请选择有效的画质。');
   if (!Array.isArray(result.types) || !result.types.length || result.types.some(t => !['text', 'image', 'video', 'audio'].includes(t))) throw Error('请至少选择一种内容类型。');

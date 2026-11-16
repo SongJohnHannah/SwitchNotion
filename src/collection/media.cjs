@@ -235,13 +235,13 @@ class CollectionMedia {
     this.ocrQueue = task.catch(() => {});
     return task;
   }
-  async verifyFrameEvidence(asset, { ocr, vision, signal, progress = () => {} } = {}) {
+  async verifyFrameEvidence(asset, { ocr, vision, signal, progress = () => {}, workers = 1 } = {}) {
     if (!this.localOcr || asset.kind !== 'video' || !Number.isFinite(asset.duration) || asset.duration <= .05) return null;
     const targets = verificationTargets({ ocr, vision, duration: asset.duration });
     if (!targets.length) return verificationResult([], [], []);
     const task = this.ocrQueue.then(async () => {
       signal?.throwIfAborted();
-      const session = await this.ensureOcrSession(signal);
+      const session = await this.ensureOcrSession(signal, workers);
       if (typeof session?.recognizeMany !== 'function') return null;
       const times = [...new Set(targets.flatMap(target => target.times))].sort((a, b) => a - b);
       const directory = fs.mkdtempSync(path.join(path.dirname(asset.path), 'ocr-neighbors-'));
@@ -258,12 +258,12 @@ class CollectionMedia {
     this.ocrQueue = task.catch(() => {});
     return task;
   }
-  async runOcr(asset, { signal, progress = () => {}, dense = false } = {}) {
-    if (dense && Number.isFinite(asset.duration) && asset.duration > 0) return this.scanVideoText(asset, { signal, progress });
+  async runOcr(asset, { signal, progress = () => {}, dense = false, workers = 1 } = {}) {
+    if (dense && Number.isFinite(asset.duration) && asset.duration > 0) return this.scanVideoText(asset, { signal, progress, workers });
     const frames = await this.extractFrames(asset, { signal, maxSide: 1024 });
-    return this.ocrFrames(frames, { signal, progress });
+    return this.ocrFrames(frames, { signal, progress, workers });
   }
-  async scanVideoText(asset, { signal, progress }) {
+  async scanVideoText(asset, { signal, progress, workers = 1 }) {
     const interval = Math.max(.5, asset.duration / 1200);
     const count = Math.min(1200, Math.ceil(asset.duration / interval));
     const directory = fs.mkdtempSync(path.join(path.dirname(asset.path), 'ocr-scan-'));
@@ -275,7 +275,7 @@ class CollectionMedia {
       { signal, timeout: Math.max(60000, Math.min(600000, asset.duration * 1000)) });
       const frames = fs.readdirSync(directory).filter(name => /^sample-\d{5}\.jpg$/.test(name)).sort().map(name => ({ frame: path.join(directory, name), time: Number(name.slice(7, 12)) * interval }));
       if (!frames.length) throw Error('画面文字精扫未取得可识别的采样画面。');
-      const texts = await this.recognizeFrameTexts(frames, { signal, progress });
+      const texts = await this.recognizeFrameTexts(frames, { signal, progress, workers });
       const { raw, cleaned } = organizeOcr(frames, texts, interval);
       return { dense: true, engine: 'mediaocr', text: cleaned ? '【精扫画面文字】\n' + cleaned : '', ...(raw ? { rawText: '【原始识别文字】\n' + raw } : {}),
         note: `本机精扫 ${frames.length} 张，采样间隔约 ${interval.toFixed(2)} 秒。同文合并并保留各采样时间段，英文按邻帧可读文字校对。不确定的数值保留原读法。${cleaned ? '' : '本次未识别到可用文字。'}` };
@@ -284,11 +284,11 @@ class CollectionMedia {
       fs.rmdirSync(directory);
     }
   }
-  async recognizeFrameTexts(frames, { signal, progress }) {
-    const session = await this.ensureOcrSession(signal);
+  async recognizeFrameTexts(frames, { signal, progress, workers = 1 }) {
+    const session = await this.ensureOcrSession(signal, workers);
     let texts;
     if (typeof session?.recognizeMany === 'function') {
-      progress(`mediaocr 正在识别 ${frames.length} 张关键帧文字…`);
+      progress(`mediaocr 正在识别 ${frames.length} 张关键帧文字${workers > 1 ? '（' + workers + ' 个 worker）' : ''}…`);
       try { texts = await session.recognizeMany(frames.map(item => item.frame), { signal }); }
       catch (error) { signal?.throwIfAborted(); throw Error('本地文字识别未完成：' + error.message.replace(/^Notion 附件 OCR mediaocr /, '')); }
     } else {
@@ -300,13 +300,13 @@ class CollectionMedia {
     }
     return texts;
   }
-  async ocrFrames(frames, { signal, progress = () => {} } = {}) {
-    const texts = await this.recognizeFrameTexts(frames, { signal, progress });
+  async ocrFrames(frames, { signal, progress = () => {}, workers = 1 } = {}) {
+    const texts = await this.recognizeFrameTexts(frames, { signal, progress, workers });
     const lines = frames.map((item, index) => `视频时间 ${item.time.toFixed(1)} 秒：${texts[index] || '未识别到文字'}`);
     const recognizedFramePaths = frames.filter((_, index) => texts[index]?.trim()).map(item => item.frame);
     return { text: recognizedFramePaths.length ? '【关键帧文字】\n' + lines.join('\n') : '', note: `基于 ${frames.length} 张关键帧的文字识别，不代表逐帧完整识别。${recognizedFramePaths.length ? '' : '本次未识别到可用文字。'}`, engine: 'mediaocr', frames, recognizedFramePaths };
   }
-  async runVision(asset, { signal, progress = () => {}, engine = 'deepseek', describe = true, frames = null, ocrText = null, recognizedFramePaths = [], style = false, onOcr = () => {} } = {}) {
+  async runVision(asset, { signal, progress = () => {}, engine = 'deepseek', describe = true, frames = null, ocrText = null, recognizedFramePaths = [], style = false, workers = 1, onOcr = () => {} } = {}) {
     if (engine === 'local' && asset.kind !== 'video') throw Error('本地千问只识别视频关键帧，图片不做画面识别。');
     const config = engine === 'deepseek' ? this.provider.config() : null;
     if (config && (config.mode !== 'deepseek' || !this.provider.key(config))) throw Error('请先在 Switch Notion 配置 DeepSeek，下载和逐字稿会保留。');
@@ -315,7 +315,7 @@ class CollectionMedia {
     if (!ocrText && useOcr) {
       if (!this.ocrSession) progress('正在启动本机文字识别（mediaocr）…');
       let ocr;
-      try { ocr = await this.ocrFrames(frames, { signal, progress }); }
+      try { ocr = await this.ocrFrames(frames, { signal, progress, workers }); }
       catch (error) {
         signal?.throwIfAborted();
         if (!describe) throw error;
@@ -357,10 +357,16 @@ class CollectionMedia {
       return result.pages.map(page => page.text).join('\n').trim();
     } catch (error) { signal?.throwIfAborted(); throw Error('本地文字识别未完成：' + error.message.replace(/^Notion 附件 OCR mediaocr /, '')); }
   }
-  async ensureOcrSession(signal) {
-    if (this.ocrSession) return this.ocrSession;
+  async ensureOcrSession(signal, workers = 1) {
+    if (![1, 2, 3, 4].includes(workers)) throw Error('OCR worker 数须为 1 到 4。');
+    if (this.ocrStarting) { await this.ocrStarting; return this.ensureOcrSession(signal, workers); }
+    if (this.ocrSession && !this.ocrSession.closed && this.ocrSessionWorkers === workers) return this.ocrSession;
     if (!this.localOcr || typeof this.ocrEngine.openSession !== 'function') return null;
-    if (!this.ocrStarting) this.ocrStarting = this.ocrEngine.openSession({ signal }).then(session => { if (session) this.ocrSession = session; return session; }).finally(() => { this.ocrStarting = null; });
+    this.ocrStarting = (async () => {
+      if (this.ocrSession) await this.closeOcrSession();
+      const session = await this.ocrEngine.openSession({ signal, workers });
+      if (session) { this.ocrSession = session; this.ocrSessionWorkers = workers; } return session;
+    })().finally(() => { this.ocrStarting = null; });
     return this.ocrStarting;
   }
   async closeOcrSession() {

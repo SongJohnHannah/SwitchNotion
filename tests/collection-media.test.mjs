@@ -127,6 +127,102 @@ test('one OCR session is shared across vision runs until it is closed', async ()
   assert.equal(await media.ensureOcrSession(), session); assert.equal(opens, 2);
   await media.closeOcrSession();
 });
+
+test('OCR sessions pass the worker count and replace a session when the count changes', async () => {
+  const opened = [], closed = [];
+  const media = new CollectionMedia({ ocr: { openSession: async ({ workers }) => {
+    opened.push(workers); return { close: async () => closed.push(workers) };
+  } } });
+  const [first, second] = await Promise.all([media.ensureOcrSession(undefined, 2), media.ensureOcrSession(undefined, 2)]);
+  assert.equal(first, second); assert.deepEqual(opened, [2]);
+  await media.ensureOcrSession(undefined, 1); assert.deepEqual(opened, [2, 1]); assert.deepEqual(closed, [2]);
+  await media.closeOcrSession(); assert.deepEqual(closed, [2, 1]);
+});
+
+test('mediaocr keeps two independent engines for one ordered image batch and closes both once', async () => {
+  const { MediaOcr } = require('../src/mediaocr.cjs'); const configs = []; let closes = 0, active = 0, maximum = 0, release;
+  const first = new Promise(resolve => { release = resolve; });
+  const ocr = new MediaOcr({ root: path.resolve('fixture'), clientFactory: value => {
+    const worker = configs.length; configs.push(value);
+    return { start: async () => {}, tools: async () => [{ name: 'ocr_image', inputSchema: { properties: { image_paths: {} } } }],
+      request: async (_method, { arguments: args }) => {
+        active++; maximum = Math.max(maximum, active);
+        if (worker === 0) await first; else release();
+        active--; return { structuredContent: { errcode: 0, results: args.image_paths.map(file => ({ errcode: 0, text: file })) } };
+      }, close: () => { closes++; } };
+  } }); ocr.available = () => true;
+  const session = await ocr.openSession({ workers: 2 });
+  assert.equal(configs.length, 2); assert.ok(configs.every(config => config.args.at(-1) === '1'));
+  assert.deepEqual(await session.recognizeMany(['/a.jpg', '/b.jpg', '/c.jpg', '/d.jpg']), ['/a.jpg', '/b.jpg', '/c.jpg', '/d.jpg']);
+  assert.equal(maximum, 2); await session.close(); await session.close(); assert.equal(closes, 2);
+  await assert.rejects(ocr.openSession({ workers: 5 }), /worker/);
+});
+
+for (const workers of [3, 4]) test(workers + ' OCR engines divide the same image batch concurrently and preserve all input positions', async () => {
+  const { MediaOcr } = require('../src/mediaocr.cjs'); let started = 0, closed = 0, active = 0, maximum = 0, release;
+  const ready = new Promise(resolve => { release = resolve; });
+  const ocr = new MediaOcr({ root: path.resolve('fixture'), clientFactory: config => {
+    assert.equal(config.args.at(-1), '1'); started++;
+    return { start: async () => {}, tools: async () => [{ name: 'ocr_image', inputSchema: { properties: { image_paths: {} } } }],
+      request: async (_method, { arguments: args }) => {
+        active++; maximum = Math.max(maximum, active); if (active === workers) release(); await ready; active--;
+        return { structuredContent: { errcode: 0, results: args.image_paths.map(file => ({ errcode: 0, text: file })) } };
+      }, close: () => { closed++; } };
+  } }); ocr.available = () => true;
+  const session = await ocr.openSession({ workers }), files = Array.from({ length: workers * 2 }, (_, index) => '/' + index + '.jpg');
+  assert.deepEqual(await session.recognizeMany(files), files); assert.equal(maximum, workers); assert.equal(started, workers);
+  await session.close(); assert.equal(closed, workers);
+});
+
+test('a failed OCR instance cancels its peer and closes both engines before reporting failure', async () => {
+  const { MediaOcr } = require('../src/mediaocr.cjs'); let created = 0, closed = 0, peerStarted;
+  const ready = new Promise(resolve => { peerStarted = resolve; });
+  const ocr = new MediaOcr({ root: path.resolve('fixture'), clientFactory: (_config, options) => {
+    const worker = created++;
+    return { start: async () => {}, tools: async () => [{ name: 'ocr_image', inputSchema: { properties: { image_paths: {} } } }],
+      request: async () => {
+        if (worker === 0) { await ready; throw Error('native fixture failure'); }
+        return new Promise((_resolve, reject) => {
+          options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }); peerStarted();
+        });
+      }, close: () => { closed++; } };
+  } }); ocr.available = () => true;
+  const session = await ocr.openSession({ workers: 2 });
+  await assert.rejects(session.recognizeMany(['/a.jpg', '/b.jpg']), /MCP 通道/);
+  assert.equal(session.closed, true); assert.equal(closed, 2);
+  await session.close(); assert.equal(closed, 2);
+});
+
+test('a later task can cancel a reused four-engine OCR session and close all of its engines', async () => {
+  const { MediaOcr } = require('../src/mediaocr.cjs'); let started = 0, closed = 0, release;
+  const ready = new Promise(resolve => { release = resolve; });
+  const ocr = new MediaOcr({ root: path.resolve('fixture'), clientFactory: (_config, options) => ({
+    start: async () => {}, tools: async () => [{ name: 'ocr_image', inputSchema: { properties: { image_paths: {} } } }],
+    request: async () => new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+      if (++started === 4) release();
+    }), close: () => { closed++; }
+  }) }); ocr.available = () => true;
+  const session = await ocr.openSession({ workers: 4 }), laterTask = new AbortController();
+  const pending = session.recognizeMany(Array.from({ length: 8 }, (_, index) => '/' + index + '.jpg'), { signal: laterTask.signal });
+  const rejected = assert.rejects(pending, error => error.name === 'AbortError');
+  await ready; laterTask.abort(); await rejected;
+  assert.equal(closed, 4); assert.equal(session.closed, true); await session.close(); assert.equal(closed, 4);
+});
+
+test('a partially initialized OCR pair closes the successful engine and a closed cache is recreated', async () => {
+  const { MediaOcr } = require('../src/mediaocr.cjs'); let created = 0, closed = 0;
+  const ocr = new MediaOcr({ root: path.resolve('fixture'), clientFactory: () => {
+    const worker = created++;
+    return { start: async () => { if (!worker) throw Error('start fixture failure'); },
+      tools: async () => [{ name: 'ocr_image', inputSchema: { properties: { image_paths: {} } } }], close: () => { closed++; } };
+  } }); ocr.available = () => true;
+  await assert.rejects(ocr.openSession({ workers: 2 }), /MCP 通道/); assert.equal(closed, 2);
+  let opens = 0;
+  const media = new CollectionMedia({ ocr: { openSession: async () => { opens++; return { closed: false, close: async () => {} }; } } });
+  const session = await media.ensureOcrSession(undefined, 2); session.closed = true;
+  assert.notEqual(await media.ensureOcrSession(undefined, 2), session); assert.equal(opens, 2); await media.closeOcrSession();
+});
 test('mediaocr reuses one client session for every frame', async () => {
   const { MediaOcr } = require('../src/mediaocr.cjs');
   const events = [], requests = [];

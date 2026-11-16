@@ -12,7 +12,7 @@
     <form id="capture-form" class="capture-card">
       <div class="capture-heading"><h1>收集到你的知识库</h1><span>支持拖入本地图片和音视频</span></div>
       <label class="sr-only" for="links">网页链接或本地文件路径</label>
-      <textarea id="links" rows="2" placeholder="粘贴链接或拖入本地图片、音视频…" spellcheck="false"></textarea>
+      <textarea id="links" rows="2" placeholder="粘贴链接或拖入本地图片、音视频，每批最多 100 项…" spellcheck="false"></textarea>
       <div class="destination-row"><span>保存到</span><button id="destination-pill" type="button" class="destination">选择工作区、数据库或页面 ⌄</button></div>
       <div class="capture-actions"><button type="submit" class="primary" id="collect" aria-haspopup="dialog" aria-controls="prompt-dialog">提取 ↵</button><button type="button" class="secondary" id="redistill-local" aria-haspopup="dialog" aria-controls="redistill-dialog">本地资料再蒸馏</button></div>
     </form>
@@ -48,6 +48,9 @@
           <label class="option-card"><span><strong>压缩视频</strong><small>减小文件体积，保留完整时长</small></span><input id="compress" type="checkbox" checked></label>
           <label class="option-card"><span><strong>精扫画面文字</strong><small>用本机 OCR 加密取样，识别教程字卡、字幕和界面小字</small></span><input id="dense-ocr" type="checkbox" checked></label>
         </div>
+        <div class="setting-group"><h3>画面文字识别速度</h3><div class="options-grid">
+          <label>mediaocr 实例<select id="ocr-workers"><option value="1">1 个实例</option><option value="2">2 个实例 · 分图并行</option><option value="3">3 个实例 · 分图并行</option><option value="4">4 个实例 · 分图并行</option></select></label>
+        </div><p class="hint">多个 OCR 实例分担同一任务的图片，结果按原顺序合并。GPU 转写使用单实例，资料整理与保存仍依次执行。</p></div>
         <div class="setting-group"><h3>画质与内容</h3><div class="options-grid">
           <label>压缩画质<select id="quality"><option value="720p">清晰优先 · 720p</option><option value="1080p">更清晰 · 1080p</option><option value="original">保留原始分辨率</option></select></label>
           <div><span class="label">收集类型</span><div id="type-options" class="type-options"><label><input type="checkbox" value="text" checked>正文</label><label><input type="checkbox" value="image" checked>图片</label><label><input type="checkbox" value="video" checked>视频</label><label><input type="checkbox" value="audio" checked>音频</label></div></div>

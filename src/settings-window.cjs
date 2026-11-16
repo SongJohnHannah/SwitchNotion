@@ -130,7 +130,7 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
     if (process.env.NOTION_SWITCH_OPEN_COLLECTION === '1') await collection.open();
     const resumeCollection = process.env.NOTION_SWITCH_COLLECTION_RESUME;
     const resumeIds = typeof resumeCollection === 'string' ? resumeCollection.split(',') : [];
-    if (resumeIds.length <= 10 && resumeIds.every(id => /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(id))) {
+    if (resumeIds.length <= 100 && resumeIds.every(id => /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(id))) {
       for (const id of resumeIds) {
         const job = collection.service.jobs.get(id);
         if (job && ['interrupted', 'cancelled', 'failed', 'partial', 'needs_login'].includes(job.status)) collection.service.retry(job.id);

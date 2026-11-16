@@ -122,6 +122,11 @@ try {
     await page.screenshot({ path: path.join(output, name + '.png'), fullPage: true });
   }
   await page.locator('#settings-tab-options').click();
+  assert.equal(await page.locator('#transcription-instances').count(), 0);
+  assert.equal(await page.locator('#ocr-workers').inputValue(), String(fixture.settings.ocrWorkers));
+  await page.locator('#ocr-workers').selectOption('4');
+  await page.locator('#save-defaults').click();
+  await page.waitForFunction(() => window._collectionCalls.some(call => call.action === 'configure' && !Object.hasOwn(call.input.settings, 'transcriptionInstances') && call.input.settings.ocrWorkers === 4));
   assert.equal(await page.locator('#dense-ocr').isChecked(), true, 'Dense OCR is enabled in processing options by default');
   await page.locator('label').filter({ has: page.locator('#vision') }).click();
   assert.equal(await page.locator('#vision').isChecked(), false, 'The entire option card must be clickable');
@@ -190,6 +195,18 @@ try {
   assert.equal(fromTask.input.id, 'retained-video'); assert.equal(fromTask.input.directory, undefined);
   assert.equal((await page.evaluate(() => window._collectionCalls)).filter(call => call.action === 'create').length, createsBeforeRedistill, 'redistillation must not submit a new collection/download');
   assert.deepEqual(errors, []);
+  await page.evaluate(() => {
+    window._collectionFixture.jobs = [{ id: 'downloaded-waiting', title: '已经下载、等待整理的视频', url: 'https://example.com/waiting', status: 'waiting_processing',
+      message: '素材下载完成，等待按顺序整理…', options: window._collectionFixture.settings, warnings: [] }];
+    window._changeCollection();
+  });
+  await page.locator('.task .badge').getByText('等待整理', { exact: true }).waitFor();
+  await page.locator('#status-filter').selectOption('active');
+  assert.equal(await page.locator('.task').count(), 1);
+  assert.equal(await page.locator('.task-actions').getByText('停止', { exact: true }).count(), 1);
+  assert.equal(await page.locator('.task-actions').getByText('删除任务', { exact: true }).count(), 0);
+  await page.screenshot({ path: path.join(output, 'waiting-processing.png') });
+  await page.locator('#status-filter').selectOption('all');
   await page.evaluate(() => { window._collectionFixture.jobs = []; window._changeCollection(); });
   await page.locator('#tasks-section').waitFor({ state: 'hidden' });
   for (const width of [480, 580, 620, 820]) {
@@ -199,6 +216,6 @@ try {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, name + ' must fit the window at ' + width + 'px');
     }
   }
-  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ extractor: { nodes: doc.nodes.length, fullTextCharacters: doc.nodes.at(-1).text.length, orderVerified: true }, renderer: { errors, droppedWindowsAndMacPaths: true, duplicateDropsIgnored: true, unavailablePathsPreserveInput: true, fileDropsDoNotSubmitOrNavigate: true, perTaskVisionOverride: true, editableTemplates: true, mixedLocalInput: true, emptyHistoryHidden: true, destinationAndFavoriteSelection: true, keyboardTabs: true, fullCardCheckboxes: true, localFolderAndTaskRedistillation: true, redistillationDoesNotRecollect: true, responsiveWidths: [480, 580, 620, 820] }, screenshots: ['compact.png', 'file-dragover.png', 'file-paths.png', 'prompts.png', 'expanded.png', 'options.png', 'accounts.png', 'advanced.png', 'redistill.png'] }, null, 2));
+  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ extractor: { nodes: doc.nodes.length, fullTextCharacters: doc.nodes.at(-1).text.length, orderVerified: true }, renderer: { errors, droppedWindowsAndMacPaths: true, duplicateDropsIgnored: true, unavailablePathsPreserveInput: true, fileDropsDoNotSubmitOrNavigate: true, perTaskVisionOverride: true, editableTemplates: true, mixedLocalInput: true, emptyHistoryHidden: true, destinationAndFavoriteSelection: true, keyboardTabs: true, fullCardCheckboxes: true, localFolderAndTaskRedistillation: true, redistillationDoesNotRecollect: true, downloadedWaitingState: true, responsiveWidths: [480, 580, 620, 820] }, screenshots: ['compact.png', 'file-dragover.png', 'file-paths.png', 'prompts.png', 'expanded.png', 'options.png', 'accounts.png', 'advanced.png', 'redistill.png', 'waiting-processing.png'] }, null, 2));
   console.log('Collection browser extraction and UI checks passed. Screenshots: ' + output);
 } finally { await browser.close(); }

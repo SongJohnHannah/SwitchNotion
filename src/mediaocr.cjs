@@ -100,17 +100,67 @@ class MediaOcr {
     }
     client.close();
   }
-  async openSession({ signal } = {}) {
+  async openSession({ signal, workers = 1 } = {}) {
+    if (![1, 2, 3, 4].includes(workers)) fail('worker 数须为 1 到 4。');
+    if (workers > 1) {
+      // Keep independent engines alive across image batches. The pinned
+      // server's per-request spawn pool can hang during Windows initialization.
+      const controller = new AbortController(), combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+      const initialized = await Promise.allSettled(Array.from({ length: workers }, async () => {
+        try { return await this.openSession({ signal: combined, workers: 1 }); }
+        catch (error) { controller.abort(error); throw error; }
+      }));
+      const sessions = initialized.filter(result => result.status === 'fulfilled' && result.value).map(result => result.value);
+      const failed = initialized.find(result => result.status === 'rejected');
+      if (failed || sessions.length !== workers) {
+        await Promise.allSettled(sessions.map(session => session.close()));
+        if (failed) throw failed.reason; return null;
+      }
+      let closed = false, closing;
+      const close = () => {
+        if (closing) return closing; closed = true; controller.abort(Error('OCR 会话已关闭。'));
+        closing = Promise.allSettled(sessions.map(session => session.close())).then(() => {}); return closing;
+      };
+      return {
+        workers, get closed() { return closed; },
+        recognize: (file, options) => sessions[0].recognize(file, options),
+        async recognizeMany(files, options = {}) {
+          if (closed) fail('OCR 会话已关闭，请重试。');
+          if (!Array.isArray(files) || !files.length) return [];
+          const texts = new Array(files.length), batchSize = Math.min(20, Math.ceil(files.length / workers)); let next = 0;
+          // A reused session may have been opened by a different task. Link the
+          // current call's cancellation to all engines, rather than its old owner.
+          const abort = () => controller.abort(options.signal.reason);
+          options.signal?.addEventListener('abort', abort, { once: true });
+          try {
+            const outcomes = await Promise.allSettled(sessions.map(async session => {
+              try {
+                while (next < files.length) {
+                  combined.throwIfAborted(); options.signal?.throwIfAborted();
+                  const at = next; next += batchSize;
+                  const result = await session.recognizeMany(files.slice(at, at + batchSize), options);
+                  result.forEach((text, index) => { texts[at + index] = text; });
+                }
+              } catch (error) { controller.abort(error); throw error; }
+            }));
+            const failure = outcomes.find(result => result.status === 'rejected');
+            if (failure) { await close(); throw controller.signal.reason || failure.reason; }
+            return texts;
+          } finally { options.signal?.removeEventListener('abort', abort); }
+        }, close
+      };
+    }
     if (!this.available()) return null;
     const owner = this;
     const files = layout(this.root, this.platform, this.arch);
-    const client = this.clientFactory({ name: 'mediaocr', transport: 'stdio', enabled: true, command: files.python, args: [path.join(files.source, 'server.py'), '--workers', '1'] }, { signal, cwd: files.source, timeoutMs: 240000 });
+    const client = this.clientFactory({ name: 'mediaocr', transport: 'stdio', enabled: true, command: files.python, args: [path.join(files.source, 'server.py'), '--workers', String(workers)] }, { signal, cwd: files.source, timeoutMs: 240000 });
     try {
       await client.start();
       const tools = await client.tools(), tool = tools.find(item => item.name === 'ocr_image');
       if (!tool || !tool.inputSchema?.properties?.image_paths) fail('工具目录与已审核接口不一致。');
       let closed = false;
       return {
+        workers: 1, get closed() { return closed; },
         async recognize(file, { signal: callSignal } = {}) {
           callSignal?.throwIfAborted();
           let result;

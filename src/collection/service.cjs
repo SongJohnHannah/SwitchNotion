@@ -16,7 +16,7 @@ const { parseInputs, describeLocal, checkLocal, localDocument, isLikelyVideoInpu
 const { clearCompleted, ownedExport } = require('./history.cjs');
 const { prepareLocalOutput, writeLocalOutput } = require('./local-output.cjs');
 const { loadLocalCollection, checkRetainedAsset, inside } = require('./reprocessing.cjs');
-const activeStates = new Set(['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving']);
+const activeStates = new Set(['queued', 'reading', 'downloading', 'waiting_processing', 'processing', 'uploading', 'saving']);
 const deletableStates = new Set(['failed', 'partial', 'cancelled', 'interrupted', 'needs_login', 'awaiting_selection']);
 const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.visionEngine, options.compress, options.quality, options.keepLocal, options.extraction, ...(options.extraction.mode !== 'off' ? ['separate-reports-v1', ...(options.denseOcr ? ['dense-ocr'] : [])] : [])]));
 const safeError = error => {
@@ -27,7 +27,8 @@ const safeError = error => {
 class CollectionService extends EventEmitter {
   constructor({ root, downloadsDirectory = path.join(os.homedir(), 'Downloads'), speech, provider, webSources, binaries, browser, media, notion, extraction } = {}) {
     super(); this.root = root; this.downloadsDirectory = downloadsDirectory; this.directory = path.join(root, 'collection'); this.settingsFile = path.join(this.directory, 'settings.local.json');
-    this.settings = preferences(); this.jobs = new Map(); this.queue = []; this.running = null; this.closed = false; this.lastError = ''; this.preparing = false;
+    this.settings = preferences(); this.jobs = new Map(); this.queue = []; this.processingQueue = []; this.downloading = null; this.running = null;
+    this.downloadTask = null; this.processingTask = null; this.mediaIdleTask = null; this.closed = false; this.lastError = ''; this.preparing = false;
     if (fs.existsSync(this.settingsFile)) try {
       const saved = JSON.parse(fs.readFileSync(this.settingsFile, 'utf8')), value = saved.settings || saved;
       // The old processing options did not expose a persistent OCR off switch.
@@ -70,7 +71,8 @@ class CollectionService extends EventEmitter {
       } catch { this.lastError = '部分任务记录无法读取，原文件已保留。'; }
     }
   }
-  get active() { return Number(!!this.running) + this.queue.length + Number(this.preparing); }
+  get active() { return new Set([...this.queue, ...this.processingQueue, ...[this.running?.id, this.downloading?.id].filter(Boolean)]).size + Number(this.preparing); }
+  busy(id) { return this.running?.id === id || this.downloading?.id === id || this.queue.includes(id) || this.processingQueue.includes(id); }
   location(job) {
     if (!/^[a-f\d-]{36}$/i.test(job.id)) throw Error('收集任务标识无效。');
     const dir = path.join(this.directory, 'jobs', job.id);
@@ -89,7 +91,7 @@ class CollectionService extends EventEmitter {
     return { active: this.active, lastError: this.lastError, configError: this.configError || '', settings: structuredClone(this.settings), defaultDownloadDirectory: path.join(this.downloadsDirectory, 'NotionSwitch'),
       binaries: this.binaries.status(), preparing: this.preparing, latestCompletion: this.latestCompletion ? { ...this.latestCompletion, canRedistill: this.canRedistill(this.jobs.get(this.latestCompletion.id)) } : null,
       jobs: [...this.jobs.values()].filter(job => !job.historyCleared && (this.settings.keepHistory || job.status !== 'completed')).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(job => ({ id: job.id, url: job.url, local: !!job.localSource, title: job.document?.title || job.url,
-        status: job.status, canDelete: deletableStates.has(job.status) && this.running?.id !== job.id && !this.queue.includes(job.id), canRedistill: this.canRedistill(job), message: job.message, createdAt: job.createdAt, page: job.page, pages: job.pages, options: job.options, warnings: job.warnings || [],
+        status: job.status, canDelete: deletableStates.has(job.status) && !this.busy(job.id), canRedistill: this.canRedistill(job), message: job.message, createdAt: job.createdAt, page: job.page, pages: job.pages, options: job.options, warnings: job.warnings || [],
         classification: job.classification ? { type: job.classification.type, title: job.classification.title, tone: job.classification.tone || '', degraded: job.classification.degraded === true } : null,
         selectedIds: job.selectedIds, preview: job.document ? { incomplete: job.document.incomplete, requiresLogin: job.document.requiresLogin,
           nodes: job.document.nodes.map(n => ({ id: n.id, kind: n.kind, text: n.text.slice(0, 600), caption: n.caption.slice(0,600), level: n.level })) } : null })) };
@@ -154,16 +156,57 @@ class CollectionService extends EventEmitter {
     this.jobs.set(job.id, job); this.save(job); this.enqueue(job);
     return { id: job.id, message: '已加入重新蒸馏队列：复用本地视频和已有文字资料，生成关联原页面的制作拆解。' };
   }
-  enqueue(job) { if (this.closed || this.queue.includes(job.id) || this.running?.id === job.id) return; job.status = 'queued'; this.save(job); this.queue.push(job.id); void this.pump(); }
-  async pump() {
-    if (this.running || this.closed) return;
-    const id = this.queue.shift(); if (!id) return;
-    const job = this.jobs.get(id), controller = new AbortController(); this.running = { id, controller };
-    try { await this.process(job, controller.signal); }
-    catch (error) { job.status = controller.signal.aborted ? 'cancelled' : 'failed'; job.message = controller.signal.aborted ? '已停止后续处理；已保存的内容和进度保留。' : safeError(error); this.save(job); }
-    finally { this.running = null; this.emit('change'); if (!this.queue.length && !this.closed) { void this.media.closeOcrSession?.(); void this.media.unloadLocalModel?.(); } if (!this.closed) void this.pump(); }
+  enqueue(job) {
+    if (this.closed || this.busy(job.id)) return;
+    job.status = 'queued'; job.message = '等待按顺序读取和下载…'; this.save(job); this.queue.push(job.id); this.pumpDownloads();
   }
-  async process(job, signal) {
+  failJob(job, controller, error) {
+    job.status = controller.signal.aborted ? 'cancelled' : 'failed';
+    job.message = controller.signal.aborted ? '已停止后续处理；已保存的内容和进度保留。' : safeError(error); this.save(job);
+  }
+  releaseIdleMedia() {
+    if (this.closed || this.active || this.mediaIdleTask) return;
+    this.mediaIdleTask = Promise.allSettled([this.media.closeOcrSession?.(), this.media.unloadLocalModel?.()])
+      .finally(() => { this.mediaIdleTask = null; });
+  }
+  pumpDownloads() {
+    if (this.downloading || this.closed) return;
+    const id = this.queue.shift(); if (!id) return;
+    const job = this.jobs.get(id), controller = new AbortController(); this.downloading = { id, controller };
+    this.downloadTask = (async () => {
+      try {
+        const ready = await this.downloadJob(job, controller.signal);
+        controller.signal.throwIfAborted();
+        if (ready && !this.closed) {
+          const incomplete = selectedNodes(job.document, job.options, job.selectedIds).some(node => mediaKinds.has(node.kind) && (job.resources[node.id]?.error || !job.resources[node.id]?.asset?.path));
+          job.status = 'waiting_processing'; job.message = incomplete ? '部分素材下载未完成，等待整理已有内容…' : '素材下载完成，等待按顺序整理…'; this.save(job);
+          this.processingQueue.push(id); this.pump();
+        }
+      } catch (error) { this.failJob(job, controller, error); }
+      finally {
+        this.downloading = null; this.downloadTask = null; this.emit('change');
+        this.pumpDownloads(); this.releaseIdleMedia();
+      }
+    })();
+  }
+  pump() {
+    if (this.running || this.closed) return;
+    const id = this.processingQueue.shift(); if (!id) return;
+    const job = this.jobs.get(id), controller = new AbortController(); this.running = { id, controller };
+    this.processingTask = (async () => {
+      try {
+        if (this.mediaIdleTask) await this.mediaIdleTask;
+        controller.signal.throwIfAborted();
+        job.status = 'processing'; job.message = '正在整理已下载的素材…'; this.save(job);
+        await this.process(job, controller.signal);
+      } catch (error) { this.failJob(job, controller, error); }
+      finally {
+        this.running = null; this.processingTask = null; this.emit('change');
+        this.pump(); this.releaseIdleMedia();
+      }
+    })();
+  }
+  async downloadJob(job, signal) {
     const save = () => this.save(job);
     const progress = message => { job.message = message; save(); };
     if (!job.document) {
@@ -186,8 +229,28 @@ class CollectionService extends EventEmitter {
     const selected = layoutNodes(selectedNodes(job.document, job.options, job.selectedIds), job.layout);
     if (!selected.length) throw Error('请至少选择一项要保存的内容。');
     if (job.options.keepLocal) { prepareLocalOutput(job, this.downloadsDirectory); save(); }
+    if (job.reprocessing) { await this.prepareReprocessing(job, selected, save, progress, signal); return true; }
+    for (const [index, node] of selected.entries()) {
+      if (!mediaKinds.has(node.kind)) continue;
+      signal.throwIfAborted();
+      const resource = job.resources[node.id] ||= {};
+      if (resource.asset?.path && fs.existsSync(resource.asset.path)) continue;
+      delete resource.asset; delete resource.error;
+      const directory = job.options.keepLocal ? path.join(job.exportDirectory, '素材', String(index + 1).padStart(2, '0') + '-' + ({ image: '图片', video: '视频', audio: '音频' }[node.kind])) : path.join(this.location(job), 'working', node.id);
+      const nodeProgress = message => progress(`素材 ${index + 1}/${selected.length} · ` + message);
+      job.status = 'downloading'; save();
+      try {
+        if (job.options.keepLocal && !ownedExport(job)) throw Error('资料文件夹已被手动删除，请停止任务或重新收集。');
+        resource.asset = job.localSource ? await this.media.importLocal(job.localSource, directory, { signal, progress: nodeProgress }) : await this.media.acquire({ ...node, sourceUrl: job.document.url }, directory, { signal, progress: nodeProgress });
+      } catch (error) { signal.throwIfAborted(); resource.error = safeError(error); }
+      save();
+    }
+    signal.throwIfAborted(); return true;
+  }
+  async process(job, signal) {
+    const save = () => this.save(job), progress = message => { job.message = message; save(); };
+    const selected = layoutNodes(selectedNodes(job.document, job.options, job.selectedIds), job.layout);
     const { limit } = await this.notion.verifyTarget(job.options.destination, signal);
-    if (job.reprocessing) await this.prepareReprocessing(job, selected, save, progress, signal);
     await this.processMedia(job, selected, limit, save, progress, signal);
     if (job.options.extraction.mode !== 'off') {
       job.status = 'processing'; save();
@@ -269,29 +332,22 @@ class CollectionService extends EventEmitter {
   }
   async processMedia(job, nodes, limit, save, progress, signal) {
     const entries = nodes.flatMap((node, index) => mediaKinds.has(node.kind) ? [{ node, index }] : []);
-    const assets = new Map(), downloads = [], work = [];
+    const work = [];
     let processing = false;
     const markProcessing = () => { if (processing) return; processing = true; job.status = 'processing'; save(); };
     for (const { node, index } of entries) {
       const resource = job.resources[node.id] ||= {}, analysis = job.analyses[node.id] ||= {};
-      delete resource.error; analysis.errors = [];
+      analysis.errors = [];
+      if (!resource.asset?.path || !fs.existsSync(resource.asset.path)) {
+        delete resource.asset;
+        resource.error ||= job.reprocessing ? '本地原视频缺失，已停止重新蒸馏；不会自动重新下载。' : '素材下载未完成或文件已缺失，请继续／重试补齐下载。'; save(); continue;
+      }
+      delete resource.error;
       const label = `素材 ${index + 1}/${nodes.length} · `;
       const nodeProgress = message => progress(label + message);
-      let asset = resource.asset && fs.existsSync(resource.asset.path) ? Promise.resolve(resource.asset) : null;
-      if (job.reprocessing && !asset) asset = Promise.reject(Error('本地原视频缺失，已停止重新蒸馏；不会自动重新下载。'));
-      if (!asset) {
-        let resolve, reject; const state = { done: false };
-        asset = new Promise((resolved, rejected) => {
-          resolve = value => { if (!state.done) { state.done = true; resolved(value); } };
-          reject = error => { if (!state.done) { state.done = true; rejected(error); } };
-        });
-        downloads.push({ node, resource, progress: nodeProgress, resolve, reject, state,
-          directory: job.options.keepLocal ? path.join(job.exportDirectory, '素材', String(index + 1).padStart(2, '0') + '-' + ({ image: '图片', video: '视频', audio: '音频' }[node.kind])) : path.join(this.location(job), 'working', node.id) });
-      }
-      assets.set(node.id, asset);
       work.push((async () => {
         try {
-          const current = await asset; resource.asset = current; save();
+          const current = resource.asset;
           const legacyTranscript = this.media.operator && current.audio !== false && analysis.transcript && !analysis.transcript.operator?.complete;
           if (job.options.transcribe && ['audio', 'video'].includes(node.kind) && (!analysis.transcript || legacyTranscript)) {
             markProcessing();
@@ -306,7 +362,7 @@ class CollectionService extends EventEmitter {
           const denseOcr = job.options.extraction.mode !== 'off' && job.options.denseOcr;
           if (node.kind === 'video' && typeof this.media.ocr === 'function' && (!analysis.ocr || denseOcr && !analysis.ocr.dense)) {
             markProcessing();
-            try { analysis.ocr = await this.media.ocr(current, { signal, progress: nodeProgress, dense: !!denseOcr }); }
+            try { analysis.ocr = await this.media.ocr(current, { signal, progress: nodeProgress, dense: !!denseOcr, workers: job.options.ocrWorkers }); }
             catch (error) { signal.throwIfAborted(); ocrError = safeError(error); analysis.errors.push(ocrError); } save();
           }
           const wantsVision = job.options.vision && (job.options.visionEngine === 'local' ? node.kind === 'video' : ['image', 'video'].includes(node.kind));
@@ -315,7 +371,7 @@ class CollectionService extends EventEmitter {
             const style = ['style', 'both'].includes(job.options.extraction.mode);
             const frames = !style && analysis.ocr?.frames?.length && analysis.ocr.frames.every(item => fs.existsSync(item.frame)) ? analysis.ocr.frames : undefined;
             try { analysis.vision = await this.media.vision(current, { signal, progress: nodeProgress, engine: job.options.visionEngine, frames,
-              ocrText: analysis.ocr?.text, recognizedFramePaths: analysis.ocr?.recognizedFramePaths, style, onOcr: ocr => {
+              ocrText: analysis.ocr?.text, recognizedFramePaths: analysis.ocr?.recognizedFramePaths, style, workers: job.options.ocrWorkers, onOcr: ocr => {
                 analysis.ocr = ocr;
                 if (ocrError && !denseOcr) analysis.errors.splice(analysis.errors.lastIndexOf(ocrError), 1);
                 save();
@@ -328,7 +384,7 @@ class CollectionService extends EventEmitter {
             if ((ocr || vision) && analysis.frameVerification?.fingerprint !== fingerprint) {
               delete analysis.frameVerification;
               try {
-                const result = await this.media.verifyFrameEvidence(current, { ocr, vision, signal, progress: nodeProgress });
+                const result = await this.media.verifyFrameEvidence(current, { ocr, vision, signal, progress: nodeProgress, workers: job.options.ocrWorkers });
                 if (result) analysis.frameVerification = { ...result, fingerprint };
               } catch { signal.throwIfAborted(); nodeProgress('邻帧补扫未完成，继续使用已取得的识别结果。'); }
               save();
@@ -346,22 +402,7 @@ class CollectionService extends EventEmitter {
         } catch (error) { signal.throwIfAborted(); resource.error = safeError(error); save(); }
       })());
     }
-    const pump = (async () => {
-      for (const item of downloads) {
-        if (signal.aborted) break;
-        try {
-          signal.throwIfAborted();
-          if (!processing) { job.status = 'downloading'; save(); }
-          if (job.options.keepLocal && !ownedExport(job)) throw Error('资料文件夹已被手动删除，请停止任务或重新收集。');
-          const asset = job.localSource ? await this.media.importLocal(job.localSource, item.directory, { signal, progress: item.progress }) : await this.media.acquire({ ...item.node, sourceUrl: job.document.url }, item.directory, { signal, progress: item.progress });
-          item.resource.asset = asset; item.resolve(asset); save();
-        } catch (error) { item.reject(error); }
-      }
-      const stopped = signal.reason || Error('已停止后续处理。');
-      for (const item of downloads) if (!item.state.done) item.reject(stopped);
-    })();
-    try { await Promise.allSettled(work); }
-    finally { await pump.catch(() => {}); }
+    await Promise.allSettled(work);
     signal.throwIfAborted();
   }
   forgetCompleted(job) {
@@ -409,8 +450,10 @@ class CollectionService extends EventEmitter {
   cancel(id) {
     const job = this.jobs.get(id); if (!job) throw Error('任务不存在。');
     this.queue = this.queue.filter(value => value !== id);
+    this.processingQueue = this.processingQueue.filter(value => value !== id);
+    if (this.downloading?.id === id) this.downloading.controller.abort(Error('用户停止任务。'));
     if (this.running?.id === id) this.running.controller.abort(Error('用户停止任务。'));
-    else if (job.status !== 'completed') { job.status = 'cancelled'; job.message = '已停止，文件和已有页面保留。'; this.save(job); }
+    if (this.running?.id !== id && this.downloading?.id !== id && job.status !== 'completed') { job.status = 'cancelled'; job.message = '已停止，文件和已有页面保留。'; this.save(job); }
     return { id };
   }
   retry(id) {
@@ -419,13 +462,14 @@ class CollectionService extends EventEmitter {
     // A resumed task follows the engine currently configured, while keeping the
     // job's own destination, extraction and per-collection vision choice.
     job.options.visionEngine = this.settings.visionEngine;
+    job.options.ocrWorkers = this.settings.ocrWorkers;
     if (job.document?.incomplete && !job.page) { delete job.document; job.warnings = []; }
     this.enqueue(job); return { id };
   }
   deleteTask(id) {
     const job = this.jobs.get(id);
     if (!job) throw Error('任务不存在或已经删除。');
-    if (!deletableStates.has(job.status) || this.running?.id === id || this.queue.includes(id)) throw Error('请先停止任务并等待处理结束，再删除此任务。');
+    if (!deletableStates.has(job.status) || this.busy(id)) throw Error('请先停止任务并等待处理结束，再删除此任务。');
     const exported = ownedExport(job); // Validate ownership and links before deleting anything.
     if (exported) fs.rmSync(exported, { recursive: true });
     clearCompleted(this.root, this.directory, id);
@@ -479,10 +523,11 @@ class CollectionService extends EventEmitter {
     } catch (error) { return { ok: false, error: safeError(error) }; }
   }
   close() {
-    if (this.closed) return undefined;
-    this.closed = true; this.running?.controller.abort(Error('应用退出，任务进度保留。'));
-    const tasks = [this.media.closeOcrSession?.(), this.media.unloadLocalModel?.()].filter(value => value && typeof value.then === 'function');
-    return tasks.length ? Promise.allSettled(tasks) : undefined;
+    if (this.closed) return this.closing;
+    this.closed = true; this.running?.controller.abort(Error('应用退出，任务进度保留。')); this.downloading?.controller.abort(Error('应用退出，任务进度保留。'));
+    this.closing = Promise.allSettled([this.downloadTask, this.processingTask, this.mediaIdleTask])
+      .then(() => Promise.allSettled([this.media.closeOcrSession?.(), this.media.unloadLocalModel?.()]));
+    return this.closing;
   }
 }
 module.exports = { CollectionService, activeStates, safeError };

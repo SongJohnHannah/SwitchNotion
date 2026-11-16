@@ -15,7 +15,7 @@ const { transcribeGpuFile } = require('../src/speech/windows-operator/module/src
 const parent = path.resolve(import.meta.dirname, '../.notion-switch');
 function fixture(t, extra = {}) {
   fs.mkdirSync(parent, { recursive: true }); const root = fs.mkdtempSync(path.join(parent, 'test-collection-'));
-  t.after(() => { assert.equal(path.dirname(fs.realpathSync(root)), fs.realpathSync(parent)); fs.rmSync(root, { recursive: true, force: true }); });
+  t.after(async () => { await service.close(); assert.equal(path.dirname(fs.realpathSync(root)), fs.realpathSync(parent)); fs.rmSync(root, { recursive: true, force: true }); });
   const calls = [], saved = [];
   const document = normalizeDocument({ title: '一篇混合内容', url: 'https://example.com/article', nodes: [
     { kind: 'heading', text: '原文标题', level: 1 }, { kind: 'paragraph', text: '第一段' }, { kind: 'image', url: 'https://example.com/original.png' },
@@ -31,7 +31,106 @@ function fixture(t, extra = {}) {
   service.settings = preferences({ destination, keepLocal: false, keepHistory: true, extraction: { mode: 'off' } }); t.after(() => service.close());
   return { root, service, calls, saved, document, destination };
 }
-async function idle(service) { for (let n = 0; n < 400; n++) { if (!service.running && !service.queue.length) return; await sleep(5); } throw Error('collection test did not settle'); }
+async function idle(service) { for (let n = 0; n < 400; n++) { if (!service.active) return; await sleep(5); } throw Error('collection test did not settle'); }
+async function until(check) { for (let n = 0; n < 600; n++) { if (check()) return; await sleep(5); } throw Error('collection stage did not start'); }
+function gate() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
+const sourceDocument = url => normalizeDocument({ title: '队列样片', url, nodes: [{ kind: 'video', url: url + '/video.mp4' }] });
+
+test('one task uses unchanged transcription and selected OCR count for recognition and verification', async t => {
+  const seen = [], document = sourceDocument('https://example.com/parallel');
+  const f = fixture(t, { document, media: {
+    transcript: async (_asset, options) => { assert.equal(Object.hasOwn(options, 'instances'), false); seen.push(['transcript', 1]); return { text: '逐字稿' }; },
+    ocr: async (_asset, options) => { seen.push(['ocr', options.workers]); return { text: '画面文字' }; },
+    vision: async (_asset, options) => { seen.push(['vision', options.workers]); return { text: '画面理解' }; },
+    verifyFrameEvidence: async (_asset, options) => { seen.push(['verification', options.workers]); return null; }
+  }, extraction: { run: async () => ({ text: '报告' }) } });
+  await f.service.create({ input: document.url, options: { ocrWorkers: 3, extraction: { mode: 'auto' } } }); await idle(f.service);
+  assert.deepEqual(seen, [['transcript', 1], ['ocr', 3], ['vision', 3], ['verification', 3]]);
+});
+
+test('downloads continue in FIFO order while the first source is processed, and later sources wait their turn', async t => {
+  const first = gate(), events = []; let downloading = 0, maxDownloads = 0, processing = 0, maxProcessing = 0;
+  const f = fixture(t), acquire = f.service.media.acquire, write = f.service.notion.write;
+  f.service.browser.inspect = async url => sourceDocument(url);
+  f.service.media.acquire = async (node, directory, options) => {
+    const label = new URL(node.sourceUrl).pathname.slice(1); events.push('download:start:' + label); downloading++; maxDownloads = Math.max(maxDownloads, downloading);
+    const asset = await acquire(node, directory, options); downloading--; events.push('download:end:' + label); return { ...asset, label };
+  };
+  f.service.media.vision = async asset => {
+    events.push('process:start:' + asset.label); processing++; maxProcessing = Math.max(maxProcessing, processing);
+    if (asset.label === 'one') await first.promise;
+    processing--; events.push('process:end:' + asset.label); return { text: '画面证据' };
+  };
+  f.service.notion.write = async (job, ...args) => { const result = await write(job, ...args); events.push('write:' + new URL(job.url).pathname.slice(1)); return result; };
+  try {
+    const result = await f.service.create({ input: ['one', 'two', 'three'].map(name => 'https://example.com/' + name).join('\n') });
+    const ids = result.jobs.map(job => job.id);
+    await until(() => events.includes('process:start:one') && f.service.jobs.get(ids[2]).status === 'waiting_processing');
+    assert.deepEqual(events.filter(event => event.startsWith('download:end:')), ['download:end:one', 'download:end:two', 'download:end:three']);
+    assert.deepEqual(events.filter(event => event.startsWith('process:start:')), ['process:start:one']);
+    assert.deepEqual(f.service.processingQueue, ids.slice(1)); assert.equal(f.service.active, 3);
+    assert.equal(f.service.status().jobs.find(job => job.id === ids[1]).message, '素材下载完成，等待按顺序整理…');
+    const persisted = JSON.parse(fs.readFileSync(path.join(f.service.location(f.service.jobs.get(ids[1])), 'job.json'))); assert.equal(persisted.status, 'waiting_processing');
+    first.resolve(); await idle(f.service);
+    assert.equal(maxDownloads, 1); assert.equal(maxProcessing, 1);
+    assert.deepEqual(events.filter(event => event.startsWith('write:')), ['write:one', 'write:two', 'write:three']);
+    assert.ok(events.indexOf('download:end:three') < events.indexOf('process:end:one'));
+    assert.ok(events.indexOf('write:one') < events.indexOf('process:start:two'));
+    assert.ok(events.indexOf('write:two') < events.indexOf('process:start:three'));
+    assert.ok(ids.every(id => f.service.jobs.get(id).status === 'completed'));
+  } finally { first.resolve(); await idle(f.service); }
+});
+
+test('a blocked Notion check does not block downloads and retry reuses the downloaded video', async t => {
+  const notion = gate(), f = fixture(t); let checks = 0;
+  f.service.browser.inspect = async url => sourceDocument(url);
+  f.service.notion.verifyTarget = async () => { if (++checks === 1) { await notion.promise; throw Error('Notion API 连接失败；请检查网络后重试。'); } return { limit: 1024 ** 2 }; };
+  try {
+    const result = await f.service.create({ input: 'https://example.com/one\nhttps://example.com/two' });
+    const [one, two] = result.jobs.map(job => job.id);
+    await until(() => f.service.jobs.get(two).status === 'waiting_processing');
+    assert.equal(f.calls.filter(call => call === 'download:video').length, 2);
+    notion.resolve(); await idle(f.service); assert.equal(f.service.jobs.get(one).status, 'failed'); assert.equal(f.service.jobs.get(two).status, 'completed');
+    f.service.retry(one); assert.equal(f.service.jobs.get(one).message, '等待按顺序读取和下载…'); await idle(f.service); assert.equal(f.service.jobs.get(one).status, 'completed');
+    assert.equal(f.calls.filter(call => call === 'download:video').length, 2);
+  } finally { notion.resolve(); await idle(f.service); }
+});
+
+test('cancelling a download and a waiting report preserves the current processing task and advances the download queue', async t => {
+  const first = gate(), f = fixture(t), acquire = f.service.media.acquire, vision = f.service.media.vision;
+  f.service.browser.inspect = async url => sourceDocument(url);
+  f.service.media.acquire = async (node, directory, options) => { if (node.sourceUrl.endsWith('/two')) await sleep(10000, null, { signal: options.signal }); return acquire(node, directory, options); };
+  f.service.media.vision = async (asset, options) => { if (f.service.jobs.get(f.service.running.id).url.endsWith('/one')) await first.promise; return vision(asset, options); };
+  try {
+    const result = await f.service.create({ input: 'https://example.com/one\nhttps://example.com/two\nhttps://example.com/three' });
+    const [one, two, three] = result.jobs.map(job => job.id);
+    await until(() => f.service.running?.id === one && f.service.downloading?.id === two);
+    assert.equal((await f.service.request('delete-task', { id: two })).ok, false);
+    f.service.cancel(two); await until(() => f.service.jobs.get(three).status === 'waiting_processing');
+    const third = f.service.jobs.get(three), files = Object.values(third.resources).map(resource => resource.asset.path);
+    f.service.cancel(three); assert.equal(third.status, 'cancelled'); assert.equal(f.service.running.id, one); assert.equal(f.service.jobs.get(two).status, 'cancelled');
+    assert.ok(files.every(file => fs.existsSync(file))); first.resolve(); await idle(f.service);
+    assert.equal(f.service.jobs.get(one).status, 'completed'); assert.equal(f.calls.filter(call => call === 'write').length, 1);
+    assert.equal(third.page, undefined); assert.ok(files.every(file => fs.existsSync(file)));
+  } finally { first.resolve(); await idle(f.service); }
+});
+
+test('shutdown aborts both workers and restored waiting jobs retain downloaded media for retry', async t => {
+  const first = gate(), f = fixture(t), acquire = f.service.media.acquire;
+  f.service.browser.inspect = async url => sourceDocument(url);
+  f.service.media.vision = async (_asset, { signal }) => { first.resolve(); await sleep(10000, null, { signal }); };
+  f.service.media.acquire = async (node, directory, options) => { if (node.sourceUrl.endsWith('/three')) await sleep(10000, null, { signal: options.signal }); return acquire(node, directory, options); };
+  const result = await f.service.create({ input: 'https://example.com/one\nhttps://example.com/two\nhttps://example.com/three' });
+  const [one, two, three] = result.jobs.map(job => job.id);
+  await first.promise; await until(() => f.service.downloading?.id === three && f.service.jobs.get(two).status === 'waiting_processing');
+  const secondFile = Object.values(f.service.jobs.get(two).resources)[0].asset.path;
+  await f.service.close(); assert.equal(f.service.running, null); assert.equal(f.service.downloading, null);
+  assert.equal(f.service.jobs.get(one).status, 'cancelled'); assert.equal(f.service.jobs.get(three).status, 'cancelled'); assert.ok(fs.existsSync(secondFile));
+  const restored = new CollectionService({ root: f.root, binaries: { status: () => ({}) }, browser: {}, media: f.service.media, notion: f.service.notion }); t.after(() => restored.close());
+  restored.settings = preferences({ keepHistory: true }, restored.settings);
+  assert.equal(restored.jobs.get(two).status, 'interrupted'); f.calls.length = 0; restored.media.vision = async () => ({ text: '恢复后的画面' });
+  restored.retry(two); await idle(restored); assert.equal(restored.jobs.get(two).status, 'completed'); assert.equal(f.calls.some(call => call.startsWith('download:')), false);
+});
 
 test('a completed video is redistilled from its archive without downloading, transcribing, OCRing, or uploading again', async t => {
   const document = normalizeDocument({ title: '制作样片', url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4', caption: '字幕动画' }] });
@@ -510,12 +609,12 @@ test('local Qwen engine only analyzes video keyframes and labels the appendix ac
   assert.deepEqual(seen, [{ kind: 'video', engine: 'local' }]);
   assert.match(JSON.stringify(f.saved[0]), /本地千问画面分析/);
 });
-test('downloads pipeline so the next resource downloads while the first is analyzed', async t => {
+test('one source downloads its resources in order before it enters the processing queue', async t => {
   const document = normalizeDocument({ title: '多视频', url: 'https://example.com/multi', nodes: [
     { kind: 'video', url: 'https://example.com/one.mp4' }, { kind: 'video', url: 'https://example.com/two.mp4' }] });
   const events = []; let activeDownloads = 0, maxDownloads = 0;
   const f = fixture(t, { document, media: {
-    acquire: async (node, directory) => { activeDownloads++; maxDownloads = Math.max(maxDownloads, activeDownloads); events.push('download:start:' + node.url); fs.mkdirSync(directory, { recursive: true }); await sleep(40); activeDownloads--; events.push('download:end:' + node.url); return { path: path.join(directory, 'asset.bin'), kind: node.kind, duration: 1, audio: true, marker: node.url }; },
+    acquire: async (node, directory) => { activeDownloads++; maxDownloads = Math.max(maxDownloads, activeDownloads); events.push('download:start:' + node.url); fs.mkdirSync(directory, { recursive: true }); await sleep(40); const file = path.join(directory, 'asset.bin'); fs.writeFileSync(file, 'fixture'); activeDownloads--; events.push('download:end:' + node.url); return { path: file, kind: node.kind, duration: 1, audio: true, marker: node.url }; },
     transcript: async () => ({ text: '' }),
     vision: async (asset, options) => { events.push('vision:start:' + asset.marker); await sleep(80); events.push('vision:end:' + asset.marker); return { text: '本地画面', engine: options.engine }; },
     prepareUpload: async asset => [{ path: asset.path, kind: asset.kind }]
@@ -523,7 +622,7 @@ test('downloads pipeline so the next resource downloads while the first is analy
   await f.service.create({ input: 'https://example.com/multi', options: { transcribe: false, visionEngine: 'local' } }); await idle(f.service);
   assert.equal(maxDownloads, 1);
   assert.ok(events.indexOf('download:end:https://example.com/one.mp4') < events.indexOf('download:start:https://example.com/two.mp4'));
-  assert.ok(events.indexOf('vision:start:https://example.com/one.mp4') < events.indexOf('download:end:https://example.com/two.mp4'));
+  assert.ok(events.indexOf('download:end:https://example.com/two.mp4') < events.indexOf('vision:start:https://example.com/one.mp4'));
   assert.equal(events.filter(event => event.startsWith('vision:end:')).length, 2);
 });
 test('cancel stops remaining stages, persisted interrupted work reloads and malformed requests expose no credentials', async t => {

@@ -26,6 +26,16 @@ test('share text extracts multiple URLs and destination/options reject unknown o
   assert.throws(() => extractUrls('file:///secret'));
 });
 
+test('same-task OCR supports one through four instances while transcription stays unchanged', () => {
+  assert.equal(preferences().ocrWorkers, process.platform === 'win32' ? 4 : 1);
+  const saved = preferences({ ocrWorkers: 1 });
+  assert.equal(saved.ocrWorkers, 1); assert.equal(preferences({ ocrWorkers: 4 }, saved).ocrWorkers, 4);
+  assert.equal(Object.hasOwn(saved, 'transcriptionInstances'), false);
+  for (const value of [0, 5, '2', null]) {
+    assert.throws(() => preferences({ ocrWorkers: value }), /worker/);
+  }
+});
+
 test('both supported desktop platforms have pinned native downloads', () => {
   const { assets } = require('../src/collection/binaries.cjs');
   for (const platform of ['win32-x64', 'darwin-arm64']) {

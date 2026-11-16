@@ -3,8 +3,8 @@ const api = window.collection, $ = id => document.getElementById(id);
 let state, chosen, expanded = false, activePanel = 'destination', selectedJob, destinationResults = [], cursors = {}, searchTimer, refreshTimer, searchVersion = 0, checkingAccounts = false;
 let redistillSource;
 const names = { paragraph: '正文', heading: '标题', quote: '引用', list: '列表', code: '代码', divider: '分隔', link: '链接', image: '图片', video: '视频', audio: '音频' };
-const statuses = { queued: '等待中', reading: '识别中', downloading: '下载中', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需检查原网页', completed: '已保存', partial: '处理未完成', failed: '失败', cancelled: '已停止', interrupted: '可继续' };
-const active = ['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving'];
+const statuses = { queued: '等待下载', reading: '识别中', downloading: '下载中', waiting_processing: '等待整理', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需检查原网页', completed: '已保存', partial: '处理未完成', failed: '失败', cancelled: '已停止', interrupted: '可继续' };
+const active = ['queued', 'reading', 'downloading', 'waiting_processing', 'processing', 'uploading', 'saving'];
 function taskStatus() {
   const processing = state.jobs.filter(job => active.includes(job.status)).length;
   const attention = state.jobs.filter(job => !active.includes(job.status) && job.status !== 'completed').length;
@@ -27,10 +27,12 @@ function setPanel(name, focus = false) {
 function readOptions() {
   return { transcribe: $('transcribe').checked, vision: $('vision').checked || $('vision-local').checked,
     visionEngine: $('vision-local').checked ? 'local' : 'deepseek', denseOcr: $('dense-ocr').checked, compress: $('compress').checked, keepLocal: !$('delete-local').checked,
+    ocrWorkers: Number($('ocr-workers').value),
     quality: $('quality').value, types: [...$('type-options').querySelectorAll('input:checked')].map(i => i.value), destination: chosen, extraction: state.settings.extraction };
 }
 function showOptions(options) { $('vision').checked = options.vision && options.visionEngine !== 'local'; $('vision-local').checked = options.vision && options.visionEngine === 'local';
   $('dense-ocr').checked = options.denseOcr;
+  $('ocr-workers').value = String(options.ocrWorkers || 1);
   for (const id of ['transcribe', 'compress']) $(id).checked = options[id]; $('delete-local').checked = !options.keepLocal; $('quality').value = options.quality;
   for (const input of $('type-options').querySelectorAll('input')) input.checked = options.types.includes(input.value); }
 async function refresh() {
@@ -230,7 +232,7 @@ linksInput.addEventListener('drop', event => {
     const existing = new Set(linksInput.value.split(/\r?\n/).map(line => line.trim().replace(/^['"]|['"]$/g, '')));
     const additions = [...new Set(paths)].filter(path => !existing.has(path));
     const value = linksInput.value + (additions.length && linksInput.value && !linksInput.value.endsWith('\n') ? '\n' : '') + additions.join('\n');
-    if (value.length > 65536 || paths.length > 30) throw Error('每次最多添加 30 个文件，输入内容不能超过 65536 个字符。');
+    if (value.length > 65536 || paths.length > 100) throw Error('每次最多添加 100 个文件，输入内容不能超过 65536 个字符。');
     linksInput.value = value; linksInput.focus(); linksInput.setSelectionRange(value.length, value.length); linksInput.scrollTop = linksInput.scrollHeight;
     message(additions.length ? '已添加 ' + additions.length + ' 个文件路径，点击「提取」选择方向。' : '这些文件路径已在输入框中。');
   } catch (error) { message(error.message || '无法读取文件路径，请直接粘贴完整路径。', true); }
