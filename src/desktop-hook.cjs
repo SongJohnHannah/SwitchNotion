@@ -309,7 +309,8 @@ async function route(request, passthrough, ses) {
       if (adapted.kinds.includes('connection') && nativeSpeech.enabled) nativeSpeech.drainTransportReady = true;
     }
     catch (error) {
-      if (!['autofill', 'attachments'].includes(error.notionSwitchKind)) nativeSpeech.lifecycleReady = false;
+      const failedKinds = error.notionSwitchKinds || [error.notionSwitchKind];
+      if (!failedKinds.length || !failedKinds.every(kind => ['availability', 'models', 'provider', 'autofill', 'attachments'].includes(kind))) nativeSpeech.lifecycleReady = false;
       if (!compatibility.unsupportedAssets.includes(compatAsset)) { compatibility.unsupportedAssets.push(compatAsset); log({ type: 'local-provider-ui-unsupported', asset: compatAsset }); }
       return response;
     }

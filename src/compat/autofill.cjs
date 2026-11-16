@@ -6,7 +6,9 @@ const currentAssetName = '57590-3242f968a3670cd0.js';
 const currentSourceHash = '1735c0788b8c9c9359b0034a3ca1bfd6d26194eacafd8c89cda0e3fb45152113';
 const reviewed = new Map([
   [sourceHash, { viewFunction: 'S', captureAt: 'let k=i.id,v=null==(t=a.collectionViewStore())?void 0:t.id;', pendingFunction: 'U' }],
-  [currentSourceHash, { viewFunction: 'P', captureAt: 'let v=i.id,k=null==(t=a.collectionViewStore())?void 0:t.id;', pendingFunction: 'E' }]
+  [currentSourceHash, { viewFunction: 'P', captureAt: 'let v=i.id,k=null==(t=a.collectionViewStore())?void 0:t.id;', pendingFunction: 'E' }],
+  ['304f2d8639a6ed6601a3fcdbf27ee14e209d1684cdc37dc2ef3cf3d9ea880983', { viewFunction: 'P', captureAt: 'let v=i.id,k=null==(t=a.collectionViewStore())?void 0:t.id;', pendingFunction: 'E' }],
+  ['95a7847f96438c75f8dce0e3eb489c2210cb47aaf93639eabb977f480773fd8a', { viewFunction: 'S', captureAt: 'let k=i.id,v=null==(t=a.collectionViewStore())?void 0:t.id;', pendingFunction: 'U' }]
 ]);
 const isAutofillAsset = asset => /^57590-[a-f\d]{16}\.js$/.test(asset);
 const isAutofillCandidate = (source, asset) => isAutofillAsset(asset) || /[,{]\s*414741\s*\(/.test(source);

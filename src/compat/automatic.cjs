@@ -6,7 +6,7 @@ const { modules: macModules } = require('./macos-reviewed.json');
 const { stopWithAudioFlush } = require('../speech/client.cjs');
 const cache = new Map(), ids = Object.keys(reviewed);
 const hint = new RegExp('(?:^|[,{])\\s*(?:' + ids.join('|') + ')\\s*\\(');
-const knownAsset = /^(?:95271|96975|32453|17521|89269|17048|57590|51103)-[a-f\d]{16}\.js$/;
+const knownAsset = /^(?:95271|96975|32453|58104|17521|89269|17048|57590|51103)-[a-f\d]{16}\.js$/;
 const scriptAsset = /^\d+-[a-f\d]{16}\.js$/;
 const digest = source => createHash('sha256').update(source).digest('hex');
 const likelyTarget = (source, asset) => knownAsset.test(asset) || typeof source === 'string' && (hint.test(source) || /[,{]\s*(?:414741|175529|697264|372201)\s*\(/.test(source));
@@ -51,7 +51,7 @@ function patchModule(module, id, options) {
   const record = reviewed[id], info = inspect(module);
   // The Mac release adds stop-source telemetry. Its reviewed methods keep
   // the same selectors, capture permissions and drain deadlines as before.
-  if (info.fingerprint !== record.fingerprint && info.fingerprint !== macModules[id]?.fingerprint) throw Error('Changed native module behavior');
+  if (![record.fingerprint, ...(record.additionalFingerprints || []), macModules[id]?.fingerprint].includes(info.fingerprint)) throw Error('Changed native module behavior');
   const node = key => { const value = info.at(record.selectors[key]); if (!value?.type) throw Error('Missing native selector'); return value; };
   const sourceOf = value => module.slice(value.start - 2, value.end - 2);
   const changes = [], replace = (value, text) => changes.push({ start: value.start - 2, end: value.end - 2, text });

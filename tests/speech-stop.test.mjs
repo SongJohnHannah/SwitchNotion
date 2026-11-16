@@ -138,9 +138,11 @@ test('Notion 7.41.0 audio transport redirects to loopback only when enabled and 
   assert.throws(() => compatibility.adaptClient(audio7410, asset, { ...options, audioEndpoint: 'https://attacker.example' }));
 });
 
-test('Notion 7.41.0 connection module is accepted unchanged', connection7410 ? {} : { skip: 'Official 7.41.0 connection asset unavailable' }, () => {
+test('Notion 7.41.0 connection keeps native behavior and registers its reviewed page-local handshake', connection7410 ? {} : { skip: 'Official 7.41.0 connection asset unavailable' }, () => {
   const asset = '17048-5703c16bce2711ca.js', adapted = compatibility.adaptClient(connection7410, asset, { localSpeechEnabled: true });
-  assert.equal(adapted, connection7410);
+  assert.match(adapted, /__notionSwitchSpeechClient\?\?=\{\}\)\.connection/);
+  assert.match(adapted, /x-notion-switch-speech-client/); assert.match(adapted, /watchdog_ms:3e4/);
+  assert.equal(compatibility.adaptClient(connection7410, asset), connection7410);
   new vm.Script(adapted);
 });
 

@@ -2,6 +2,12 @@ const { createHash } = require('node:crypto');
 const { parse } = require('./parser.cjs');
 const assetName = '51103-3324439f61c31e75.js';
 const sourceHash = '4bfc72339b57ee5fddbd9428afa5f2b5060ff4f190501ce79e47488dc254f924';
+const reviewed = new Map([
+  [sourceHash, 917398],
+  ['390857956053ace5c09b2f9c65ace352363d3244126a8f5a61a2b9c1dd997abb', 296328],
+  ['f578c989a7e27f8edb0ef487f9e627e7f29108ff1f925e1fa1dd46d84bd74bbf', 296328],
+  ['6843d0c2b77c8659c620236d5999061549dd54a863a6985f45f8b44de3996424', 296328]
+]);
 const isInlineDocumentAsset = value => /^51103-[a-f\d]{16}\.js$/.test(value);
 const isInlineDocumentCandidate = (source, asset) => isInlineDocumentAsset(asset) || /[,{]\s*175529\s*\(/.test(source);
 async function invokeProcessAttachment(environment, request) {
@@ -27,13 +33,15 @@ function localProcessedAttachment(nativeRequire, response, fileName, originalFil
   return nativeRequire(80279).Q.success(data);
 }
 function adaptInlineDocuments(source, asset, onAdaptation) {
-  if (!isInlineDocumentAsset(asset) || createHash('sha256').update(source).digest('hex') !== sourceHash)
+  const converter = reviewed.get(createHash('sha256').update(source).digest('hex'));
+  if (!isInlineDocumentAsset(asset) || converter === undefined)
     throw Object.assign(Error('Unreviewed native attachment consumer'), { notionSwitchKind: 'attachments' });
   const anchor = 'try{let e=await (0,a(655696).cK)({environment:t,outputKey:u.data.outputKey';
   if (source.split(anchor).length !== 2) throw Error('Changed native attachment task consumer');
   const requestAt = 'await t.api.callCellCompatibleApi({eventName:"processAgentAttachment"';
   if (source.split(requestAt).length !== 2) throw Error('Changed native attachment processing request');
-  const injected = 'const __notionSwitchLocalDocument=(' + localProcessedAttachment.toString() + ')(a,u,r,s,o);if(__notionSwitchLocalDocument!==undefined)return __notionSwitchLocalDocument;';
+  const helper = localProcessedAttachment.toString().replace('nativeRequire(917398)', 'nativeRequire(' + converter + ')');
+  const injected = 'const __notionSwitchLocalDocument=(' + helper + ')(a,u,r,s,o);if(__notionSwitchLocalDocument!==undefined)return __notionSwitchLocalDocument;';
   const output = source.replace(anchor, injected + anchor).replace(requestAt, 'await (' + invokeProcessAttachment.toString() + ')(t,{eventName:"processAgentAttachment"');
   parse(output, { ecmaVersion: 2024 });
   onAdaptation?.({ moduleId: '175529', kind: 'attachments', mode: 'reviewed' });

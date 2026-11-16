@@ -98,8 +98,13 @@ async function snapshot(info, store, signal) {
   if (info.blockIds && hash(ids) !== hash(info.blockIds)) fail('内容块选区已变化或不连续，请重新选择。');
   const selected = await read(ids), ranges = ids.map((id, at) => {
     const entry = selected.get(id), block = entry.value, rich = block.properties?.title || [];
-    if (!editable(entry) || !textTypes.has(block.type) || block.parent_id !== parent.id || (block.content || []).length ||
+    if (!editable(entry) || !textTypes.has(block.type) || block.parent_id !== parent.id ||
+        (block.content != null && !Array.isArray(block.content)) ||
         !Array.isArray(rich) || rich.some(span => !Array.isArray(span) || typeof span[0] !== 'string')) fail('选区含有不支持的容器，请选择普通文字段落。');
+    // Title edits leave children untouched. A range summary archives later
+    // selected blocks, so those blocks must not own unselected descendants.
+    if (info.mode === 'summarize' && at > 0 && block.content?.length)
+      fail('所选列表含有子项，无法合并为一个摘要；请只选同一项的文字，或选择“添加摘要”。');
     const text = plain(rich), from = at === 0 && info.startIndex !== undefined ? offset(text, info.startIndex) : 0,
       to = at === ids.length - 1 && info.endIndex !== undefined ? offset(text, info.endIndex) : text.length;
     if (to < from) fail('文字范围无效。');

@@ -4,8 +4,10 @@ const { adaptRecordingClient } = require('./speech/client.cjs');
 const { adaptAutomatic } = require('./compat/automatic.cjs');
 const { adaptAutofill, isAutofillCandidate } = require('./compat/autofill.cjs');
 const { adaptInlineDocuments, isInlineDocumentCandidate } = require('./compat/inline-documents.cjs');
-const macClient = process.platform === 'darwin' ? require('./compat/macos-client.cjs') : null;
-const macSpeech = process.platform === 'darwin' ? require('./compat/macos-speech.cjs') : null;
+// These public frontend variants were first observed on Mac. Select by the
+// reviewed script bytes on both systems; native OS calls live elsewhere.
+const clientVariants = require('./compat/macos-client.cjs');
+const speechVariants = require('./compat/macos-speech.cjs');
 // This local provider uses the native chat controls independently of Notion credits.
 // Keep workspace restriction checks above this insertion. Dashboard layout is
 // enabled only in this isolated desktop client; server authorization is unchanged.
@@ -22,11 +24,15 @@ const reviewedAssets = {
   '17048-31dd3b95acbe5529.js': '50dbcf4bb07f9bd2ab9c1baedfd63ba94480a2452edb38b849dfe232f35b19f2'
 };
 const anchor = /let [A-Za-z_$][\w$]*=\(null==\(r=\(o=e\[u\]\)\.isOverrideAllowed\)\?void 0:r\.call\(o,n\.data\)\)\?\?!0/g;
+// A fully reviewed page-local handshake takes precedence over the older
+// generic module hash, so all recording roles register in the same renderer.
+const useSpeechVariant = (source, asset, known) => speechVariants.isMacSpeechCandidate(source, asset) &&
+  (!known || speechVariants.hasReviewedSpeechModule(source, asset));
 function adaptClient(source, asset, { localSpeechEnabled = false, audioEndpoint, inputMode = 'meeting', onAdaptation } = {}) {
   const matched = /^(?:95271|96975|32453|17521|89269|17048)-[a-f\d]{16}\.js$/.test(asset) ? matchModule(source, asset) : null;
-  if (macClient?.isMacClientAsset(asset)) return macClient.adaptMacClient(source, asset, { localSpeechEnabled, audioEndpoint, inputMode, onAdaptation });
-  if (macSpeech?.isMacSpeechCandidate(source, asset) && !reviewedAssets[asset] && !matched)
-    return macSpeech.adaptMacSpeech(source, asset, { localSpeechEnabled, audioEndpoint, inputMode, onAdaptation });
+  if (clientVariants.isMacClientAsset(asset)) return clientVariants.adaptMacClient(source, asset, { localSpeechEnabled, audioEndpoint, inputMode, onAdaptation });
+  if (useSpeechVariant(source, asset, reviewedAssets[asset] || matched))
+    return speechVariants.adaptMacSpeech(source, asset, { localSpeechEnabled, audioEndpoint, inputMode, onAdaptation });
   if (isInlineDocumentCandidate(source, asset)) {
     try { return adaptInlineDocuments(source, asset, onAdaptation); }
     catch (error) { error.notionSwitchKind = 'attachments'; throw error; }
@@ -69,8 +75,8 @@ function adaptClient(source, asset, { localSpeechEnabled = false, audioEndpoint,
   return source.replace(matches[0][0], 'if(u==="ai_usage")return{type:"available",limit:{type:"per_use",amount:"unlimited"}};if(u==="ai_model_selection")return{type:"available",limit:{type:"none"}};if(u==="dashboard_view")return{type:"available",limit:{type:"none"}};' + speech + matches[0][0]);
 }
 async function adaptClientAsync(source, asset, options = {}) {
-  if (macClient?.isMacClientAsset(asset)) return adaptClient(source, asset, options);
-  if (macSpeech?.isMacSpeechCandidate(source, asset) && !reviewedAssets[asset] && !compatibleModule(source, asset)) return adaptClient(source, asset, options);
+  if (clientVariants.isMacClientAsset(asset)) return adaptClient(source, asset, options);
+  if (useSpeechVariant(source, asset, reviewedAssets[asset] || compatibleModule(source, asset))) return adaptClient(source, asset, options);
   if (isInlineDocumentCandidate(source, asset)) return adaptClient(source, asset, options);
   if (isAutofillCandidate(source, asset)) return adaptClient(source, asset, options);
   if (reviewedAssets[asset] || compatibleModule(source, asset)) return adaptClient(source, asset, options);

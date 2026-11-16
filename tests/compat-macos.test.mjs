@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
 import compatibility from '../src/client-compat.cjs';
 import macClient from '../src/compat/macos-client.cjs';
 import { parse } from '../src/compat/parser.cjs';
 import { modulesIn } from '../src/compat/automatic.cjs';
 import { inspect } from '../src/compat/semantic.cjs';
-import { adaptResponse } from '../src/compat/response.cjs';
+import { clientForPlatform } from './helpers/client-platform.mjs';
+const { adaptResponse } = clientForPlatform('darwin');
 
 const manifest = JSON.parse(fs.readFileSync(new URL('../src/compat/macos-reviewed.json', import.meta.url)));
 const baseline = JSON.parse(fs.readFileSync(new URL('../src/compat/reviewed.json', import.meta.url))).modules;
@@ -114,22 +114,12 @@ test('current Mac assets enter the production response adapter and changed bytes
   }
 });
 
-test('the Mac dispatch preserves the current upstream Windows compatibility path', { skip: allAssets.some(([, name]) => fixtureMissing(name)) && 'Optional public macOS client fixtures unavailable' }, () => {
-  const require = createRequire(new URL('../src/client-compat.cjs', import.meta.url));
-  const module = { exports: {} };
-  const windowsRequire = id => {
-    assert.notEqual(id, './compat/macos-client.cjs', 'Windows must not load the Mac adapter');
-    return require(id);
-  };
-  vm.runInNewContext(fs.readFileSync(new URL('../src/client-compat.cjs', import.meta.url), 'utf8'), { require: windowsRequire, module, process: { platform: 'win32' } });
+test('both desktop platforms use identical adaptation for the same reviewed frontend scripts', { skip: allAssets.some(([, name]) => fixtureMissing(name)) && 'Optional public macOS client fixtures unavailable' }, () => {
+  const windows = clientForPlatform('win32'), mac = clientForPlatform('darwin');
   for (const name of new Set([...allAssets.map(([, name]) => name), ...currentRecordings])) {
     if (fixtureMissing(name)) continue;
     const source = fs.readFileSync(cached(name), 'utf8');
-    if (name === currentAssets.autofill) {
-      // Upstream now reviews this Autofill asset on Windows too. Preserve
-      // its existing adapter output without routing through the Mac copy.
-      assert.equal(module.exports.adaptClient(source, name, options), require('./compat/autofill.cjs').adaptAutofill(source, name));
-    } else assert.throws(() => module.exports.adaptClient(source, name, options), /Unreviewed/);
+    assert.equal(windows.adaptClient(source, name, options), mac.adaptClient(source, name, options));
   }
 });
 

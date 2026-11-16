@@ -38,7 +38,10 @@
           "value",
           "consequent"
         ]
-      }
+      },
+      "additionalFingerprints": [
+        "f5a75aa9c9a30c56f9f9179776539b8f4f53e53b0d2ab0576a6351c09c33f8f5"
+      ]
     },
     "241978": {
       "kind": "connection",
@@ -241,7 +244,10 @@
           "1",
           "object"
         ]
-      }
+      },
+      "additionalFingerprints": [
+        "373cf1443ea4d907524e7f474ee47a456b37250bf510b9bcfc87ce613ffba0a3"
+      ]
     }
   }
 }

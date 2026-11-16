@@ -5,18 +5,21 @@ const reviewed = {
   '96975': { '459724': { hashes: ['6ab3eed179a1e223dfe221d164c59774bb0b3a3a38e7e6090e2359e44c50b332'] } },
   '32453': { '60217': { hashes: ['38a7afc2235c70aebd54da1792dfcdc9c0278d3c2a58a0167a91feeef61a4329'] } },
   '17521': { '328616': { hashes: ['8899023157d4755e66eaaf959bd7d76a755505b7a938f311a8b7ad1eb0a042d7',
-    '2c512d87d65969684f713de5002eb8ade82f8cdba60db1a702f5293e0d88eca8'] } },
+    '2c512d87d65969684f713de5002eb8ade82f8cdba60db1a702f5293e0d88eca8',
+    'bbb0b64c27a36fefabb154de63f778c7f04ca37b704102fdb20f0fdf3479e371'] } },
   '89269': {
     '331787': { hashes: ['ab86f11d59a12b5741999825de7cd33993d762d8a23f13a51a93ec8e6e3ddfc2',
       'bca0ae2d158c332bb481a7756f2ac054ec4bf57bfea896ba93cf00fdbdde8dfc'], gateModuleId: 218744, transportModuleId: 241978 },
     '372201': { hashes: ['2d05e78d890a255b428410377d8a1681f908126efaef3185b36f7c360c194d56',
       'd710d066887056c7ed09f3e303774ab2d227bbb4955c2ab6658bf96fe5e72a1d'], gateModuleId: 211589, transportModuleId: 697264 },
     // The November rollout adds capture diagnostics and retains the stop/drain interfaces.
-    '329948': { hashes: ['18e359aa7a5efd921e8e6491714ede13dde79c8452fe2bf0b54cc9c6ab534dee'], gateModuleId: 211589, transportModuleId: 697264 }
+    '329948': { hashes: ['18e359aa7a5efd921e8e6491714ede13dde79c8452fe2bf0b54cc9c6ab534dee'], gateModuleId: 211589, transportModuleId: 697264 },
+    '329462': { hashes: ['3c302f74cf0ea72ecdcd61d71b2725fb5b6b995c20b87e7c1531a8a2074ee158'], gateModuleId: 211589, transportModuleId: 697264 }
   },
   '17048': {
     '241978': { hashes: ['ac822dea14dcffa0a1c3ae952afb9c8038ea7feb87f15d1a4d406c987e49071e'] },
-    '697264': { hashes: ['858cb7eee1d5334707f03c0eb506b5e246d83c1d13df44d2bb8d6161d6cc308a'] }
+    '697264': { hashes: ['858cb7eee1d5334707f03c0eb506b5e246d83c1d13df44d2bb8d6161d6cc308a',
+      '270ef100f1f7f56b57618bb582e1e3dae6dbaebb7711f8a7722598785b1ea854'] }
   }
 };
 const digest = source => createHash('sha256').update(source).digest('hex');

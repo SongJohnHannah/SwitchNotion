@@ -120,6 +120,14 @@ test('reviewed module bodies survive renamed chunks and unrelated neighbor updat
   assert.throws(() => adaptMacSpeech(chunk('neighbor'), name, { ...options, audioEndpoint: 'https://example.com' }), /local audio endpoint/);
 });
 
+test('a reviewed page-local handshake cannot fall back to the older adapter when a neighboring encoder changes', { skip }, async () => {
+  const source = fs.readFileSync(cached(assets.audio), 'utf8'), end = source.lastIndexOf('}]);');
+  assert.ok(end > 0);
+  const modified = source.slice(0, end) + ',' + manifest.encoder.id + '(e,t,i){return "changed-encoder"}' + source.slice(end);
+  new vm.Script(modified);
+  await assert.rejects(adaptResponse(new Response(modified), assets.audio, options), /Changed Mac speech module/);
+});
+
 test('the current native stop wrapper releases capture and drains all tail samples on consecutive recordings', { skip }, async () => {
   const source = adaptMacSpeech(fs.readFileSync(cached(assets.recording), 'utf8'), assets.recording, options);
   const ast = parse(source, { ecmaVersion: 2024 }), module = ast.body[1].expression.arguments[0].elements[1].properties.find(node => node.key.value === 372201);

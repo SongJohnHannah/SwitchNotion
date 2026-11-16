@@ -358,3 +358,45 @@ test('Continue counts the complete immediate prefix against the source budget be
   input.threadContext.selection.value.end.index = 35000;
   assert.equal((await f.run(input)).value.status, 'no_edit'); assert.equal(f.generations.length, 0); assert.equal(f.writes.length, 0);
 });
+
+for (const type of ['bulleted_list', 'numbered_list', 'to_do']) test(`editing selected ${type} text preserves unread nested items and supports undo`, async t => {
+  const f = fixture(t), childId = id(80), original = [['前'], ['原文', [['b']]], ['后']];
+  Object.assign(f.blocks.get(ANCHOR), { type, properties: { title: structuredClone(original), checked: [['Yes']] }, content: [childId] });
+  f.blocks.set(childId, { id: childId, type: 'bulleted_list', space_id: SPACE, parent_table: 'block', parent_id: ANCHOR,
+    properties: { title: [['未选择的子列表内容']] }, alive: true });
+  const child = structuredClone(f.blocks.get(childId)), input = f.input();
+  input.prebuiltPromptType = 'improve_writing'; input.threadContext.selection.text = '原文';
+  input.threadContext.selection.value.start.index = 1; input.threadContext.selection.value.end.index = 3;
+  const result = await f.run(input);
+  assert.equal(result.value.status, 'edited', result.value.acknowledgment);
+  assert.equal(result.value.undoReady, true); assert.equal(f.generations.length, 1);
+  assert.deepEqual(f.blocks.get(ANCHOR).properties.title, [['前'], ['合成续写927，准备发布。', [['b']]], ['后']]);
+  assert.equal(f.blocks.get(ANCHOR).type, type); assert.deepEqual(f.blocks.get(ANCHOR).properties.checked, [['Yes']]);
+  assert.deepEqual(f.blocks.get(ANCHOR).content, [childId]); assert.deepEqual(f.blocks.get(childId), child);
+  assert.ok(!f.reads.includes(childId)); assert.ok(!JSON.stringify(f.generations).includes('未选择的子列表内容'));
+  assert.ok(f.writes.flatMap(payload => payload.transactions.flatMap(transaction => transaction.operations)).every(operation => operation.pointer.id === ANCHOR));
+  f.restore(); assert.equal((await f.undo(result.value)).status, 200);
+  assert.deepEqual(f.blocks.get(ANCHOR).properties.title, original); assert.deepEqual(f.blocks.get(ANCHOR).content, [childId]);
+  assert.deepEqual(f.blocks.get(childId), child);
+});
+
+test('a range summary cannot archive a list item that still owns unselected children', async t => {
+  const f = fixture(t), childId = id(80), input = f.input();
+  Object.assign(f.blocks.get(ANCHOR), { type: 'bulleted_list', content: [childId], properties: { title: [['原文']] } });
+  input.prebuiltPromptType = 'summarize';
+  input.threadContext.selection = { type: 'blocks', text: '', value: [PREVIOUS, ANCHOR].map(id => ({ table: 'block', id, spaceId: SPACE })) };
+  const before = structuredClone([...f.blocks]), result = await f.run(input);
+  assert.equal(result.value.status, 'no_edit'); assert.match(result.value.acknowledgment, /子项/);
+  assert.equal(f.generations.length, 0); assert.equal(f.writes.length, 0); assert.deepEqual([...f.blocks], before);
+});
+
+test('a list item with an omitted or null child list remains editable while malformed children are rejected', async t => {
+  for (const content of [undefined, null, 'not-a-child-list']) {
+    const f = fixture(t), input = f.input();
+    Object.assign(f.blocks.get(ANCHOR), { type: 'bulleted_list', content, properties: { title: [['原文']] } });
+    input.prebuiltPromptType = 'improve_writing'; input.threadContext.selection.text = '原文'; input.threadContext.selection.value.end.index = 2;
+    const result = await f.run(input);
+    assert.equal(result.value.status, typeof content === 'string' ? 'no_edit' : 'edited', result.value.acknowledgment);
+    assert.equal(f.generations.length, typeof content === 'string' ? 0 : 1);
+  }
+});

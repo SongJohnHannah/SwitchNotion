@@ -37,11 +37,21 @@ function once(source, before, after) {
   if (source.split(before).length !== 2) throw Error('Changed Mac speech anchor');
   return source.replace(before, after);
 }
-function adaptMacSpeech(source, asset, options = {}) {
-  if (!/^\d+-[a-f\d]{16}\.js$/.test(asset) || !isMacSpeechCandidate(source, asset)) throw Error('Unreviewed Mac speech asset');
+function reviewedModules(source) {
   const modules = speechModules(source), targets = modules.filter(module => reviewed[module.id]);
   if (!targets.length) throw Error('Unreviewed Mac speech module');
   for (const module of modules) if (digest(module.source) !== (reviewed[module.id]?.hash || encoder.hash)) throw Error('Changed Mac speech module behavior');
+  return { modules, targets };
+}
+function hasReviewedSpeechModule(source, asset) {
+  if (!/^\d+-[a-f\d]{16}\.js$/.test(asset) || !isMacSpeechCandidate(source)) return false;
+  // Select the strict adapter once a known role matches. It must still reject
+  // changed companion roles/encoders instead of downgrading to a legacy path.
+  try { return speechModules(source).some(module => reviewed[module.id]?.hash === digest(module.source)); } catch { return false; }
+}
+function adaptMacSpeech(source, asset, options = {}) {
+  if (!/^\d+-[a-f\d]{16}\.js$/.test(asset) || !isMacSpeechCandidate(source, asset)) throw Error('Unreviewed Mac speech asset');
+  const { targets } = reviewedModules(source);
   if (!options.localSpeechEnabled) {
     for (const module of targets) options.onAdaptation?.({ moduleId: module.id, kind: reviewed[module.id].kind, mode: 'reviewed' });
     return source;
@@ -70,4 +80,4 @@ function adaptMacSpeech(source, asset, options = {}) {
   for (const module of targets) options.onAdaptation?.({ moduleId: module.id, kind: reviewed[module.id].kind, mode: 'reviewed' });
   return source;
 }
-module.exports = { isMacSpeechCandidate, speechModules, adaptMacSpeech };
+module.exports = { isMacSpeechCandidate, hasReviewedSpeechModule, speechModules, adaptMacSpeech };

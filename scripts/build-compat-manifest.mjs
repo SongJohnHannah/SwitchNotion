@@ -6,8 +6,12 @@ import { createHash } from 'node:crypto';
 import { inspect } from '../src/compat/semantic.cjs';
 const entries = [
   ['811656', 'availability', '95271-adc4a76136e50ec0.js', 'f2be3eb51416adf2699c8fd44fdf7cdecfb53ab21b299dbf77e57acafe74d801'],
+  // November: reviewed side-effect imports changed; permission/control flow
+  // and selector paths are identical. Keep both complete fingerprints.
+  ['811656', 'availability', '95271-87feab854df23797.js', '20049f823d9653e0a5631712ceef8134944d2a90c944ac7f830fe048759ea40a'],
   ['459724', 'models', '96975-4c75c565bc617fbf.js', '6ab3eed179a1e223dfe221d164c59774bb0b3a3a38e7e6090e2359e44c50b332'],
   ['60217', 'provider', '32453-3994faac607efd3c.js', '38a7afc2235c70aebd54da1792dfcdc9c0278d3c2a58a0167a91feeef61a4329'],
+  ['60217', 'provider', '58104-05a8357fa0359922.js', 'ad50cb81199982b81e9d67fb021ad3ecbfb8bfdcaf91ac9b0f9805508bb7d290'],
   ['328616', 'audio', '17521-084ec2bc2599898c.js', '8899023157d4755e66eaaf959bd7d76a755505b7a938f311a8b7ad1eb0a042d7'],
   ['331787', 'recording', '89269-f5f20fe25f8eec19.js', 'bca0ae2d158c332bb481a7756f2ac054ec4bf57bfea896ba93cf00fdbdde8dfc'],
   ['241978', 'connection', '17048-31dd3b95acbe5529.js', 'ac822dea14dcffa0a1c3ae952afb9c8038ea7feb87f15d1a4d406c987e49071e']
@@ -24,7 +28,7 @@ for (const [id, kind, name, digest] of entries) {
   const one = predicate => { const values = info.nodes.filter(predicate); if (values.length !== 1) throw Error(kind + ': ambiguous selector (' + values.length + ')'); return values[0]; };
   const select = (key, predicate) => { const node = one(predicate); selectors[key] = info.path(node); return node; };
   if (kind === 'availability') {
-    const anchor = /let [A-Za-z_$][\w$]*=\(null==\(r=\(o=e\[u\]\)\.isOverrideAllowed\)/.exec(module);
+    const anchor = /let [A-Za-z_$][\w$]*=\(null==\([A-Za-z_$][\w$]*=\([A-Za-z_$][\w$]*=e\[u\]\)\.isOverrideAllowed\)/.exec(module);
     if (!anchor) throw Error('Availability anchor missing');
     const declaration = select('insertBefore', n => n.type === 'VariableDeclaration' && n.start === anchor.index + 2);
     const initial = declaration.declarations[0].init;
@@ -47,7 +51,11 @@ for (const [id, kind, name, digest] of entries) {
     const drain = one(n => n.type === 'Property' && n.key.name === 'transcriptionDrainEnabled');
     selectors.drain = info.path(drain.value);
   }
-  result[id] = { kind, fingerprint: info.fingerprint, selectors };
+  if (result[id]) {
+    if (result[id].kind !== kind || JSON.stringify(result[id].selectors) !== JSON.stringify(selectors)) throw Error('Reviewed variant requires different selectors');
+    if (info.fingerprint !== result[id].fingerprint)
+      result[id].additionalFingerprints = [...new Set([...(result[id].additionalFingerprints || []), info.fingerprint])];
+  } else result[id] = { kind, fingerprint: info.fingerprint, selectors };
   console.log(JSON.stringify({ id, kind, fingerprint: info.fingerprint, selectors: Object.keys(selectors) }));
 }
 fs.writeFileSync(path.resolve('src/compat/reviewed.json'), JSON.stringify({ schema: 1, modules: result }, null, 2) + '\n');
