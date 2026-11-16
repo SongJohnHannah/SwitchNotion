@@ -40,15 +40,19 @@ function foldDetails(markdown, citations) {
 function writeLocalOutput(job) {
   if (!job.exportOwned || !job.exportDirectory || !fs.existsSync(job.exportDirectory)) return;
   const directory = ownedExport(job); if (!directory) return;
-  const nodes = layoutNodes(selectedNodes(job.document, job.options, job.selectedIds), job.layout), files = {};
+  const nodes = layoutNodes(selectedNodes(job.document, job.options, job.selectedIds), job.layout), files = {}, assets = {};
   for (const node of nodes) {
     const file = job.resources[node.id]?.asset?.path;
     if (!file || !fs.existsSync(file)) continue;
     const relative = path.relative(directory, file);
-    if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) files[node.id] = relative.replaceAll('\\', '/');
+    if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+      files[node.id] = relative.replaceAll('\\', '/');
+      const asset = job.resources[node.id].asset, stat = fs.statSync(file);
+      assets[node.id] = { ...Object.fromEntries(['duration', 'audio', 'video', 'width', 'height'].filter(key => Object.hasOwn(asset, key)).map(key => [key, asset[key]])), bytes: stat.size, modified: stat.mtimeMs };
+    }
   }
   atomicJson(path.join(directory, 'content.json'), { version: 1, title: job.document.title, source: job.document, status: job.status,
-    selectedIds: nodes.map(n => n.id), files, analyses: job.analyses, extraction: job.extraction, notion: job.page, notionPages: job.pages });
+    selectedIds: nodes.map(n => n.id), files, assets, destination: job.options.destination, analyses: job.analyses, extraction: job.extraction, notion: job.page, notionPages: job.pages });
   const text = ['# ' + job.document.title, '', '来源：' + job.document.url, '']; let mediaHeading = false;
   for (const node of nodes) {
     if (['video', 'audio'].includes(node.kind) && !mediaHeading) { text.push('## 原始音视频', ''); mediaHeading = true; }

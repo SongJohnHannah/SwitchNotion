@@ -42,7 +42,7 @@ function setupCollection({ root, speech, webSources, createWindow, openSettings,
   ipcMain.handle('notion-switch:collection', async (event, action, input = {}) => {
     if (!window || window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== url) return { ok: false, error: '此操作只能从快捷收集窗口执行。' };
     try {
-      if (['expand', 'hide', 'settings', 'directory', 'browser', 'profile', 'open-page', 'open-destination', 'open-source', 'open-local', 'open-downloads'].includes(action)) {
+      if (['expand', 'hide', 'settings', 'directory', 'local-collection', 'browser', 'profile', 'open-page', 'open-destination', 'open-source', 'open-local', 'open-downloads'].includes(action)) {
         if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !(action === 'expand' ? ['expanded'] : action === 'open-destination' ? ['target'] : action === 'open-page' ? ['id', 'report'] : ['open-source', 'open-local'].includes(action) ? ['id'] : []).includes(key))) throw Error('收集窗口操作参数无效。');
         if (action === 'expand') resize(input.expanded === true);
         if (action === 'hide') window.hide();
@@ -53,6 +53,7 @@ function setupCollection({ root, speech, webSources, createWindow, openSettings,
           if (await shell.openPath(directory)) throw Error('无法打开下载文件夹。');
         }
         if (action === 'directory' || action === 'profile') { const response = await dialog.showOpenDialog(window, { properties: ['openDirectory', ...(action === 'directory' ? ['createDirectory'] : [])] }); return { ok: true, result: { path: response.canceled ? null : response.filePaths[0] } }; }
+        if (action === 'local-collection') { const response = await dialog.showOpenDialog(window, { title: '选择之前保留的视频资料文件夹', defaultPath: service.settings.outputDirectory || service.status().defaultDownloadDirectory, properties: ['openDirectory'] }); return { ok: true, result: { path: response.canceled ? null : response.filePaths[0] } }; }
         if (action === 'browser') { const response = await dialog.showOpenDialog(window, { properties: ['openFile'], ...(platform.id === 'darwin' ? { properties: ['openFile', 'openDirectory'] } : {}) });
           let selected = response.canceled ? null : response.filePaths[0];
           if (selected?.endsWith('.app')) selected = path.join(selected, 'Contents/MacOS', path.basename(selected, '.app'));

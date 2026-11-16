@@ -48,6 +48,8 @@ try {
         if (data.duplicate) data.latestCompletion = { id: 'completed-fixture', page };
       }
       if (action === 'configure') Object.assign(data.settings, input.settings);
+      if (action === 'local-collection') result = { path: 'C:\\资料\\已收集视频' };
+      if (action === 'redistill') result = { id: 'redistilled-fixture', message: '已加入重新蒸馏队列。' };
       return { ok: true, result };
     }, getPathForFile: file => window._droppedFilePaths?.[file.name] || '', onShow: callback => { window._showCollection = callback; }, onChange: callback => { window._changeCollection = callback; } };
   }, fixture);
@@ -164,6 +166,30 @@ try {
   await page.locator('#last-report-links button').nth(1).click();
   await page.waitForFunction(() => window._collectionCalls.some(call => call.action === 'open-page' && call.input.id === 'split-fixture' && call.input.report === 'style'));
   assert.equal(await page.locator('#last-result').isHidden(), true);
+  const createsBeforeRedistill = (await page.evaluate(() => window._collectionCalls)).filter(call => call.action === 'create').length;
+  await page.locator('#redistill-local').click(); await page.locator('#redistill-dialog').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#redistill-source').textContent(), 'C:\\资料\\已收集视频');
+  await page.locator('#redistill-preference').fill('字幕动效怎样迁移到我的视频');
+  await page.screenshot({ path: path.join(output, 'redistill.png') });
+  await page.locator('#redistill-start').click(); await page.locator('#redistill-dialog').waitFor({ state: 'hidden' });
+  const redistill = (await page.evaluate(() => window._collectionCalls)).find(call => call.action === 'redistill');
+  assert.equal(redistill.input.directory, 'C:\\资料\\已收集视频'); assert.equal(redistill.input.preference, '字幕动效怎样迁移到我的视频');
+  assert.equal(redistill.input.id, undefined); assert.equal(redistill.input.visionEngine, 'deepseek');
+  await page.evaluate(() => { Object.assign(window._collectionFixture.latestCompletion, { canRedistill: true, title: '已保留的视频' }); window._changeCollection(); });
+  await page.locator('#last-redistill').click(); await page.locator('#redistill-dialog').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#redistill-source').textContent(), '已保留的视频');
+  await page.locator('#redistill-cancel').click();
+  await page.evaluate(() => {
+    window._collectionFixture.jobs = [{ id: 'retained-video', title: '任务里的视频', url: 'https://example.com/video', status: 'completed', canRedistill: true,
+      message: '已保存', options: { ...window._collectionFixture.settings, keepLocal: true }, warnings: [] }];
+    document.getElementById('tasks-section').open = true; window._changeCollection();
+  });
+  await page.locator('.task-actions').getByText('按视频制作再蒸馏', { exact: true }).click();
+  await page.locator('#redistill-start').click(); await page.locator('#redistill-dialog').waitFor({ state: 'hidden' });
+  const fromTask = (await page.evaluate(() => window._collectionCalls)).filter(call => call.action === 'redistill').at(-1);
+  assert.equal(fromTask.input.id, 'retained-video'); assert.equal(fromTask.input.directory, undefined);
+  assert.equal((await page.evaluate(() => window._collectionCalls)).filter(call => call.action === 'create').length, createsBeforeRedistill, 'redistillation must not submit a new collection/download');
+  assert.deepEqual(errors, []);
   await page.evaluate(() => { window._collectionFixture.jobs = []; window._changeCollection(); });
   await page.locator('#tasks-section').waitFor({ state: 'hidden' });
   for (const width of [480, 580, 620, 820]) {
@@ -173,6 +199,6 @@ try {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, name + ' must fit the window at ' + width + 'px');
     }
   }
-  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ extractor: { nodes: doc.nodes.length, fullTextCharacters: doc.nodes.at(-1).text.length, orderVerified: true }, renderer: { errors, droppedWindowsAndMacPaths: true, duplicateDropsIgnored: true, unavailablePathsPreserveInput: true, fileDropsDoNotSubmitOrNavigate: true, perTaskVisionOverride: true, editableTemplates: true, mixedLocalInput: true, emptyHistoryHidden: true, destinationAndFavoriteSelection: true, keyboardTabs: true, fullCardCheckboxes: true, responsiveWidths: [480, 580, 620, 820] }, screenshots: ['compact.png', 'file-dragover.png', 'file-paths.png', 'prompts.png', 'expanded.png', 'options.png', 'accounts.png', 'advanced.png'] }, null, 2));
+  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ extractor: { nodes: doc.nodes.length, fullTextCharacters: doc.nodes.at(-1).text.length, orderVerified: true }, renderer: { errors, droppedWindowsAndMacPaths: true, duplicateDropsIgnored: true, unavailablePathsPreserveInput: true, fileDropsDoNotSubmitOrNavigate: true, perTaskVisionOverride: true, editableTemplates: true, mixedLocalInput: true, emptyHistoryHidden: true, destinationAndFavoriteSelection: true, keyboardTabs: true, fullCardCheckboxes: true, localFolderAndTaskRedistillation: true, redistillationDoesNotRecollect: true, responsiveWidths: [480, 580, 620, 820] }, screenshots: ['compact.png', 'file-dragover.png', 'file-paths.png', 'prompts.png', 'expanded.png', 'options.png', 'accounts.png', 'advanced.png', 'redistill.png'] }, null, 2));
   console.log('Collection browser extraction and UI checks passed. Screenshots: ' + output);
 } finally { await browser.close(); }

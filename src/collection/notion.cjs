@@ -86,6 +86,10 @@ function renderDocument(document, nodes, resources, analyses = {}, warnings = []
     positions[node.id] = result.length;
     if (!mediaKinds.has(node.kind)) { result.push(...textBlocks(node)); slots[node.id] = { start: positions[node.id], count: result.length - positions[node.id] }; return; }
     const resource = resources[node.id];
+    if (resource?.referencePage) {
+      result.push(...textBlocks({ kind: 'paragraph', spans: [{ text: '查看原收集页中的' + ({ image: '图片', video: '视频', audio: '音频' }[node.kind]) + (node.caption ? ' · ' + node.caption : ''), href: 'https://www.notion.so/' + resource.referencePage.id.replaceAll('-', '') }] }));
+      slots[node.id] = { start: positions[node.id], count: result.length - positions[node.id], placeholder: false }; return;
+    }
     if (resource?.error || !resource?.uploads?.length || resource.uploads.some(u => !u.uploaded)) {
       result.push(paragraph(`【${node.kind === 'image' ? '图片' : node.kind === 'video' ? '视频' : '音频'} ${index + 1} 处理未完成】${resource?.error || '尚未下载或上传'}${node.caption ? ' · ' + node.caption : ''}`)); slots[node.id] = { start: positions[node.id], count: 1, placeholder: true }; return;
     }

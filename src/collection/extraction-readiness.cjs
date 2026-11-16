@@ -5,6 +5,7 @@ function extractionReadiness(job, nodes) {
     const asset = job.resources?.[node.id]?.asset, analysis = job.analyses?.[node.id] || {};
     const label = `素材 ${index + 1} 的${node.kind === 'video' ? '视频' : '音频'}`;
     if (!asset?.path) return { deferred: true, stage: 'download', error: `${label}下载未完成；AI 总结已暂停，下载并处理成功后重试。` };
+    if (job.reprocessing && node.kind === 'video' && !analysis.vision?.text?.trim()) return { deferred: true, stage: 'vision', error: `${label}的制作画面重新识别尚未完成；已保留本地视频与文字资料，重试时只补做缺失步骤。` };
     const textFirst = node.kind === 'video' && job.options.denseOcr && analysis.ocr?.dense && analysis.ocr.text?.trim();
     const visualReady = node.kind === 'video' && ['style', 'both'].includes(job.options.extraction?.mode) && analysis.vision?.text?.trim();
     if (job.options.transcribe && asset.audio !== false && !(analysis.transcript?.text?.trim() || analysis.transcript?.note?.trim()) && !textFirst && !visualReady) return { deferred: true, stage: 'transcript', error: `${label}转写未完成；AI 总结已暂停，转写成功后重试。` };

@@ -15,6 +15,7 @@ const { extractionReadiness } = require('./extraction-readiness.cjs');
 const { parseInputs, describeLocal, checkLocal, localDocument, isLikelyVideoInput } = require('./local-media.cjs');
 const { clearCompleted, ownedExport } = require('./history.cjs');
 const { prepareLocalOutput, writeLocalOutput } = require('./local-output.cjs');
+const { loadLocalCollection, checkRetainedAsset, inside } = require('./reprocessing.cjs');
 const activeStates = new Set(['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving']);
 const deletableStates = new Set(['failed', 'partial', 'cancelled', 'interrupted', 'needs_login', 'awaiting_selection']);
 const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.visionEngine, options.compress, options.quality, options.keepLocal, options.extraction, ...(options.extraction.mode !== 'off' ? ['separate-reports-v1', ...(options.denseOcr ? ['dense-ocr'] : [])] : [])]));
@@ -86,9 +87,9 @@ class CollectionService extends EventEmitter {
   }
   status() {
     return { active: this.active, lastError: this.lastError, configError: this.configError || '', settings: structuredClone(this.settings), defaultDownloadDirectory: path.join(this.downloadsDirectory, 'NotionSwitch'),
-      binaries: this.binaries.status(), preparing: this.preparing, latestCompletion: this.latestCompletion || null,
+      binaries: this.binaries.status(), preparing: this.preparing, latestCompletion: this.latestCompletion ? { ...this.latestCompletion, canRedistill: this.canRedistill(this.jobs.get(this.latestCompletion.id)) } : null,
       jobs: [...this.jobs.values()].filter(job => !job.historyCleared && (this.settings.keepHistory || job.status !== 'completed')).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(job => ({ id: job.id, url: job.url, local: !!job.localSource, title: job.document?.title || job.url,
-        status: job.status, canDelete: deletableStates.has(job.status) && this.running?.id !== job.id && !this.queue.includes(job.id), message: job.message, createdAt: job.createdAt, page: job.page, pages: job.pages, options: job.options, warnings: job.warnings || [],
+        status: job.status, canDelete: deletableStates.has(job.status) && this.running?.id !== job.id && !this.queue.includes(job.id), canRedistill: this.canRedistill(job), message: job.message, createdAt: job.createdAt, page: job.page, pages: job.pages, options: job.options, warnings: job.warnings || [],
         classification: job.classification ? { type: job.classification.type, title: job.classification.title, tone: job.classification.tone || '', degraded: job.classification.degraded === true } : null,
         selectedIds: job.selectedIds, preview: job.document ? { incomplete: job.document.incomplete, requiresLogin: job.document.requiresLogin,
           nodes: job.document.nodes.map(n => ({ id: n.id, kind: n.kind, text: n.text.slice(0, 600), caption: n.caption.slice(0,600), level: n.level })) } : null })) };
@@ -123,6 +124,36 @@ class CollectionService extends EventEmitter {
     }
     return { jobs: results };
   }
+  canRedistill(job) { return !!(job?.status === 'completed' && job.options.keepLocal && job.exportDirectory && (job.hasVideo || job.document && selectedNodes(job.document, job.options, job.selectedIds).some(node => node.kind === 'video'))); }
+  redistill({ id, directory, preference = '', destination: target, visionEngine = this.settings.visionEngine } = {}) {
+    if (this.configError) throw Error(this.configError);
+    if ((id === undefined) === (directory === undefined)) throw Error('请选择一条已完成的视频任务或一个本地资料文件夹。');
+    let original;
+    if (id !== undefined) {
+      original = this.jobs.get(id);
+      if (!this.canRedistill(original)) throw Error('此任务没有可复用的本地视频资料；收集前需取消勾选「不保留本地资料」。');
+      directory = ownedExport(original);
+      if (!directory) throw Error('本地资料文件夹已被删除，请选择仍保留视频的资料文件夹。');
+    }
+    const source = loadLocalCollection(directory);
+    const chosen = preferences({ destination: original?.options.destination || source.destination || target || this.settings.destination,
+      keepLocal: true, types: ['text', 'video'], vision: true, visionEngine, transcribe: false, denseOcr: false, extraction: { mode: 'style', preference } }, this.settings);
+    if (!chosen.destination) throw Error('旧资料未记录保存位置，请先选择原 Notion 工作区中的数据库或父页面。');
+    const key = hash(JSON.stringify(['local-style-v1', source.referencePage.id, Object.values(source.resources).map(resource => resource.asset), chosen.destination, chosen.visionEngine, chosen.extraction]));
+    const existing = [...this.jobs.values()].find(job => job.dedupe === key);
+    if (existing) {
+      if (['failed', 'partial', 'cancelled', 'interrupted'].includes(existing.status)) this.retry(existing.id);
+      if (existing.status === 'completed') this.latestCompletion = { id: existing.id, title: existing.document.title, page: existing.page, pages: existing.pages };
+      return { id: existing.id, existing: true, message: existing.status === 'completed' ? '已有这份制作拆解，可直接打开 Notion。' : '已复用现有重新蒸馏任务。' };
+    }
+    const job = { version: 1, id: randomUUID(), url: source.url, dedupe: key, createdAt: new Date().toISOString(), status: 'queued',
+      message: '等待复用本地资料，按视频制作方式重新识别画面…', options: chosen,
+      document: { ...source.document, title: source.document.title + ' · 画面与视频制作拆解' }, selectedIds: source.selectedIds,
+      resources: source.resources, analyses: source.analyses, warnings: [], layout: 'result-first',
+      reprocessing: { directory: source.directory, originalPage: source.referencePage } };
+    this.jobs.set(job.id, job); this.save(job); this.enqueue(job);
+    return { id: job.id, message: '已加入重新蒸馏队列：复用本地视频和已有文字资料，生成关联原页面的制作拆解。' };
+  }
   enqueue(job) { if (this.closed || this.queue.includes(job.id) || this.running?.id === job.id) return; job.status = 'queued'; this.save(job); this.queue.push(job.id); void this.pump(); }
   async pump() {
     if (this.running || this.closed) return;
@@ -156,19 +187,22 @@ class CollectionService extends EventEmitter {
     if (!selected.length) throw Error('请至少选择一项要保存的内容。');
     if (job.options.keepLocal) { prepareLocalOutput(job, this.downloadsDirectory); save(); }
     const { limit } = await this.notion.verifyTarget(job.options.destination, signal);
+    if (job.reprocessing) await this.prepareReprocessing(job, selected, save, progress, signal);
     await this.processMedia(job, selected, limit, save, progress, signal);
     if (job.options.extraction.mode !== 'off') {
       job.status = 'processing'; save();
       const pending = extractionReadiness(job, selected);
       if (pending) { job.extraction = pending; delete job.classification; delete job.extractionWork; }
       else try { job.extraction = await this.extractor.run(job, selected, { signal, progress, save }); }
-      catch (error) { signal.throwIfAborted(); job.extraction = { error: safeError(error) }; } save();
+      catch (error) { signal.throwIfAborted(); job.extraction = { error: safeError(error) }; }
+      if (job.reprocessing && job.extraction?.text) job.extraction.key = 'style';
+      save();
     }
     const failures = selected.filter(node => mediaKinds.has(node.kind) && (job.resources[node.id]?.error || job.analyses[node.id]?.errors?.length));
     job.warnings = [...job.document.warnings, ...failures.map(node => `素材 ${selected.indexOf(node) + 1} 处理未完成：${job.resources[node.id]?.error || job.analyses[node.id].errors.join('；')}`)];
     if (job.extraction?.error) job.warnings.push('内容提取待完成：' + job.extraction.error);
     const both = job.options.extraction.mode === 'both' && selected.some(node => ['video', 'image'].includes(node.kind));
-    const waitingForReports = both && !job.page && job.extraction?.error;
+    const waitingForReports = (both || job.reprocessing) && !job.page && job.extraction?.error;
     const separate = job.extraction?.reports?.length && (!job.page || job.reportWrites);
     if (!waitingForReports) {
       job.status = 'saving'; progress(separate ? '正在分别保存两份 Notion 文档…' : '正在按原文顺序保存到 Notion，并核验内容…');
@@ -177,8 +211,8 @@ class CollectionService extends EventEmitter {
     }
     if (job.options.keepLocal) this.exportLocal(job, selected);
     job.status = failures.length || job.document.incomplete || job.extraction?.error ? 'partial' : 'completed';
-    job.message = job.status === 'completed' ? (separate ? '两份 Notion 文档已分别保存并核验。' : '已保存到 Notion，正文和媒体顺序已核验。') :
-      waitingForReports ? '已保留下载与识别进度，分析完成后将分别保存两份文档。' :
+    job.message = job.status === 'completed' ? (job.reprocessing ? '已复用本地资料生成制作拆解，并关联原 Notion 页面。' : separate ? '两份 Notion 文档已分别保存并核验。' : '已保存到 Notion，正文和媒体顺序已核验。') :
+      waitingForReports ? job.reprocessing ? '已保留重新识别进度，制作拆解完成后再保存新文档。' : '已保留下载与识别进度，分析完成后将分别保存两份文档。' :
       job.extraction?.deferred ? '已保存已获取的内容；' + job.extraction.error :
       '已保存已获取的内容；' + (failures.length ? '部分素材下载、识别或上传未完成，请查看具体原因后重试。' : job.extraction?.error ? 'AI 总结未完成，请查看具体原因后重试。' : '原网页内容尚未完整获取，请检查原网页后重试。'); save();
     if (job.status === 'completed' && !job.options.keepLocal) this.releaseWorkingFiles(job);
@@ -212,6 +246,27 @@ class CollectionService extends EventEmitter {
       saveReport();
     }
   }
+  async prepareReprocessing(job, nodes, save, progress, signal) {
+    for (const node of nodes.filter(node => node.kind === 'video')) {
+      signal.throwIfAborted();
+      const resource = job.resources[node.id], asset = resource?.asset;
+      if (!asset?.path) throw Error('本地原视频缺失，无法重新识别画面；不会自动重新下载。');
+      const before = checkRetainedAsset(asset);
+      // Each report owns its working files, so deleting or retrying it cannot affect the original collection.
+      if (!inside(job.exportDirectory, asset.path)) {
+        progress('正在复用本地视频和已有识别资料…');
+        const directory = path.join(job.exportDirectory, '素材', node.id); fs.mkdirSync(directory, { recursive: true });
+        const output = path.join(directory, path.basename(asset.path));
+        await fs.promises.copyFile(asset.path, output); signal.throwIfAborted(); checkRetainedAsset(asset);
+        const stat = fs.statSync(output);
+        if (stat.size !== before.size) throw Error('本地视频复制尚未完成，请重试；未重新下载。');
+        resource.asset = { ...asset, path: output, bytes: stat.size, modified: stat.mtimeMs }; save();
+      }
+      if (!(resource.asset.duration > 0)) {
+        Object.assign(resource.asset, await this.media.probe(resource.asset.path, signal)); save();
+      }
+    }
+  }
   async processMedia(job, nodes, limit, save, progress, signal) {
     const entries = nodes.flatMap((node, index) => mediaKinds.has(node.kind) ? [{ node, index }] : []);
     const assets = new Map(), downloads = [], work = [];
@@ -223,6 +278,7 @@ class CollectionService extends EventEmitter {
       const label = `素材 ${index + 1}/${nodes.length} · `;
       const nodeProgress = message => progress(label + message);
       let asset = resource.asset && fs.existsSync(resource.asset.path) ? Promise.resolve(resource.asset) : null;
+      if (job.reprocessing && !asset) asset = Promise.reject(Error('本地原视频缺失，已停止重新蒸馏；不会自动重新下载。'));
       if (!asset) {
         let resolve, reject; const state = { done: false };
         asset = new Promise((resolved, rejected) => {
@@ -278,6 +334,7 @@ class CollectionService extends EventEmitter {
               save();
             }
           }
+          if (job.reprocessing) return;
           if (!resource.parts) { markProcessing(); resource.parts = await this.media.prepareUpload(current, job.options, limit, { signal, progress: nodeProgress }); save(); }
           resource.uploads ||= [];
           for (let i = 0; i < resource.parts.length; i++) {
@@ -311,7 +368,9 @@ class CollectionService extends EventEmitter {
     try {
       clearCompleted(this.root, this.directory, job.id);
       const receipt = { id: job.id, version: 1, createdAt: job.createdAt, url: job.url, dedupe: job.dedupe, status: 'completed', message: '已保存到 Notion，本地临时记录已清理。',
-        options: job.options, page: job.page, pages: job.pages, document: { title: job.document?.title || job.url, nodes: [] }, historyCleared: true, ...(job.localSource ? { localSource: { name: job.localSource.name } } : {}) };
+        options: job.options, page: job.page, pages: job.pages, document: { title: job.document?.title || job.url, nodes: [] }, historyCleared: true,
+        hasVideo: job.document && selectedNodes(job.document, job.options, job.selectedIds).some(node => node.kind === 'video'),
+        ...(job.exportOwned ? { exportOwned: true, exportDirectory: job.exportDirectory, exportBaseDirectory: job.exportBaseDirectory } : {}), ...(job.localSource ? { localSource: { name: job.localSource.name } } : {}) };
       this.jobs.set(job.id, receipt);
       const receipts = [...this.jobs.values()].filter(value => value.historyCleared); for (const old of receipts.slice(0, Math.max(0, receipts.length - 30))) this.jobs.delete(old.id);
     } catch { this.lastError = '内容已保存到 Notion，但本地临时记录尚未清理，请检查文件占用或目录权限。'; }
@@ -396,7 +455,7 @@ class CollectionService extends EventEmitter {
   async request(action, input = {}) {
     const allowed = { state: [], configure: ['settings'], workspaces: [], destinations: ['workspaceId', 'query', 'cursors'], create: ['input', 'options', 'preview', 'force'],
       select: ['id', 'ids', 'options', 'allowPartial'], cancel: ['id'], retry: ['id'], 'delete-task': ['id'], reread: ['id'], accounts: ['verify'], login: ['site'], prepare: [], 'create-library': ['workspaceId', 'parentId'],
-      'video-hint': ['input'] };
+      'video-hint': ['input'], redistill: ['id', 'directory', 'preference', 'destination', 'visionEngine'] };
     try {
       if (!Object.hasOwn(allowed, action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !allowed[action].includes(k))) throw Error('无法识别此项收集操作。');
       let result;
@@ -405,6 +464,7 @@ class CollectionService extends EventEmitter {
       else if (action === 'workspaces') result = await this.notion.workspaces(AbortSignal.timeout(45000));
       else if (action === 'destinations') result = await this.notion.search(input.workspaceId, input.query, input.cursors, AbortSignal.timeout(60000));
       else if (action === 'create') result = await this.create(input);
+      else if (action === 'redistill') result = this.redistill(input);
       else if (action === 'select') result = this.select(input.id, input);
       else if (action === 'cancel') result = this.cancel(input.id);
       else if (action === 'retry') result = this.retry(input.id);

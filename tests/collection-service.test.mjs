@@ -33,6 +33,126 @@ function fixture(t, extra = {}) {
 }
 async function idle(service) { for (let n = 0; n < 400; n++) { if (!service.running && !service.queue.length) return; await sleep(5); } throw Error('collection test did not settle'); }
 
+test('a completed video is redistilled from its archive without downloading, transcribing, OCRing, or uploading again', async t => {
+  const document = normalizeDocument({ title: '制作样片', url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4', caption: '字幕动画' }] });
+  const stages = []; let visionVersion = 0;
+  const f = fixture(t, { document, media: {
+    ocr: async () => { stages.push('ocr'); return { text: '原有画面文字', dense: true }; },
+    vision: async (_asset, options) => { stages.push('vision'); if (++visionVersion > 1) { assert.equal(options.style, true); assert.equal(options.engine, 'local'); } return { text: '画面版本 ' + visionVersion }; }
+  }, extraction: { run: async (job, nodes) => {
+    stages.push('distil'); assert.equal(job.options.extraction.mode, 'style'); assert.equal(job.options.extraction.preference, '重点讲字幕动画');
+    const analysis = job.analyses[nodes[0].id]; assert.equal(analysis.transcript.text, '原始语音逐字稿'); assert.equal(analysis.ocr.text, '原有画面文字'); assert.equal(analysis.vision.text, '画面版本 2');
+    return { text: '## 蒸馏到我的视频\n复现字幕动画', name: '画面与视频制作拆解', key: 'style' };
+  } } });
+  const { jobs: [{ id }] } = await f.service.create({ input: document.url, options: { keepLocal: true } }); await idle(f.service);
+  const original = f.service.jobs.get(id), indexFile = path.join(original.exportDirectory, 'content.json');
+  const before = fs.readFileSync(indexFile, 'utf8'), originalPage = original.page.id;
+  assert.equal(original.status, 'completed'); f.calls.length = 0; stages.length = 0;
+  f.service.settings = preferences({ types: ['text'] }, f.service.settings);
+  const response = await f.service.request('redistill', { id, preference: '重点讲字幕动画', visionEngine: 'local' }); assert.equal(response.ok, true); await idle(f.service);
+  const result = f.service.jobs.get(response.result.id), video = result.resources[document.nodes[0].id].asset;
+  assert.equal(result.status, 'completed'); assert.notEqual(result.page.id, originalPage); assert.notEqual(result.exportDirectory, original.exportDirectory);
+  assert.deepEqual(f.calls, ['write']); assert.deepEqual(stages, ['vision', 'distil']);
+  assert.equal(fs.readFileSync(indexFile, 'utf8'), before); assert.equal(original.analyses[document.nodes[0].id].vision.text, '画面版本 1');
+  assert.ok(video.path.startsWith(result.exportDirectory + path.sep)); assert.equal(fs.readFileSync(video.path, 'utf8'), 'fixture');
+  const plan = f.saved.at(-1), linked = plan.blocks.find(block => block.paragraph?.rich_text.some(span => span.text.link?.url.endsWith(originalPage.replaceAll('-', ''))));
+  assert.ok(linked); assert.equal(plan.blocks.some(block => block.type === 'video'), false); assert.equal(plan.blocks.some(block => block.paragraph?.rich_text.some(span => /处理未完成/.test(span.text.content))), false);
+  assert.match(fs.readFileSync(path.join(result.exportDirectory, '画面与视频制作拆解.md'), 'utf8'), /复现字幕动画/);
+  const duplicate = f.service.redistill({ id, preference: '重点讲字幕动画', visionEngine: 'local' }); assert.equal(duplicate.existing, true); assert.equal(duplicate.id, result.id);
+});
+
+test('retained local materials can be redistilled after completed history is cleared and after restarting', async t => {
+  const document = normalizeDocument({ title: '保留的视频', url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
+  const f = fixture(t, { document, extraction: { run: async () => ({ name: '画面与视频制作拆解', key: 'style', text: '本地视频制作拆解' }) } });
+  f.service.settings = preferences({ keepHistory: false }, f.service.settings);
+  const { jobs: [{ id }] } = await f.service.create({ input: document.url, options: { keepLocal: true } }); await idle(f.service);
+  const original = f.service.jobs.get(id), directory = original.exportDirectory;
+  assert.equal(original.historyCleared, true); assert.equal(f.service.status().jobs.length, 0); assert.equal(f.service.status().latestCompletion.canRedistill, true);
+  const fromReceipt = f.service.redistill({ id }); await idle(f.service); assert.equal(f.service.jobs.get(fromReceipt.id).status, 'completed');
+  await f.service.close();
+  const restarted = new CollectionService({ root: f.root, downloadsDirectory: path.join(f.root, 'Downloads'), binaries: { status: () => ({}) },
+    browser: { inspect: async () => { throw Error('must not fetch source'); } }, notion: f.service.notion, media: f.service.media, extraction: f.service.extractor }); t.after(() => restarted.close());
+  assert.equal(restarted.jobs.size, 0); f.calls.length = 0;
+  const response = await restarted.request('redistill', { directory }); assert.equal(response.ok, true); await idle(restarted);
+  const report = restarted.jobs.get(response.result.id); assert.equal(report.status, 'completed'); assert.deepEqual(f.calls, ['vision', 'write']);
+  assert.equal(fs.existsSync(path.join(directory, 'content.json')), true);
+});
+
+test('older archives recover media metadata locally and reuse text when their old frame paths no longer exist', async t => {
+  const document = normalizeDocument({ title: '旧版资料', url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
+  const f = fixture(t, { document, extraction: { run: async (job, nodes) => {
+    assert.equal(job.analyses[nodes[0].id].ocr.text, '保留的OCR文字'); return { text: '旧资料的新制作拆解', name: '画面与视频制作拆解' };
+  } } });
+  const { jobs: [{ id }] } = await f.service.create({ input: document.url, options: { keepLocal: true } }); await idle(f.service);
+  const job = f.service.jobs.get(id), file = path.join(job.exportDirectory, 'content.json'), archive = JSON.parse(fs.readFileSync(file));
+  delete archive.assets; delete archive.destination;
+  archive.analyses[document.nodes[0].id].ocr = { text: '保留的OCR文字', frames: [{ frame: 'Z:\\missing\\frame.jpg', time: 0 }], recognizedFramePaths: ['Z:\\missing\\frame.jpg'] };
+  fs.writeFileSync(file, JSON.stringify(archive)); let probes = 0;
+  f.service.media.probe = async () => { probes++; return { duration: 10, video: true, audio: true }; };
+  f.calls.length = 0;
+  const created = f.service.redistill({ directory: job.exportDirectory, destination: f.destination }); await idle(f.service);
+  const result = f.service.jobs.get(created.id); assert.equal(result.status, 'completed'); assert.equal(probes, 1); assert.deepEqual(f.calls, ['vision', 'write']);
+  assert.equal(result.analyses[document.nodes[0].id].ocr.frames, undefined);
+});
+
+test('a failed new visual pass blocks distillation, and retries reuse each completed stage and the source archive', async t => {
+  const document = normalizeDocument({ title: '重试样片', url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
+  let redistilling = false, visualAttempts = 0, distilAttempts = 0;
+  const f = fixture(t, { document, media: { vision: async () => {
+    if (redistilling && ++visualAttempts === 1) throw Error('画面识别暂时失败'); return { text: '新画面证据' };
+  } }, extraction: { run: async () => { if (++distilAttempts === 1) throw Error('蒸馏暂时失败'); return { text: '制作拆解成功', name: '画面与视频制作拆解' }; } } });
+  const { jobs: [{ id }] } = await f.service.create({ input: document.url, options: { keepLocal: true } }); await idle(f.service);
+  const source = f.service.jobs.get(id), before = fs.readFileSync(path.join(source.exportDirectory, 'content.json'), 'utf8');
+  redistilling = true; f.calls.length = 0;
+  const created = f.service.redistill({ id }); await idle(f.service); const result = f.service.jobs.get(created.id);
+  assert.equal(result.status, 'partial'); assert.equal(result.extraction.stage, 'vision'); assert.equal(distilAttempts, 0); assert.equal(result.page, undefined);
+  f.service.retry(result.id); await idle(f.service); assert.equal(result.status, 'partial'); assert.equal(distilAttempts, 1); assert.equal(result.page, undefined);
+  f.service.retry(result.id); await idle(f.service); assert.equal(result.status, 'completed'); assert.equal(visualAttempts, 2); assert.equal(distilAttempts, 2); assert.deepEqual(f.calls, ['write']);
+  assert.equal(fs.readFileSync(path.join(source.exportDirectory, 'content.json'), 'utf8'), before);
+});
+
+test('redistillation rejects missing, changed, and escaped media paths without downloading or creating a report', async t => {
+  const document = normalizeDocument({ title: '完整性核对', url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
+  const f = fixture(t, { document });
+  const { jobs: [{ id }] } = await f.service.create({ input: document.url, options: { keepLocal: true } }); await idle(f.service);
+  const original = f.service.jobs.get(id), index = path.join(original.exportDirectory, 'content.json'), saved = JSON.parse(fs.readFileSync(index)), video = original.resources[document.nodes[0].id].asset.path;
+  f.calls.length = 0;
+  for (const invalid of ['../outside.mp4', video, '素材/missing.mp4']) {
+    const archive = structuredClone(saved); archive.files[document.nodes[0].id] = invalid; fs.writeFileSync(index, JSON.stringify(archive));
+    assert.equal((await f.service.request('redistill', { directory: original.exportDirectory })).ok, false);
+  }
+  fs.writeFileSync(index, JSON.stringify(saved)); fs.appendFileSync(video, 'changed');
+  const changed = await f.service.request('redistill', { id }); assert.equal(changed.ok, false); assert.match(changed.error, /本地视频已改变/);
+  assert.deepEqual(f.calls, []); assert.equal(f.service.jobs.size, 1);
+});
+
+test('redistillation requires preserved local materials and never treats a cleared cache as a new download request', async t => {
+  const document = normalizeDocument({ title: '已清理', url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
+  const f = fixture(t, { document });
+  const { jobs: [{ id }] } = await f.service.create({ input: document.url }); await idle(f.service); f.calls.length = 0;
+  const result = await f.service.request('redistill', { id }); assert.equal(result.ok, false); assert.match(result.error, /取消勾选「不保留本地资料」/); assert.deepEqual(f.calls, []);
+});
+
+test('the actual style extractor and a restarted write retry reuse completed evidence and keep the local style report', async t => {
+  const document = normalizeDocument({ title: '本地重蒸馏', url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
+  const prompts = [], provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate({ messages }) {
+    prompts.push(messages); yield '## 原片效果怎么做\n基于采样画面拆解字幕布局。\n## 展开细节\n### 详情｜技术实现\n按证据制作小样。';
+  } };
+  const f = fixture(t, { document, provider });
+  const { jobs: [{ id }] } = await f.service.create({ input: document.url, options: { keepLocal: true } }); await idle(f.service);
+  const write = f.service.notion.write;
+  f.service.notion.write = async () => { throw Error('Notion 写入暂时失败'); };
+  const created = f.service.redistill({ id, preference: '把字幕布局迁移到我的视频' }); await idle(f.service);
+  const result = f.service.jobs.get(created.id); assert.equal(result.status, 'failed'); assert.equal(result.extraction.key, 'style');
+  assert.ok(prompts.some(messages => messages.some(message => message.content?.includes('## 蒸馏到我的视频'))));
+  const generated = prompts.length; assert.ok(generated > 0); await f.service.close();
+  const restarted = new CollectionService({ root: f.root, downloadsDirectory: path.join(f.root, 'Downloads'), provider,
+    binaries: { status: () => ({}) }, browser: {}, media: f.service.media, notion: { ...f.service.notion, write } }); t.after(() => restarted.close());
+  f.calls.length = 0; restarted.retry(created.id); await idle(restarted);
+  const completed = restarted.jobs.get(created.id); assert.equal(completed.status, 'completed'); assert.equal(prompts.length, generated); assert.deepEqual(f.calls, ['write']);
+  assert.match(fs.readFileSync(path.join(completed.exportDirectory, '画面与视频制作拆解.md'), 'utf8'), /按证据制作小样/);
+});
+
 test('selecting both creates two documents, shares media, and recovers the second page after interruption', async t => {
   const document = normalizeDocument({ title: '双向样片', url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
   let contentCalls = 0, styleCalls = 0;

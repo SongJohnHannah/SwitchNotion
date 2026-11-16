@@ -1,6 +1,7 @@
 'use strict';
 const api = window.collection, $ = id => document.getElementById(id);
 let state, chosen, expanded = false, activePanel = 'destination', selectedJob, destinationResults = [], cursors = {}, searchTimer, refreshTimer, searchVersion = 0, checkingAccounts = false;
+let redistillSource;
 const names = { paragraph: '正文', heading: '标题', quote: '引用', list: '列表', code: '代码', divider: '分隔', link: '链接', image: '图片', video: '视频', audio: '音频' };
 const statuses = { queued: '等待中', reading: '识别中', downloading: '下载中', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需检查原网页', completed: '已保存', partial: '处理未完成', failed: '失败', cancelled: '已停止', interrupted: '可继续' };
 const active = ['queued', 'reading', 'downloading', 'processing', 'uploading', 'saving'];
@@ -46,6 +47,7 @@ async function refresh() {
   $('result-link').hidden = !state.latestCompletion;
   $('last-result').hidden = !!state.latestCompletion?.pages?.length;
   $('last-report-links').replaceChildren(...reportLinks(state.latestCompletion));
+  $('last-redistill').hidden = !state.latestCompletion?.canRedistill;
   $('components').textContent = (state.binaries.downloader ? '下载器已就绪' : '下载器待准备') + ' · ' + (state.binaries.ffmpeg ? '媒体处理已就绪' : '媒体处理待准备') + (state.lastError ? ' · ' + state.lastError : '');
   $('prepare').disabled = state.preparing;
   $('local-directory').textContent = '本地资料保存到：' + (state.settings.outputDirectory || state.defaultDownloadDirectory || '系统下载目录 / NotionSwitch') + ' / 链接标题';
@@ -144,6 +146,7 @@ function renderTasks() {
     if (job.pages?.length) actions.append(...reportLinks(job));
     else if (job.page) actions.append(button('打开 Notion ↗', () => request('open-page', { id: job.id })));
     if (job.status === 'completed' && !job.local) actions.append(button('重新收集为新记录', async () => { await request('create', { input: job.url, options: { ...readOptions(), extraction: job.options.extraction, vision: job.options.vision }, force: true }); await refresh(); }));
+    if (job.canRedistill) actions.append(button('按视频制作再蒸馏', () => openRedistill({ id: job.id, title: job.title })));
     if (active.includes(job.status)) actions.append(button('停止', async () => { await request('cancel', { id: job.id }); await refresh(); }));
     if (['failed', 'partial', 'cancelled', 'interrupted', 'needs_login'].includes(job.status)) actions.append(button('继续／重试', async () => { await request('retry', { id: job.id }); await refresh(); }));
     if (job.canDelete) {
@@ -255,6 +258,27 @@ async function openPrompts() {
   await api.request('expand', { expanded: true });
   if (!$('prompt-dialog').open) { $('prompt-dialog').showModal(); $('extraction-content').focus(); }
 }
+async function openRedistill(source) {
+  if ($('redistill-dialog').open) return;
+  if (!state) await refresh();
+  redistillSource = source; $('redistill-form').reset();
+  $('redistill-source').textContent = source.title || source.directory;
+  await api.request('expand', { expanded: true });
+  $('redistill-dialog').showModal(); $('redistill-preference').focus();
+}
+$('redistill-local').addEventListener('click', () => void request('local-collection').then(result => result.path && openRedistill({ directory: result.path })).catch(() => {}));
+$('last-redistill').addEventListener('click', () => state.latestCompletion && void openRedistill({ id: state.latestCompletion.id, title: state.latestCompletion.title }).catch(() => {}));
+for (const id of ['redistill-close', 'redistill-cancel']) $(id).addEventListener('click', () => $('redistill-dialog').close());
+$('redistill-dialog').addEventListener('close', () => { void api.request('expand', { expanded }); });
+$('redistill-form').addEventListener('submit', async event => {
+  event.preventDefault(); if (!redistillSource || $('redistill-start').disabled) return;
+  $('redistill-start').disabled = true;
+  try {
+    const input = { ...(redistillSource.id ? { id: redistillSource.id } : { directory: redistillSource.directory }), preference: $('redistill-preference').value.trim(), destination: chosen, visionEngine: readOptions().visionEngine };
+    const result = await request('redistill', input);
+    $('redistill-dialog').close(); await refresh(); message(result.message);
+  } catch {} finally { $('redistill-start').disabled = false; }
+});
 function closePrompts() { $('prompt-dialog').close(); }
 const extractionChoices = ['extraction-content', 'extraction-style', 'extraction-both'];
 function updateExtractionChoices() {

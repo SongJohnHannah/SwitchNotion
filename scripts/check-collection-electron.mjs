@@ -14,7 +14,7 @@ for (const item of fs.readdirSync(runtime, { withFileTypes: true })) {
 const main = `const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
-const {app,BrowserWindow,globalShortcut,Menu,MenuItem,ipcMain} = require('electron');
+const {app,BrowserWindow,globalShortcut,Menu,MenuItem,ipcMain,dialog} = require('electron');
 const project = ${JSON.stringify(project)}, directory = ${JSON.stringify(stage)};
 app.disableHardwareAcceleration();app.setName('Switch Notion Collection QA');
 fs.mkdirSync(path.join(directory,'profile'),{recursive:true});app.setPath('userData',path.join(directory,'profile'));
@@ -37,6 +37,10 @@ app.whenReady().then(async()=>{
  assert.ok(globalShortcut.isRegistered(collection.service.settings.shortcut));
  await window.webContents.executeJavaScript("window.collection.request('configure',{settings:{vision:false}})");
  const changed=await window.webContents.executeJavaScript("window.collection.request('state')");assert.equal(changed.result.settings.vision,false);
+ const selectDirectory=dialog.showOpenDialog;let folderDialog;
+ try{dialog.showOpenDialog=async(owner,options)=>{assert.equal(owner,window);folderDialog=options;return {canceled:false,filePaths:[path.join(directory,'retained-video')]};};
+ const selected=await window.webContents.executeJavaScript("window.collection.request('local-collection')");assert.equal(selected.ok,true);assert.equal(selected.result.path,path.join(directory,'retained-video'));assert.deepEqual(folderDialog.properties,['openDirectory']);
+ }finally{dialog.showOpenDialog=selectDirectory;}
  fs.writeFileSync(path.join(directory,'compact.png'),(await window.webContents.capturePage()).toPNG());
  const files=[path.join(directory,'拖入 视频.mp4'),path.join(directory,'拖入 音频.m4a')];
  for(const file of files)fs.writeFileSync(file,'collection drag fixture');
@@ -56,7 +60,7 @@ app.whenReady().then(async()=>{
  await window.webContents.executeJavaScript("window.collection.request('expand',{expanded:true})");
  assert.ok(Math.abs(window.getBounds().width-620)<=2);window.close();assert.equal(window.isDestroyed(),false);assert.equal(window.isVisible(),false);
  const preferences=window.webContents.getLastWebPreferences();assert.equal(preferences.sandbox,true);assert.equal(preferences.nodeIntegration,false);assert.equal(preferences.contextIsolation,true);
- const result={ipc:true,unauthorizedWindowRejected:true,defaultVision:true,persistedVisionToggle:true,globalShortcut:true,closeKeepsWindow:true,sandbox:true,downloadWorkerNodeMode:true,nativeFilePathBridge:true,fileDropAppend:true,virtualFilePathRejected:true,fileDropDoesNotSubmit:true};
+ const result={ipc:true,unauthorizedWindowRejected:true,defaultVision:true,persistedVisionToggle:true,localRedistillFolderPicker:true,globalShortcut:true,closeKeepsWindow:true,sandbox:true,downloadWorkerNodeMode:true,nativeFilePathBridge:true,fileDropAppend:true,virtualFilePathRejected:true,fileDropDoesNotSubmit:true};
  fs.writeFileSync(path.join(directory,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));clearTimeout(deadline);app.quit();
 }).catch(error=>{console.error(error.stack);app.exit(1);});`;
 const sources = { 'package.json': JSON.stringify({ name: 'collection-qa', version: '1.0.0', main: 'main.cjs' }), 'main.cjs': main };
