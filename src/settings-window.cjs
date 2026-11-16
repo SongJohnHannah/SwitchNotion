@@ -133,7 +133,7 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
     if (resumeIds.length <= 100 && resumeIds.every(id => /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(id))) {
       for (const id of resumeIds) {
         const job = collection.service.jobs.get(id);
-        if (job && ['interrupted', 'cancelled', 'failed', 'partial', 'needs_login'].includes(job.status)) collection.service.retry(job.id);
+        if (job && ['interrupted', 'cancelled', 'failed', 'partial', 'paused', 'needs_login'].includes(job.status)) collection.service.retry(job.id);
         else if (job?.status === 'awaiting_selection' && !job.document.incomplete) collection.service.select(job.id, { ids: job.document.nodes.map(node => node.id) });
       }
     }

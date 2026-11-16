@@ -23,6 +23,7 @@ async function scrollPage() {
   // Bilibili's video page appends recommendations indefinitely; the video and
   // its description are already available once the page is ready.
   if (/(^|\.)bilibili\.com$/i.test(location.hostname) && /^\/video\/(?:BV|av)/i.test(location.pathname)) return;
+  if (/(^|\.)douyin\.com$/i.test(location.hostname) && /^\/note\/\d+\/?$/.test(location.pathname)) return;
   let last = 0;
   for (let i = 0; i < 120; i++) {
     window.scrollBy(0, innerHeight * .85);

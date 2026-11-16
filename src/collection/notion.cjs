@@ -315,6 +315,7 @@ class CollectionNotion {
     await this.createPage(job, save, signal);
     const plan = renderDocument(job.document, nodes, job.resources, job.analyses, job.warnings, job.extraction, job.layout);
     const fingerprint = hash(JSON.stringify(plan.blocks));
+    if (job.sourceRefresh?.pending && job.sourceSlots) return this.replaceCorrectedSource(job, nodes, plan, save, signal);
     if (job.writeFingerprint && job.writeFingerprint !== fingerprint && job.sourceSlots) return this.repair(job, nodes, plan, save, signal);
     if (!job.writeGroups) {
       job.writeGroups = batches(plan.blocks); job.writeAnchors = plan.anchors;
@@ -373,6 +374,79 @@ class CollectionNotion {
     }
     job.recoveredBatches ||= []; if (!job.recoveredBatches.includes(index)) job.recoveredBatches.push(index);
     return submitted.map(block => block.id);
+  }
+  async replaceCorrectedSource(job, nodes, plan, save, signal) {
+    const state = job.sourceRefresh, fingerprint = hash(JSON.stringify(plan.blocks));
+    if (!state.fingerprint) {
+      state.fingerprint = fingerprint; state.groups = batches(plan.blocks); state.written = [];
+      state.previousGroups = structuredClone(job.writeGroups); state.previousWritten = structuredClone(job.written); save();
+    }
+    if (state.fingerprint !== fingerprint) throw Error('更正后的正文在写入期间发生变化，已保留进度，未重复写入。');
+    const previous = state.previousGroups.flat(), ids = state.previousWritten.flat();
+    if (previous.length !== ids.length || new Set(ids).size !== ids.length) throw Error('旧来源的写入回执不完整，已保留页面，未自动替换。');
+    const echo = new Map(), directory = this.root && path.join(this.root, 'write-journal');
+    if (directory && fs.existsSync(directory)) for (const name of fs.readdirSync(directory).filter(name => /^content-[a-f\d]{64}\.json$/.test(name))) {
+      try {
+        const record = JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8'));
+        if (record.workspace_id === job.options.destination?.workspaceId && record.operation_scope?.startsWith('collection:' + job.id))
+          for (const block of record.response?.results || []) if (ids.includes(block.id)) echo.set(block.id, block);
+      } catch {}
+    }
+    const c = await this.connect(job.options.destination, signal, 'collection:' + job.id + ':source-check');
+    const check = async index => {
+      signal?.throwIfAborted();
+      const current = await c.session.execute('read_block', { block_id: ids[index] });
+      if (!current.block.in_trash && !current.block.archived &&
+          (![current.block.parent?.block_id, current.block.parent?.page_id].includes(job.page.id) || !await matchesWrittenBlock(c.session, current.block, previous[index], echo.get(ids[index]))))
+        throw Error('旧来源内容已被手动修改或移动，已保留修改，未自动替换。');
+      return current;
+    };
+    // Establish ownership before appending anything. Read again immediately
+    // before each revision-checked trash operation to protect concurrent edits.
+    const checked = [];
+    for (let i = 0; i < ids.length; i++) checked.push(await check(i));
+    const existing = []; let existingCursor;
+    do { const response = await c.session.execute('read_block_children', { block_id: job.page.id, ...(existingCursor ? { start_cursor: existingCursor } : {}) }); existing.push(...response.results.map(block => block.id)); existingCursor = response.next_cursor; } while (existingCursor);
+    let previousPosition = -1;
+    for (let i = 0; i < ids.length; i++) {
+      if (checked[i].block.in_trash || checked[i].block.archived) continue;
+      const at = existing.indexOf(ids[i]);
+      if (at <= previousPosition) throw Error('旧来源顺序已被手动调整，已保留修改，未自动替换。');
+      previousPosition = at;
+    }
+    const replay = { ...job, id: job.id + ':source-refresh:' + state.version, recoveredBatches: state.recoveredBatches || [] };
+    for (let i = 0; i < state.groups.length; i++) {
+      if (state.written[i]) continue;
+      job.message = `正在更正原页面的图文资料：第 ${i + 1}/${state.groups.length} 批`; save();
+      const connection = await this.connect(job.options.destination, signal, 'collection:' + replay.id + ':batch:' + i);
+      const recovered = await this.recoverBatch(connection, replay, i, state.groups[i]);
+      if (recovered) state.written[i] = recovered;
+      else {
+        const after = i ? state.written[i - 1].at(-1) : ids.filter((_id, at) => !checked[at].block.in_trash && !checked[at].block.archived).at(-1);
+        const response = await connection.session.execute('append_blocks', { block_id: job.page.id, blocks: state.groups[i], ...(after ? { after } : {}) });
+        if (!response.verified) throw Error('更正后的图文写入尚未核验，已保留回执，未重复追加。');
+        state.written[i] = response.created_block_ids;
+      }
+      state.recoveredBatches = replay.recoveredBatches; save();
+    }
+    for (let i = 0; i < ids.length; i++) {
+      const current = await check(i);
+      if (current.block.in_trash || current.block.archived) continue;
+      const response = await c.session.execute('trash_block', { block_id: ids[i], block_revision: current.block_revision });
+      if (!response.verified) throw Error('旧来源内容的替换尚未核验，已保留更正进度。');
+    }
+    const actual = []; let cursor;
+    do { const response = await c.session.execute('read_block_children', { block_id: job.page.id, ...(cursor ? { start_cursor: cursor } : {}) }); actual.push(...response.results.map(block => block.id)); cursor = response.next_cursor; } while (cursor);
+    const written = state.written.flat(); let position = -1;
+    for (const id of written) { const at = actual.indexOf(id); if (at <= position) throw Error('更正后的图文顺序尚未核验，已保留页面与进度。'); position = at; }
+    job.writeGroups = state.groups; job.written = state.written; job.writeFingerprint = fingerprint;
+    job.writeSlots = structuredClone(plan.slots); job.writeAnchors = plan.anchors;
+    job.sourceSlots = Object.fromEntries(Object.entries(plan.slots).map(([id, slot]) => [id, { ...slot, ids: written.slice(slot.start, slot.start + slot.count), original: plan.blocks.slice(slot.start, slot.start + slot.count) }]));
+    job.writeAnalyses = structuredClone(job.analyses); job.savedAnalysis = hash(JSON.stringify(job.analyses)); job.savedAnalysisItems = analysisItemHashes(job.analyses);
+    job.writeExtraction = job.savedExtraction = job.extraction?.text ? hash(JSON.stringify(job.extraction)) : '';
+    delete job.analysisBatches; delete job.extractionBatches;
+    state.pending = false; state.completedAt = new Date().toISOString(); save();
+    return this.repair(job, nodes, plan, save, signal);
   }
   async repair(job, nodes, plan, save, signal) {
     if (!job.sourceSlots) throw Error('上次写入尚未完成核验，不能自动重排内容，请检查已有页面。');

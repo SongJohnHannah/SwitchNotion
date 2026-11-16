@@ -9,6 +9,68 @@ const require = createRequire(import.meta.url);
 const { CollectionNotion, renderDocument, batches } = require('../src/collection/notion.cjs');
 const { normalizeDocument, preferences } = require('../src/collection/model.cjs');
 
+async function sourceCorrectionFixture() {
+  const store = new Map(), order = [], calls = []; let pages = 0, failTrash = 0;
+  const session = { execute: async (name, args) => {
+    calls.push(name);
+    if (name === 'create_page') { pages++; return { page_id: randomUUID(), verified: true }; }
+    if (name === 'read_page_info') return {};
+    if (name === 'append_blocks') {
+      const ids = args.blocks.map(block => { const id = randomUUID(); store.set(id, { ...structuredClone(block), id, parent: { page_id: args.block_id } }); return id; });
+      order.splice(args.after ? order.indexOf(args.after) + 1 : order.length, 0, ...ids); return { verified: true, created_block_ids: ids };
+    }
+    if (name === 'read_block_children') return { results: order.map(id => store.get(id)).filter(block => !block.in_trash), next_cursor: null };
+    if (name === 'read_block') return { block: structuredClone(store.get(args.block_id)), block_revision: 'fixture-revision' };
+    if (name === 'trash_block') { if (failTrash && --failTrash === 0) throw Error('fixture interruption'); store.get(args.block_id).in_trash = true; return { verified: true }; }
+    throw Error(name);
+  } };
+  const client = new CollectionNotion({ root: '/fixture' }); client.connect = async () => ({ session, target: { kind: 'page', id: randomUUID() } });
+  const old = normalizeDocument({ url: 'https://www.douyin.com/note/123456', nodes: [{ kind: 'paragraph', text: '旧版误采集的推荐文字' }, { kind: 'video', url: 'https://www.douyin.com/note/123456' }] });
+  const job = { id: randomUUID(), document: old, options: preferences(), resources: {}, analyses: {}, warnings: [] };
+  await client.write(job, old.nodes, () => {});
+  const oldIds = job.written.flat(), userId = randomUUID();
+  store.set(userId, { id: userId, type: 'paragraph', paragraph: { rich_text: [{ text: { content: '用户自己的备注' } }] } }); order.push(userId);
+  const updated = normalizeDocument({ sourceRevision: 'douyin-note-v1', url: old.url, nodes: [{ kind: 'paragraph', text: '更正后的图文正文' }, { kind: 'image', url: 'https://example.com/gallery.jpg' }] });
+  job.document = updated; job.sourceRefresh = { version: 'douyin-note-v1', pending: true };
+  job.resources = { [updated.nodes[1].id]: { uploads: [{ id: randomUUID(), uploaded: true }] } };
+  return { client, job, store, order, calls, oldIds, userId, visible: () => order.map(id => store.get(id)).filter(block => !block.in_trash), pages: () => pages, interrupt: () => { failTrash = 2; } };
+}
+
+test('corrected source replaces only the original owned content on the same page and is idempotent', async () => {
+  const f = await sourceCorrectionFixture();
+  await f.client.write(f.job, f.job.document.nodes, () => {});
+  assert.ok(f.oldIds.every(id => f.store.get(id).in_trash)); assert.equal(f.pages(), 1);
+  assert.ok(f.visible().some(block => block.id === f.userId)); assert.equal(f.visible().filter(block => block.type === 'image').length, 1);
+  assert.equal(f.job.sourceRefresh.pending, false); assert.equal(Object.keys(f.job.sourceSlots).length, 2);
+  const appends = f.calls.filter(name => name === 'append_blocks').length;
+  await f.client.write(f.job, f.job.document.nodes, () => {});
+  assert.equal(f.calls.filter(name => name === 'append_blocks').length, appends);
+});
+
+test('source correction stops before writing when original owned content was manually edited', async () => {
+  const f = await sourceCorrectionFixture(), changed = f.store.get(f.oldIds[0]);
+  changed.paragraph.rich_text = [{ text: { content: '手动编辑的来源内容' } }];
+  const appends = f.calls.filter(name => name === 'append_blocks').length;
+  await assert.rejects(f.client.write(f.job, f.job.document.nodes, () => {}), /手动修改/);
+  assert.ok(f.oldIds.every(id => !f.store.get(id).in_trash)); assert.equal(f.calls.filter(name => name === 'append_blocks').length, appends);
+});
+
+test('source correction resumes interrupted cleanup without appending another copy', async () => {
+  const f = await sourceCorrectionFixture(); f.interrupt();
+  await assert.rejects(f.client.write(f.job, f.job.document.nodes, () => {}), /fixture interruption/);
+  const appends = f.calls.filter(name => name === 'append_blocks').length;
+  await f.client.write(f.job, f.job.document.nodes, () => {});
+  assert.equal(f.calls.filter(name => name === 'append_blocks').length, appends);
+  assert.ok(f.oldIds.every(id => f.store.get(id).in_trash)); assert.ok(f.visible().some(block => block.id === f.userId));
+});
+
+test('source correction preserves manually reordered owned content before any new write', async () => {
+  const f = await sourceCorrectionFixture(); [f.order[0], f.order[1]] = [f.order[1], f.order[0]];
+  const appends = f.calls.filter(name => name === 'append_blocks').length;
+  await assert.rejects(f.client.write(f.job, f.job.document.nodes, () => {}), /手动/);
+  assert.ok(f.oldIds.every(id => !f.store.get(id).in_trash)); assert.equal(f.calls.filter(name => name === 'append_blocks').length, appends);
+});
+
 test('a creation interrupted before verification recovers the same independently matching page and never submits another create', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'collection-recover-'));
   t.after(() => fs.rmSync(root, { recursive: true }));

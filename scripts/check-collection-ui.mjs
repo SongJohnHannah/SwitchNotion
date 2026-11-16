@@ -27,6 +27,17 @@ try {
   assert.deepEqual(doc.nodes.map(n => n.kind), ['heading', 'paragraph', 'image', 'paragraph', 'video', 'paragraph', 'audio', 'paragraph']);
   assert.equal(doc.nodes.at(-1).text, long); assert.equal(doc.nodes[2].caption, '对应的图片说明');
   assert.equal(doc.nodes[1].spans.find(s => s.href).href, 'https://example.com/reference');
+  await page.route('https://www.douyin.com/**', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body:
+    '<html><head><title>图文分享</title><meta property="og:type" content="video"></head><body><main><section data-e2e="note-detail"><h1>图文教程</h1><p data-e2e="video-desc">目标图文正文</p><p>1/2</p><div><div class="dySwiperSlide"><img width="800" height="600" src="https://collection-fixture.example/note-1.jpg"><img width="800" height="600" src="https://collection-fixture.example/note-1.jpg?duplicate=1"></div><div class="dySwiperSlide"><img width="800" height="600" src="https://collection-fixture.example/note-2.jpg"></div></div><section data-e2e="recommend-list"><p>不应收集的推荐</p><video src="https://collection-fixture.example/recommended.mp4"></video><img width="800" height="600" src="https://collection-fixture.example/recommend.jpg"></section></section></main></body></html>' }));
+  await page.goto('https://www.douyin.com/note/1234567890123456789');
+  const note = normalizeDocument(await page.evaluate(extractPage));
+  assert.equal(note.nodes.some(node => node.kind === 'video'), false, 'a Douyin note and its recommended player must not become a video download');
+  assert.deepEqual(note.nodes.filter(node => node.kind === 'image').map(node => node.url), ['https://collection-fixture.example/note-1.jpg', 'https://collection-fixture.example/note-2.jpg']);
+  assert.ok(note.nodes.some(node => node.text === '目标图文正文')); assert.ok(note.nodes.every(node => !node.text?.includes('不应收集的推荐')));
+  await page.evaluate(() => { const frame = document.createElement('iframe'); frame.id = 'captcha-fixture'; frame.src = 'about:blank#verifycenter/captcha'; frame.style.display = 'none'; document.body.append(frame); });
+  assert.equal((await page.evaluate(extractPage)).requiresLogin, false, 'hidden verification workers must not block a complete note');
+  await page.evaluate(() => { const frame = document.getElementById('captcha-fixture'); frame.style.display = 'block'; frame.style.position = 'fixed'; frame.style.top = '0'; frame.style.width = '300px'; frame.style.height = '200px'; });
+  assert.equal((await page.evaluate(extractPage)).requiresLogin, true, 'an actual visible verification challenge must remain incomplete');
   const workspaceId = '11111111-1111-4111-8111-111111111111', id = '22222222-2222-4222-8222-222222222222';
   const destination = { workspaceId, id, kind: 'database', dataSourceId: '33333333-3333-4333-8333-333333333333', workspaceName: 'openClaw', label: '资料收集' };
   const fixture = { settings: preferences({ destination, favorites: [destination, { ...destination, id: '44444444-4444-4444-8444-444444444444', label: '视频笔记', kind: 'page' }] }), active: 1, binaries: { downloader: true, ffmpeg: true }, jobs: [

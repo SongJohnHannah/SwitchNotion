@@ -77,7 +77,7 @@ function normalizeDocument(value) {
     if (n.expectedAudio === true) node.expectedAudio = true;
     return node;
   });
-  return { title, ...(titleSource ? { titleSource } : {}), url: sourceUrl, author: String(value.author || '').slice(0, 200), nodes,
+  return { title, ...(titleSource ? { titleSource } : {}), ...(value.sourceRevision === 'douyin-note-v1' ? { sourceRevision: value.sourceRevision } : {}), url: sourceUrl, author: String(value.author || '').slice(0, 200), nodes,
     warnings: [...new Set([...(Array.isArray(value.warnings) ? value.warnings.map(String) : []), ...(value.nodes.length > 5000 ? ['正文超过 5000 项，尚未完整获取。'] : [])])],
     requiresLogin: value.requiresLogin === true, incomplete: value.incomplete === true || value.nodes.length > 5000 };
 }

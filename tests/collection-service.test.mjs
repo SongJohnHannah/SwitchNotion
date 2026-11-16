@@ -36,6 +36,35 @@ async function until(check) { for (let n = 0; n < 600; n++) { if (check()) retur
 function gate() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 const sourceDocument = url => normalizeDocument({ title: '队列样片', url, nodes: [{ kind: 'video', url: url + '/video.mp4' }] });
 
+test('retry refreshes legacy Douyin notes and reuses matching image assets while retaining a source-repair checkpoint', async t => {
+  const url = 'https://www.douyin.com/note/1234567890123456789';
+  const old = normalizeDocument({ sourceRevision: 'douyin-note-v1', url, nodes: [{ kind: 'paragraph', text: '推荐界面文字' }, { kind: 'image', url: 'https://example.com/one.jpg?old=1' }, { kind: 'video', url, platform: 'douyin' }] });
+  const corrected = normalizeDocument({ sourceRevision: 'douyin-note-v1', url, nodes: [{ kind: 'paragraph', text: '真实图文正文' }, { kind: 'image', url: 'https://example.com/one.jpg?new=1' }] });
+  const f = fixture(t, { document: old });
+  await f.service.create({ input: url }); await idle(f.service);
+  const job = [...f.service.jobs.values()][0], image = old.nodes[1], asset = job.resources[image.id].asset;
+  fs.mkdirSync(path.dirname(asset.path), { recursive: true }); fs.writeFileSync(asset.path, 'fixture');
+  job.status = 'partial'; job.document.sourceRevision = undefined;
+  f.service.browser.inspect = async () => corrected;
+  const downloads = f.calls.filter(call => call.startsWith('download:')).length;
+  f.service.retry(job.id); await idle(f.service);
+  assert.equal(job.document.sourceRevision, 'douyin-note-v1'); assert.equal(job.document.nodes.filter(node => node.kind === 'video').length, 0);
+  assert.equal(job.document.nodes.find(node => node.kind === 'image').id, image.id);
+  assert.equal(job.resources[image.id].asset.path, asset.path); assert.equal(f.calls.filter(call => call.startsWith('download:')).length, downloads);
+  assert.equal(job.sourceRefresh.pending, true); assert.ok(fs.existsSync(path.join(f.service.location(job), 'source-before-douyin-note-v1.local.json')));
+});
+
+test('media process failures retain a useful sanitized cause instead of an unrelated network-and-components message', async t => {
+  const f = fixture(t, { document: sourceDocument('https://example.com/broken-media'), media: {
+    prepareUpload: async () => { throw Error('ffmpeg exited with code 1: Invalid data found when processing input'); }
+  } });
+  const { jobs } = await f.service.create({ input: 'https://example.com/broken-media' }); await idle(f.service);
+  const job = f.service.jobs.get(jobs[0].id);
+  assert.equal(job.status, 'partial');
+  assert.match(Object.values(job.resources)[0].error, /媒体处理失败.*ffmpeg.*Invalid data/);
+  assert.doesNotMatch(job.warnings.join('\n'), /操作未完成，请检查网络与组件状态/);
+});
+
 test('bulk pause stops both queues and bulk resume reuses completed downloads and transcription in source order', async t => {
   const f = fixture(t), acquire = f.service.media.acquire, vision = f.service.media.vision;
   const downloads = [], transcripts = [], writes = []; let blocked = true;

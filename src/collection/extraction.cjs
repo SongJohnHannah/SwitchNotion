@@ -261,7 +261,8 @@ class CollectionExtraction {
       }
       if (!visual && sampledVideo && needsEvidenceReview(source, report.text)) {
         progress('正在核对终稿的步骤、图表归属和陪练来源…');
-        report = await reviewContentEvidence({ source, draft: report.text, chartProof: frameVerification?.chartProof, sourceRule: hasTranscript ? '' : noTranscriptRule, prepare,
+        const reviewSource = Math.ceil(Buffer.byteLength(material + report.text, 'utf8') / 2) < 450000 ? material : source;
+        report = await reviewContentEvidence({ source: reviewSource, groundingSource: material, draft: report.text, chartProof: frameVerification?.chartProof, sourceRule: hasTranscript ? '' : noTranscriptRule, prepare,
           validSources: text => !unsupportedSpeech(text, hasTranscript), generate });
       }
       const stale = visual ? staleFrameClaims(report.text, frameVerification) : [];
@@ -285,9 +286,26 @@ class CollectionExtraction {
       save();
     }
     let parts = checkpoint.parts.map((text, index) => ({ text, hasTranscript: chunks[index].hasTranscript }));
+    // Reserve the 384K response budget and prompt overhead inside the 1M
+    // context. UTF-8/2 matches the conservative estimate used by the agent.
+    const tokens = text => Math.ceil(Buffer.byteLength(text, 'utf8') / 2);
+    const mergeBudget = 500000, singleBudget = 240000;
+    let rounds = 0;
     while (parts.length > 1) {
+      const bounded = [];
+      for (const part of parts) {
+        if (tokens(part.text) <= singleBudget) { bounded.push(part); continue; }
+        progress('正在归并较长的证据笔记，保留来源与步骤…');
+        for (let offset = 0; offset < part.text.length; offset += chunkSize) {
+          const source = part.text.slice(offset, offset + chunkSize);
+          const compact = await generateNotes(source, '这是中间合并，只整理当前证据。合并重复表述，保留原文步骤、数值、命令与来源，不扩写已有资料。', part.hasTranscript);
+          // An expanded rewrite cannot make a valid original evidence segment
+          // unusable. Retain that complete segment rather than truncating it.
+          bounded.push({ text: tokens(compact) <= singleBudget ? compact : source, hasTranscript: part.hasTranscript });
+        }
+      }
       const groups = []; let group = [], size = 0;
-      for (const part of parts) { if (group.length && size + part.text.length > 50000) { groups.push(group); group = []; size = 0; } group.push(part); size += part.text.length; } if (group.length) groups.push(group);
+      for (const part of bounded) { const cost = tokens(part.text) + 2; if (group.length && size + cost > mergeBudget) { groups.push(group); group = []; size = 0; } group.push(part); size += cost; } if (group.length) groups.push(group);
       const isFinal = groups.length === 1;
       const next = [];
       for (const group of groups) {
@@ -298,7 +316,9 @@ class CollectionExtraction {
           await generateNotes(source, '这是中间合并，只覆盖部分已选素材。合并去重，保留来源位置和关键差异。', includesTranscript);
         next.push({ text, hasTranscript: includesTranscript });
       }
-      if (next.length >= parts.length) throw Error('提取结果过长，已保留分段进度；请缩短模板后重新收集。'); parts = next;
+      if (++rounds > 12 || next.length >= parts.length && next.reduce((total, part) => total + tokens(part.text), 0) >= parts.reduce((total, part) => total + tokens(part.text), 0))
+        throw Error('DeepSeek 合并证据时持续扩写，已保留分段进度；请继续以重新归并当前证据。');
+      parts = next;
     }
     let text = sampledVideo ? qualifySampledCuts(parts[0].text) : parts[0].text;
     if (visual && /^## 蒸馏到我的视频$/m.test(text)) {

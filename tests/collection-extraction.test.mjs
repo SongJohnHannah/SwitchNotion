@@ -122,7 +122,7 @@ test('long article batches produce intermediate notes before the single final re
     if (prompt.includes('个素材片段。')) {
       assert.match(messages[0].content, /只输出证据笔记/);
       assert.doesNotMatch(messages[0].content, /从二级标题开始/);
-      phases.push('fragment'); yield '- ' + '证据'.repeat(9000);
+      phases.push('fragment'); yield '- ' + '证据'.repeat(20000);
     } else if (prompt.includes('这是中间合并')) {
       assert.match(messages[0].content, /只输出证据笔记/);
       phases.push('intermediate'); yield '- 待汇总的证据';
@@ -132,11 +132,56 @@ test('long article batches produce intermediate notes before the single final re
       phases.push('final'); yield '## 专业结论\n核心结论\n## 展开细节\n### 详情｜去口水话精简稿\n- 按原顺序的精简稿';
     }
   } };
-  const document = normalizeDocument({ url: 'https://example.com/article', nodes: [{ kind: 'paragraph', text: '完整原文'.repeat(14000) }] });
+  const document = normalizeDocument({ url: 'https://example.com/article', nodes: [{ kind: 'paragraph', text: '完整原文'.repeat(52500) }] });
   const job = { options: preferences(), document, analyses: {} };
   const result = await new CollectionExtraction({ provider }).run(job, document.nodes);
-  assert.deepEqual(phases, ['fragment', 'fragment', 'fragment', 'intermediate', 'final']);
+  assert.deepEqual(phases, [...Array(10).fill('fragment'), 'intermediate', 'intermediate', 'final']);
   assert.match(result.text, /按原顺序的精简稿/);
+});
+
+test('long evidence notes still merge to a complete report when every note exceeds the old merge threshold', async () => {
+  const phases = [], provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate({ messages }) {
+    if (messages[1].content.includes('个素材片段。')) { phases.push('fragment'); yield '- ' + '证据'.repeat(30000); }
+    else if (messages[0].content.includes('当前阶段为最终成稿')) { phases.push('final'); yield '## 专业结论\n完整结果\n## 展开细节\n### 详情｜去口水话精简稿\n- 原文末尾证据已保留'; }
+    else { phases.push('intermediate'); yield '- 合并后的原文证据'; }
+  } };
+  const document = normalizeDocument({ url: 'https://example.com/article', nodes: [{ kind: 'paragraph', text: '原文'.repeat(15000) }] });
+  const job = { options: preferences(), document, analyses: {} };
+  const result = await new CollectionExtraction({ provider }).run(job, document.nodes);
+  assert.match(result.text, /原文末尾证据已保留/); assert.equal(phases.at(-1), 'final');
+  assert.equal(job.extractionWork.parts.length, 2);
+});
+
+test('evidence ledgers accept literal source brackets and omitted optional fields without weakening quote grounding', async () => {
+  const { reviewContentEvidence } = require('../src/collection/evidence-review.cjs');
+  const { prepareReport } = require('../src/collection/report-markdown.cjs');
+  const source = '关键帧文字：\n第一，点击 [合成] 菜单。\n第二，无法辨认。';
+  const draft = '## 专业结论\n按两步完成设置。\n## 展开细节\n### 详情｜实操复刻步骤与避坑清单\n- 第一步，点击 [合成] 菜单。';
+  let calls = 0;
+  const result = await reviewContentEvidence({ source, draft, prepare: text => prepareReport(text, { visual: false, hasReadableText: true, sourceIds: new Set() }),
+    validSources: () => true, generate: async messages => {
+      calls++;
+      return messages[0].content.includes('从原始素材提取证据清单') ? JSON.stringify({ declaredSteps: 2, steps: [{ number: 1, quote: '点击 [合成] 菜单。' }] }) : JSON.stringify({ markdown: draft, practice: '' });
+    } });
+  assert.match(result.text, /点击 \[合成\] 菜单/); assert.match(result.text, /第 2 步的具体动作 \[待核实\]/); assert.equal(calls, 2);
+});
+
+test('evidence review checks original material separately from condensed notes and treats unmatched items as gaps', async () => {
+  const { reviewContentEvidence } = require('../src/collection/evidence-review.cjs');
+  const { prepareReport } = require('../src/collection/report-markdown.cjs');
+  const source = '关键帧文字：\n- 摘要提到两步设置，具体按钮文字被压缩。';
+  const groundingSource = '关键帧文字：\n第一，点击 [合成] 菜单。\n第二，无法辨认。';
+  const draft = '## 专业结论\n两步设置。\n## 展开细节\n### 详情｜实操复刻步骤与避坑清单\n- 先设置界面。';
+  const result = await reviewContentEvidence({ source, groundingSource, draft,
+    prepare: text => prepareReport(text, { visual: false, hasReadableText: true, sourceIds: new Set() }), validSources: () => true,
+    generate: async messages => {
+      if (messages[0].content.includes('从原始素材提取证据清单')) return JSON.stringify({ declaredSteps: 2,
+        steps: [{ number: 1, quote: '点击 [合成] 菜单。' }, { number: 2, quote: '删除所有项目' }], groupProof: ['不存在的分组结论'], completeGroupProof: '不存在的分组结论' });
+      assert.doesNotMatch(messages[2].content, /删除所有项目|不存在的分组结论/);
+      return JSON.stringify({ markdown: draft });
+    } });
+  assert.match(result.text, /原片第 1 步.*点击 \[合成\] 菜单/);
+  assert.match(result.text, /原片第 2 步的具体动作 \[待核实\]/); assert.doesNotMatch(result.text, /删除所有项目/);
 });
 
 test('media continuations carry the original asset and field when their source markers are in an earlier chunk', async () => {

@@ -16,14 +16,16 @@ const { parseInputs, describeLocal, checkLocal, localDocument, isLikelyVideoInpu
 const { clearCompleted, ownedExport } = require('./history.cjs');
 const { prepareLocalOutput, writeLocalOutput } = require('./local-output.cjs');
 const { loadLocalCollection, checkRetainedAsset, inside } = require('./reprocessing.cjs');
+const { downloadDetail } = require('./download-error.cjs');
 const activeStates = new Set(['queued', 'reading', 'downloading', 'waiting_processing', 'processing', 'uploading', 'saving']);
 const resumableStates = new Set(['failed', 'partial', 'cancelled', 'interrupted', 'paused', 'needs_login']);
 const deletableStates = new Set([...resumableStates, 'awaiting_selection']);
 const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.visionEngine, options.compress, options.quality, options.keepLocal, options.extraction, ...(options.extraction.mode !== 'off' ? ['separate-reports-v1', ...(options.denseOcr ? ['dense-ocr'] : [])] : [])]));
-const safeError = error => {
-  const text = String(error?.message || '操作未完成，请检查连接后重试。');
+const safeError = (error, prefix = '处理失败') => {
+  const text = [String(error?.message || '操作未完成，请检查连接后重试。'), typeof error?.stderr === 'string' ? error.stderr.trim().slice(-1500) : ''].filter(Boolean).join('；');
   if (/(?:sk-|ntn_|secret_)[\w-]{8}|Bearer\s|Cookie\s*[:=]/i.test(text)) return '连接或处理失败，请在配置中检查后重试。';
-  return /^[\u3400-\u9fff]|^(Notion|DeepSeek|媒体|收集|资源|目标|此|本地|请选择|请先|无法|没有|下载)/.test(text) ? text.slice(0, 500) : '操作未完成，请检查网络与组件状态后重试。';
+  const detail = downloadDetail(text);
+  return /^[\u3400-\u9fff]|^(Notion|DeepSeek|媒体|收集|资源|目标|此|本地|请选择|请先|无法|没有|下载)/.test(detail) ? detail : prefix + '：' + detail;
 };
 class CollectionService extends EventEmitter {
   constructor({ root, downloadsDirectory = path.join(os.homedir(), 'Downloads'), speech, provider, webSources, binaries, browser, media, notion, extraction } = {}) {
@@ -211,6 +213,38 @@ class CollectionService extends EventEmitter {
   async downloadJob(job, signal) {
     const save = () => this.save(job);
     const progress = message => { job.message = message; save(); };
+    if (job.document && job.document.sourceRevision !== 'douyin-note-v1') {
+      let source; try { source = new URL(job.document.url); } catch {}
+      if (source && /(^|\.)douyin\.com$/i.test(source.hostname) && /^\/note\/\d+\/?$/.test(source.pathname)) {
+        job.status = 'reading'; progress('正在重新识别抖音图文，只保留原作品的图片与正文…');
+        const updated = await this.browser.inspect(job.document.url, { signal, progress });
+        if (updated.sourceRevision !== 'douyin-note-v1' || updated.url !== job.document.url || updated.incomplete || !updated.nodes.some(node => node.kind === 'image') || updated.nodes.some(node => node.kind === 'video'))
+          throw Error('当前抖音图文尚未完整读取，已保留原资料；请在收集浏览器中完成验证后继续。');
+        atomicJson(path.join(this.location(job), 'source-before-douyin-note-v1.local.json'), job);
+        const identity = node => {
+          if (!node.url) return node.kind + ':' + node.text;
+          const url = new URL(node.url); return node.kind + ':' + url.origin + url.pathname;
+        };
+        const previous = new Map();
+        for (const node of job.document.nodes) { const key = identity(node); if (!previous.has(key)) previous.set(key, node); }
+        const selected = job.selectedIds && new Set(job.selectedIds), nextSelected = [];
+        for (const node of updated.nodes) {
+          const old = previous.get(identity(node));
+          if (old) { node.id = old.id; if (selected?.has(old.id)) nextSelected.push(node.id); }
+        }
+        const ids = new Set(updated.nodes.map(node => node.id));
+        job.resources = Object.fromEntries(Object.entries(job.resources).filter(([id]) => ids.has(id)));
+        job.analyses = Object.fromEntries(Object.entries(job.analyses).filter(([id]) => ids.has(id)));
+        job.sourceRefresh = { version: 'douyin-note-v1', pending: !!job.page, previousTitle: job.document.title };
+        job.document = updated; job.warnings = [...updated.warnings];
+        delete job.extraction; delete job.extractionWork; delete job.classification;
+        if (selected) {
+          job.selectedIds = nextSelected;
+          if (!nextSelected.length) { job.status = 'awaiting_selection'; progress('图文内容已更正，请重新选择本次要保存的图片与正文。'); return; }
+        }
+        save();
+      }
+    }
     if (!job.document) {
       job.status = 'reading'; progress('正在识别链接中的正文、图片、视频和音频…');
       job.document = await this.browser.inspect(job.url, { signal, progress });
@@ -401,7 +435,7 @@ class CollectionService extends EventEmitter {
             if (!resource.uploads[i].uploaded) await this.notion.upload(resource.parts[i], job, resource.uploads[i], save, signal);
           }
           if (processing) { job.status = 'processing'; save(); }
-        } catch (error) { signal.throwIfAborted(); resource.error = safeError(error); save(); }
+        } catch (error) { signal.throwIfAborted(); resource.error = safeError(error, '媒体处理失败'); save(); }
       })());
     }
     await Promise.allSettled(work);

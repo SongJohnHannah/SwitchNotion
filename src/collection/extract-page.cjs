@@ -6,6 +6,36 @@ function extractPage() {
   const host = location.hostname;
   const isX = /(^|\.)(x|twitter)\.com$/.test(host);
   const platform = /(^|\.)douyin\.com$/.test(host) ? 'douyin' : /(^|\.)bilibili\.com$/.test(host) ? 'bilibili' : /(^|\.)(?:youtube\.com|youtu\.be)$/.test(host) ? 'youtube' : /(^|\.)tiktok\.com$/.test(host) ? 'tiktok' : '';
+  if (platform === 'douyin' && /^\/note\/\d+\/?$/.test(location.pathname)) {
+    const root = document.querySelector('[data-e2e="note-detail"]'), nodes = [], warnings = [];
+    const challenge = /验证码|安全验证/.test(document.title) || [...document.querySelectorAll('iframe')].some(frame => {
+      const rect = frame.getBoundingClientRect();
+      return visible(frame) && getComputedStyle(frame).opacity !== '0' && rect.width > 30 && rect.height > 30 && rect.bottom > 0 && rect.right > 0 && rect.top < innerHeight && rect.left < innerWidth && /captcha|verifycenter/.test(frame.src);
+    });
+    if (root) {
+      const description = root.querySelector('[data-e2e="video-desc"],[data-e2e="note-desc"],[data-e2e="video-description"],[style*="--lineClamp"]');
+      const text = description?.innerText?.trim() || document.querySelector('meta[property="og:description"]')?.content?.trim();
+      if (text) nodes.push({ kind: 'paragraph', text });
+      // The actual detail container also includes recommendations. Restrict
+      // media to the first carousel, including its lazy and offscreen slides.
+      const carousel = root.querySelector('.dySwiperSlide,.swiper-slide')?.parentElement;
+      const seen = new Set();
+      for (const image of carousel?.querySelectorAll('img') || []) {
+        if (image.closest('aside,[data-e2e="recommend-list"],[data-e2e="feed-active-video"],[data-e2e="user-avatar"]') || /avatar|emoji|icon/i.test(String(image.className))) continue;
+        const raw = image.getAttribute('data-original') || image.getAttribute('data-src') || image.currentSrc || image.src;
+        let url; try { url = new URL(raw, location.href); } catch { continue; }
+        if (!/^https?:$/.test(url.protocol) || url.username || url.password) continue;
+        const key = url.origin + url.pathname;
+        if (seen.has(key)) continue; seen.add(key);
+        nodes.push({ kind: 'image', url: url.href, direct: true, platform: 'douyin', caption: image.alt || '' });
+      }
+      const expected = Number(root.innerText.match(/(?:^|\n)\s*\d+\s*\/\s*(\d+)\s*(?:\n|$)/)?.[1]);
+      if (!seen.size || expected > seen.size) warnings.push('当前抖音图文的图片尚未加载完整，请在收集浏览器中检查后重新读取。');
+    } else warnings.push('尚未取得当前抖音图文详情，未将推荐或登录页面作为原文。');
+    if (challenge) warnings.push('抖音要求人工验证，请在收集浏览器中完成验证后重新读取。');
+    return { title: nodes.find(node => node.kind === 'paragraph')?.text || root?.querySelector('h1')?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.title,
+      url: location.href, nodes, sourceRevision: 'douyin-note-v1', requiresLogin: challenge, incomplete: !!warnings.length, warnings };
+  }
   const candidates = [...document.querySelectorAll(isX ? '[data-testid="twitterArticleRichTextView"],article' : 'article,[role="article"],.article-content,.post-content,.entry-content,#js_content,main,[role="main"]')].filter(visible);
   const score = el => (el.innerText || '').length - [...el.querySelectorAll('nav,aside')].reduce((n, e) => n + (e.innerText || '').length, 0);
   const articles = candidates.filter(el => el.matches('article,[role="article"],.article-content,.post-content,.entry-content,#js_content'));
