@@ -171,6 +171,7 @@ async function reviewContentEvidence({ source, groundingSource = source, draft, 
     const review = parseResponse(value);
     if (!review || typeof review.markdown !== 'string' || !review.markdown.trim()) return null;
     review.practice ??= '';
+    if (typeof review.practice === 'string') review.practice = review.practice.trim().replace(/^\[补充建议\]\s*|\s*\[补充建议\]$/g, '').trim();
     if (!inline(review.practice, 120)) return null;
     const revised = prepare(review.markdown);
     if (!revised.valid || revised.text.match(headings)?.join('\n') !== expectedHeadings) return null;
