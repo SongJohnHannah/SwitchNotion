@@ -176,10 +176,14 @@ function richTextMatches(actual, expected) {
       const url = new URL(value);
       // Notion removes this web-note attribution on topic-search links. Keep
       // the topic, type and every access/signature parameter significant.
-      if (url.origin !== 'https://www.xiaohongshu.com' || url.username || url.password || url.pathname !== '/search_result') return value;
-      const source = url.searchParams.get('source');
-      if (source && !/^web_note_detail_[\w-]+$/.test(source)) return value;
-      url.searchParams.delete('source'); return url.href;
+      if (url.origin === 'https://www.xiaohongshu.com' && !url.username && !url.password && url.pathname === '/search_result') {
+        const source = url.searchParams.get('source');
+        if (!source || /^web_note_detail_[\w-]+$/.test(source)) url.searchParams.delete('source');
+      }
+      // Notion percent-encodes query values on readback. Canonicalize the
+      // encoding without sorting, dropping values, or decoding URL paths.
+      if (url.search) url.search = url.searchParams.toString();
+      return url.href;
     } catch { return value; }
   };
   const normalized = spans => {

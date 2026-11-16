@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { NotionRouter } = require('../notion-routing.cjs');
-const { hash, destination, mediaKinds, recognitionResult, reportDetail } = require('./model.cjs');
+const { hash, destination, mediaKinds, recognitionResult, reportDetail, atomicJson } = require('./model.cjs');
 const { verificationTitle } = require('./report-markdown.cjs');
 const { matchesBlockContent } = require('../notion-blocks.cjs');
 const { canonical } = require('../notion-mutations.cjs');
@@ -409,6 +409,37 @@ class CollectionNotion {
     if (job.writeFingerprint !== fingerprint) return this.repair(job, nodes, plan, save, signal);
     return job.page;
   }
+  async appendRecoverably(c, job, blocks, after) {
+    const directory = this.root && path.join(this.root, 'write-journal');
+    const records = directory && fs.existsSync(directory) ? fs.readdirSync(directory).filter(name => /^content-[a-f\d]{64}\.json$/.test(name)).flatMap(name => {
+      try {
+        const file = path.join(directory, name), record = JSON.parse(fs.readFileSync(file, 'utf8'));
+        return record.workspace_id === job.options.destination.workspaceId && record.operation_scope === 'collection:' + job.id && record.name === 'append_blocks' && record.intended?.block_id === job.page.id &&
+          !(record.status === 'rejected' && ['rejected', 'not_submitted'].includes(record.error?.write_outcome)) ? [{ file, record }] : [];
+      } catch { return []; }
+    }) : [];
+    const matching = records.filter(({ record }) => (record.intended.after || undefined) === (after || undefined) && JSON.stringify(canonical(record.request?.body?.children)) === JSON.stringify(canonical(blocks)));
+    if (!matching.length) {
+      if (records.some(({ record }) => record.status !== 'verified')) throw Error('此前补全写入结果尚不确定，未追加不同版本。');
+      return c.session.execute('append_blocks', { block_id: job.page.id, blocks, ...(after ? { after } : {}) });
+    }
+    if (matching.length !== 1) throw Error('补全写入回执存在歧义，未重复追加。');
+    const { file, record } = matching[0], echoed = record.response?.results;
+    const ids = record.result?.created_block_ids || (!after && echoed?.length === blocks.length ? echoed.map(block => block.id) : null);
+    if (!Array.isArray(echoed) || !Array.isArray(ids) || ids.length !== blocks.length || new Set(ids).size !== blocks.length || ids.some(id => echoed.filter(block => block.id === id).length !== 1)) throw Error('补全写入回执不完整，未重复追加。');
+    const actual = []; let cursor;
+    do { const result = await c.session.execute('read_block_children', { block_id: job.page.id, ...(cursor ? { start_cursor: cursor } : {}) }); actual.push(...result.results); cursor = result.next_cursor; } while (cursor);
+    let previous = after ? actual.findIndex(block => block.id === after) : actual.findIndex(block => block.id === ids[0]) - 1;
+    if (after && previous < 0) throw Error('补全写入的位置已变化，未重复追加。');
+    for (let i = 0; i < ids.length; i++) {
+      const at = actual.findIndex(block => block.id === ids[i]), current = actual[at], submitted = echoed.find(block => block.id === ids[i]);
+      if (at < 0 || at !== previous + 1 || ![current.parent?.block_id, current.parent?.page_id].includes(job.page.id) || !await matchesWrittenBlock(c.session, current, blocks[i], submitted)) throw Error('补全写入的正文、引用或顺序核验不一致，未重复追加。');
+      previous = at;
+    }
+    const result = { ...record.result, verified: true, created_block_ids: ids, results: ids.map(id => actual.find(block => block.id === id)), recovered: true, note: '此前新增块已按原始回执独立读回核验，已复用原写入。' };
+    record.status = 'verified'; record.result = result; record.recoveredAt = new Date().toISOString(); atomicJson(file, record);
+    return result;
+  }
   async recoverBatch(c, job, index, blocks) {
     if (!this.root) return null;
     const directory = path.join(this.root, 'write-journal'); if (!fs.existsSync(directory)) return null;
@@ -530,7 +561,7 @@ class CollectionNotion {
       if (!old.replacement.ids) {
         if (alreadyRemoved) throw Error('待补全位置已移除，未在其他位置重复插入。');
         const blocks = plan.blocks.slice(next.start, next.start + next.count);
-        const response = await c.session.execute('append_blocks', { block_id: job.page.id, blocks, after: originalId });
+        const response = await this.appendRecoverably(c, job, blocks, originalId);
         if (!response.verified) throw Error('补全素材的插入结果尚未核验。');
         old.replacement.ids = response.created_block_ids; old.replacement.echo = response.results?.[0]; save();
       }
@@ -574,7 +605,7 @@ class CollectionNotion {
         const groups = batches([paragraph(title), ...blocks]), done = job.analysisBatches[key] ||= [];
         for (let i = 0; i < groups.length; i++) if (!done[i]) {
           const after = anchor && (done[i - 1]?.at(-1) || anchor);
-          const response = await c.session.execute('append_blocks', { block_id: job.page.id, blocks: groups[i], ...(after ? { after } : {}) });
+          const response = await this.appendRecoverably(c, job, groups[i], after);
           if (!response.verified) throw Error('补全的识别结果尚未核验。'); done[i] = response.created_block_ids; save();
         }
       }
@@ -586,7 +617,7 @@ class CollectionNotion {
       job.extractionBatches ||= {}; const done = job.extractionBatches[fingerprint] ||= [];
       for (const [i, group] of batches(extractionBlocks(job.extraction)).entries()) if (!done[i]) {
         const after = extractionAnchor && (done[i - 1]?.at(-1) || extractionAnchor);
-        const response = await c.session.execute('append_blocks', { block_id: job.page.id, blocks: group, ...(after ? { after } : {}) });
+        const response = await this.appendRecoverably(c, job, group, after);
         if (!response.verified) throw Error('内容提取写入尚未核验。'); done[i] = response.created_block_ids; save();
       }
       job.savedExtraction = fingerprint; save();
