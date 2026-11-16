@@ -46,6 +46,28 @@ test('GPU failures preserve the original and stop instead of running libx264', a
   assert.equal(f.calls.length, 1); assert.equal(f.processes.length, 0); assert.equal(fs.statSync(f.source).size, 1000);
 });
 
+test('unsupported CUVID chroma retries with software decoding while retaining NVENC encoding and verification', async t => {
+  let f; const progress = [];
+  f = fixture(t, { transcode: async options => {
+    if (options.hardwareDecode) throw Error('NVENC转码失败：[av1_cuvid @ 123] Codec av1_cuvid is not supported with this chroma format.');
+    const recordDirectory = path.join(options.outputDirectory, 'compatible'); fs.mkdirSync(recordDirectory, { recursive: true });
+    const output = path.join(recordDirectory, 'output.mp4'); fs.writeFileSync(output, Buffer.alloc(400));
+    return { path: output, recordDirectory, engine: 'h264_nvenc', decodeEngine: 'software', complete: true, quality: options.quality };
+  } });
+  const result = await f.media.prepareUpload(f.asset, { compress: true, quality: 'original' }, 5000, { progress: value => progress.push(value) });
+  assert.deepEqual(f.calls.map(call => call.hardwareDecode), [true, false]);
+  assert.equal(result[0].transcodes[0].engine, 'h264_nvenc'); assert.equal(result[0].transcodes[0].decodeEngine, 'software');
+  assert.equal(result[0].transcodes[0].decodeFallback, 'unsupported-nvdec-format');
+  assert.ok(progress.some(value => value.includes('CPU 解码'))); assert.equal(f.processes.length, 0); assert.equal(fs.statSync(f.source).size, 1000);
+});
+
+test('cancellation after CUVID failure does not start a compatibility attempt', async t => {
+  const stop = new AbortController();
+  const f = fixture(t, { transcode: async () => { stop.abort(Error('fixture stopped')); throw Error('[av1_cuvid] Codec av1_cuvid is not supported with this chroma format.'); } });
+  await assert.rejects(f.media.prepareUpload(f.asset, { compress: true, quality: 'original' }, 5000, { signal: stop.signal }), /fixture stopped/);
+  assert.equal(f.calls.length, 1);
+});
+
 test('uncompressed files and already efficient video bypass the GPU encoder', async t => {
   const f = fixture(t);
   assert.deepEqual(await f.media.prepareUpload(f.asset, { compress: false, quality: '720p' }, 5000), [{ path: f.source, kind: 'video' }]);

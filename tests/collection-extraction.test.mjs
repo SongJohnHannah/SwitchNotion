@@ -184,6 +184,19 @@ test('evidence review checks original material separately from condensed notes a
   assert.match(result.text, /原片第 2 步的具体动作 \[待核实\]/); assert.doesNotMatch(result.text, /删除所有项目/);
 });
 
+test('evidence review accepts an idiomatic first step while rejecting an unproved numbered source claim', async () => {
+  const { reviewContentEvidence } = require('../src/collection/evidence-review.cjs');
+  const { prepareReport } = require('../src/collection/report-markdown.cjs');
+  const draft = '## 专业结论\n建好工程后还需记录需求。\n## 展开细节\n### 详情｜实操复刻步骤与避坑清单\n- 文件夹建好只是第一步，还要建需求文件。';
+  let activeDraft = draft;
+  const args = { source: '正文：\n建立文件夹，需求写入文档。', draft,
+    prepare: text => prepareReport(text, { visual: false, hasReadableText: true, sourceIds: new Set() }), validSources: () => true,
+    generate: async messages => messages[0].content.includes('从原始素材提取证据清单') ? JSON.stringify({ declaredSteps: 0, steps: [], stepGap: '没有原片编号步骤证据' }) : JSON.stringify({ practice: '', markdown: activeDraft }) };
+  assert.match((await reviewContentEvidence(args)).text, /文件夹建好只是第一步/);
+  activeDraft = draft.replace('文件夹建好只是第一步', '原片第一步是删除项目');
+  await assert.rejects(reviewContentEvidence({ ...args, draft: activeDraft }), /终稿证据核对/);
+});
+
 test('media continuations carry the original asset and field when their source markers are in an earlier chunk', async () => {
   const calls = [], provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate({ messages }) {
     calls.push(messages);

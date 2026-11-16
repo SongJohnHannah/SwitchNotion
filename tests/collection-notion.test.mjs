@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 const require = createRequire(import.meta.url);
-const { CollectionNotion, renderDocument, batches } = require('../src/collection/notion.cjs');
+const { CollectionNotion, renderDocument, batches, textBlocks } = require('../src/collection/notion.cjs');
 const { normalizeDocument, preferences } = require('../src/collection/model.cjs');
 
 async function sourceCorrectionFixture() {
@@ -98,6 +98,77 @@ test('long article blocks retain hyperlinks and full text while each API batch s
   assert.ok(groups.every(g => g.length <= 80 && Buffer.byteLength(JSON.stringify(g)) < 350000));
   assert.ok(result.blocks.slice(1).every(b => b.paragraph.rich_text.every(s => s.text.link.url === 'https://example.com/source')));
 });
+
+test('plain paragraphs normalize native CJK word breaks while code text remains byte-for-byte unchanged', () => {
+  const value = '任\u200b\u200b何内容';
+  const paragraph = textBlocks({ kind: 'paragraph', text: value })[0];
+  const code = textBlocks({ kind: 'code', text: value })[0];
+  assert.equal(paragraph.paragraph.rich_text.map(r => r.text.content).join(''), '任何内容');
+  assert.equal(code.code.rich_text.map(r => r.text.content).join(''), value);
+});
+
+test('uncertain paragraph recovery accepts only CJK break normalization proven by the original receipt', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'collection-word-break-'));
+  t.after(() => { assert.equal(path.dirname(fs.realpathSync(root)), fs.realpathSync(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true }); });
+  const id = randomUUID(), pageId = randomUUID(), blockId = randomUUID(), workspaceId = randomUUID();
+  const expected = { type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: '任\u200b\u200b何内容' } }] } };
+  const echoed = { id: blockId, type: 'paragraph', parent: { page_id: pageId }, paragraph: { rich_text: [{ type: 'text', text: { content: '任何内容' } }] } };
+  let actual = structuredClone(echoed);
+  const record = { workspace_id: workspaceId, operation_scope: 'collection:' + id + ':batch:0', name: 'append_blocks', status: 'uncertain', request: { body: { children: [expected] } }, response: { results: [echoed] } };
+  fs.mkdirSync(path.join(root, 'write-journal'));
+  const file = path.join(root, 'write-journal', 'content-' + 'b'.repeat(64) + '.json');
+  const saveRecord = () => fs.writeFileSync(file, JSON.stringify(record)); saveRecord();
+  const client = new CollectionNotion({ root }), job = { id, page: { id: pageId }, options: { destination: { workspaceId } } };
+  const connection = { session: { execute: async name => { assert.equal(name, 'read_block_children', 'recovery must remain read-only'); return { results: [actual], next_cursor: null }; } } };
+  assert.deepEqual(await client.recoverBatch(connection, job, 0, [expected]), [blockId]);
+  actual.paragraph.rich_text[0].text.content = '任意内容';
+  await assert.rejects(client.recoverBatch(connection, job, 0, [expected]), /不一致/);
+  actual = structuredClone(echoed); record.response.results[0].paragraph.rich_text[0].text.content = '任\u200b\u200b何内容'; saveRecord();
+  await assert.rejects(client.recoverBatch(connection, job, 0, [expected]), /不一致/);
+});
+test('a long extraction renews expired unattached media and repairs only a definitively rejected write plan', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'collection-upload-expiry-'));
+  t.after(() => { assert.equal(path.dirname(fs.realpathSync(root)), fs.realpathSync(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true }); });
+  const oldId = randomUUID(), newId = randomUUID(), pageId = randomUUID(), workspaceId = randomUUID(), file = path.join(root, 'video.mp4');
+  fs.writeFileSync(file, 'synthetic-video');
+  const doc = normalizeDocument({ url: 'https://example.com/long-extraction', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
+  const job = { id: randomUUID(), page: { id: pageId }, document: doc, options: preferences({ destination: { workspaceId, id: randomUUID(), kind: 'page' } }), resources: { [doc.nodes[0].id]: { parts: [{ path: file }], uploads: [{ id: oldId, uploaded: true }] } }, analyses: {}, warnings: [], written: [] };
+  job.writeGroups = batches(renderDocument(doc, doc.nodes, job.resources).blocks);
+  job.writeFingerprint = require('../src/collection/model.cjs').hash(JSON.stringify(job.writeGroups.flat()));
+  const record = { workspace_id: workspaceId, operation_scope: 'collection:' + job.id + ':batch:0', name: 'append_blocks', status: 'uncertain', request: { body: { children: structuredClone(job.writeGroups[0]) } } };
+  fs.mkdirSync(path.join(root, 'write-journal'));
+  const journal = path.join(root, 'write-journal', 'content-' + 'b'.repeat(64) + '.json');
+  fs.writeFileSync(journal, JSON.stringify(record));
+  const requests = [], writes = [], actual = [];
+  const notion = new CollectionNotion({ root, fetchImpl: async (url, options) => {
+    requests.push(options.method + ' ' + url.split('/v1/')[1]);
+    const value = options.method === 'POST' && url.endsWith('/file_uploads') ? { id: newId } : url.endsWith(oldId) ? { status: 'expired' } : { status: 'uploaded' };
+    return { ok: true, json: async () => value };
+  } });
+  notion.createPage = async () => job.page;
+  notion.connect = async () => ({ cfg: { key: 'fixture' }, session: { execute: async (name, args) => {
+    if (name === 'append_blocks') { writes.push(structuredClone(args.blocks)); const ids = args.blocks.map(() => randomUUID()); actual.push(...ids.map(id => ({ id }))); return { verified: true, created_block_ids: ids }; }
+    if (name === 'read_block_children') return { results: actual };
+    throw Error(name);
+  } } });
+  await assert.rejects(notion.write(job, doc.nodes, () => {}), /此前正文写入结果不确定/);
+  assert.equal(requests.length, 0); assert.equal(writes.length, 0, 'uncertain writes cannot be replaced');
+  record.status = 'rejected'; record.error = { write_outcome: 'rejected', api_status: 400, api_code: 'validation_error' };
+  fs.writeFileSync(journal, JSON.stringify(record));
+  await assert.rejects(notion.write(job, doc.nodes, () => {
+    const upload = job.resources[doc.nodes[0].id].uploads[0];
+    if (upload.id === newId && upload.uploaded) throw Error('fixture interruption after upload');
+  }), /fixture interruption after upload/);
+  assert.equal(writes.length, 0);
+  assert.equal(job.writeGroups.flat().find(block => block.type === 'video').video.file_upload.id, oldId);
+  await notion.write(job, doc.nodes, () => {});
+  assert.equal(writes.length, 1); assert.equal(writes[0].find(block => block.type === 'video').video.file_upload.id, newId);
+  assert.equal(job.resources[doc.nodes[0].id].uploads[0].id, newId);
+  assert.equal(requests.filter(call => call === 'POST file_uploads').length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(journal)).status, 'rejected', 'retain the rejected receipt');
+  assert.deepEqual(job.written.flat(), actual.map(block => block.id));
+});
+
 test('incomplete upload stays a placeholder and never attaches a pending upload', () => {
   const doc = normalizeDocument({ url: 'https://example.com/a', nodes: [{ kind: 'image', url: 'https://example.com/image.jpg' }] });
   const rendered = renderDocument(doc, doc.nodes, { [doc.nodes[0].id]: { uploads: [{ id: randomUUID(), uploaded: false }] } });

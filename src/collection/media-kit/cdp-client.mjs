@@ -564,7 +564,7 @@ export async function cdpExtractAndDownloadVideo(browserBaseUrl, url, outputDir,
     let tabId = "";
     let wsUrl = "";
     try {
-        const tab = await cdpOpenTab(browserBaseUrl, url);
+        const tab = await cdpOpenTab(browserBaseUrl, 'about:blank');
         if (!tab)
             return { ok: false, error: "CDP open tab failed" };
         tabId = tab.tabId;
@@ -579,15 +579,23 @@ export async function cdpExtractAndDownloadVideo(browserBaseUrl, url, outputDir,
     let loginRedirect = null;
     const result = await new Promise((resolve) => {
         const ws = new WebSocket(wsUrl);
-        let msgId = 0;
-        const timer = setTimeout(() => {
-            ws.close();
+        let msgId = 0, finished = false;
+        const finish = () => {
+            if (finished) return; finished = true; clearTimeout(timer); ws.close();
             resolve({ videoUrls, audioUrls, title: pageTitle, loginRedirect: loginRedirect ?? undefined });
-        }, 25_000);
+        };
+        const timer = setTimeout(finish, 25_000);
+        const later = (callback, delay) => {
+            const pending = setTimeout(() => { if (!finished) callback(); }, delay);
+            pending.unref?.();
+        };
+        const readPerformance = () => ws.send(JSON.stringify({ id: 3, method: 'Runtime.evaluate', params: { returnByValue: true,
+            expression: `JSON.stringify({video:performance.getEntriesByType('resource').filter(e=>e.name.includes('douyinvod')||e.name.includes('video/tos')).map(e=>e.name),audio:performance.getEntriesByType('resource').filter(e=>e.name.includes('media-audio-')||e.name.includes('mime_type=audio')||e.name.includes('byteaudio')||(e.name.includes('/audio/')&&(e.name.includes('.m4a')||e.name.includes('.aac')))).map(e=>e.name)})` } }));
         ws.addEventListener("open", () => {
             ws.send(JSON.stringify({ id: ++msgId, method: "Network.enable" }));
         });
         ws.addEventListener("message", (event) => {
+            if (finished) return;
             const msg = JSON.parse(typeof event.data === "string" ? event.data : String(event.data));
             if (msg.method === "Network.requestWillBeSent") {
                 const reqUrl = msg.params?.request?.url || "";
@@ -599,7 +607,7 @@ export async function cdpExtractAndDownloadVideo(browserBaseUrl, url, outputDir,
                 }
             }
             // Detect login redirects
-            if (msg.method === "Network.requestWillBeSent" && msg.params?.request?.url) {
+            if (msg.method === "Network.requestWillBeSent" && msg.params?.type === 'Document' && msg.params?.request?.url) {
                 const navUrl = msg.params.request.url;
                 if (navUrl !== url && (navUrl.includes("/login") || navUrl.includes("/signin") || navUrl.includes("/auth"))) {
                     loginRedirect = navUrl;
@@ -608,7 +616,10 @@ export async function cdpExtractAndDownloadVideo(browserBaseUrl, url, outputDir,
             }
             // After Network.enable, wait then extract title
             if (msg.id === 1) {
-                setTimeout(() => {
+                // Listen before navigation so the first media requests are
+                // captured instead of racing the new-tab document load.
+                ws.send(JSON.stringify({ id: 1000001, method: 'Page.navigate', params: { url } }));
+                later(() => {
                     ws.send(JSON.stringify({
                         id: ++msgId,
                         method: "Runtime.evaluate",
@@ -630,35 +641,15 @@ export async function cdpExtractAndDownloadVideo(browserBaseUrl, url, outputDir,
                 }, 10_000);
             }
             if (msg.id === 2) {
-                pageTitle = msg.params?.result?.result?.value || "";
+                pageTitle = msg.result?.result?.value || "";
             }
             // After title, check performance entries for missed video+audio URLs
             if (msg.id === 2) {
-                setTimeout(() => {
-                    ws.send(JSON.stringify({
-                        id: ++msgId,
-                        method: "Runtime.evaluate",
-                        params: {
-                            expression: `
-                (function() {
-                  var result = { video: [], audio: [] };
-                  if (performance.getEntriesByType) {
-                    performance.getEntriesByType('resource').forEach(function(e) {
-                      if (e.name.includes('douyinvod') || e.name.includes('video/tos')) result.video.push(e.name);
-                      if (e.name.includes('media-audio-') || e.name.includes('mime_type=audio') || e.name.includes('byteaudio') || (e.name.includes('/audio/') && (e.name.includes('.m4a') || e.name.includes('.aac')))) result.audio.push(e.name);
-                    });
-                  }
-                  return JSON.stringify(result);
-                })()
-              `,
-                            returnByValue: true,
-                        },
-                    }));
-                }, 1000);
+                later(readPerformance, 1000);
             }
             if (msg.id === 3) {
                 try {
-                    const perfResult = JSON.parse(msg.params?.result?.result?.value || '{"video":[],"audio":[]}');
+                    const perfResult = JSON.parse(msg.result?.result?.value || '{"video":[],"audio":[]}');
                     for (const u of perfResult.video) {
                         if (!videoUrls.some((v) => v.split("?")[0] === u.split("?")[0])) {
                             videoUrls.push(u);
@@ -671,15 +662,11 @@ export async function cdpExtractAndDownloadVideo(browserBaseUrl, url, outputDir,
                     }
                 }
                 catch { /* ignore */ }
-                clearTimeout(timer);
-                ws.close();
-                resolve({ videoUrls, audioUrls, title: pageTitle, loginRedirect: loginRedirect ?? undefined });
+                if (videoUrls.length) finish();
+                else later(readPerformance, 1000);
             }
         });
-        ws.addEventListener("error", () => {
-            clearTimeout(timer);
-            resolve({ videoUrls, audioUrls, title: pageTitle, loginRedirect: loginRedirect ?? undefined });
-        });
+        ws.addEventListener("error", finish);
     });
     await cdpCloseTab(browserBaseUrl, tabId);
     await keepBrowserAlive(browserBaseUrl);

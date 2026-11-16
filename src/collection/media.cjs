@@ -163,14 +163,27 @@ class CollectionMedia {
     const source = fs.realpathSync(asset.path), before = fs.statSync(source);
     const outputDirectory = path.join(this.root || path.dirname(source), 'collection', 'video-transcodes');
     progress('正在使用 NVIDIA GPU 压缩视频' + (quality === 'original' ? '（保持原尺寸，有损编码）' : '') + '…');
-    const result = await this.operator.transcodeVideo({ source, outputDirectory, quality, hardwareDecode: true,
+    const options = { source, outputDirectory, quality,
       ...(forceKeyframeSeconds !== undefined ? { forceKeyframeSeconds } : {}), signal,
       onProgress: event => {
         if (event.stage === 'waiting-gpu') progress('视频 GPU 转码正在等待其他 GPU 任务释放资源…');
         else if (event.stage === 'transcoding') progress(`NVIDIA GPU 视频压缩：${Math.floor((event.fraction || 0) * 100)}%`);
-      } });
+      } };
+    let result, decodeFallback;
+    try { result = await this.operator.transcodeVideo({ ...options, hardwareDecode: true }); }
+    catch (error) {
+      signal?.throwIfAborted();
+      // A compiled CUVID decoder does not imply that this GPU supports the
+      // source codec/chroma. Retry only explicit decoder-format failures;
+      // NVENC failures still stop without switching to a software encoder.
+      if (!/\b(?:av1|h264|hevc|vp9|vp8|mpeg2)_cuvid\b[^\r\n]*(?:not supported with this chroma format|does not support (?:this|the).*format|unsupported (?:chroma|pixel) format)/i.test(error.message || '')) throw error;
+      progress('该视频格式使用 CPU 解码，继续用 NVENC GPU 编码…');
+      decodeFallback = 'unsupported-nvdec-format';
+      result = await this.operator.transcodeVideo({ ...options, hardwareDecode: false });
+    }
     signal?.throwIfAborted();
-    if (!result?.complete || result.engine !== 'h264_nvenc' || !/_cuvid$/.test(result.decodeEngine || '') || typeof result.path !== 'string' || !path.isAbsolute(result.path)) throw Error('GPU 视频压缩未返回有效的 NVENC/NVDEC 结果；原片已保留，未改用 CPU。');
+    const validDecoder = decodeFallback ? result?.decodeEngine === 'software' : /_cuvid$/.test(result?.decodeEngine || '');
+    if (!result?.complete || result.engine !== 'h264_nvenc' || !validDecoder || typeof result.path !== 'string' || !path.isAbsolute(result.path)) throw Error('GPU 视频压缩未返回有效的 NVENC 结果，原片与记录已保留。');
     if (forceKeyframeSeconds !== undefined && (result.nvenc?.forcedIdr !== true || result.nvenc.forceKeyframeSeconds !== forceKeyframeSeconds)) throw Error('GPU 视频分段所需的关键帧间隔未得到实际执行确认，原片与记录已保留。');
     const output = fs.realpathSync(result.path), base = fs.realpathSync(outputDirectory), relative = path.relative(base, output);
     if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || output === source || !fs.statSync(output).isFile()) throw Error('GPU 视频输出不在本次独立归档目录，原片已保留。');
@@ -179,7 +192,7 @@ class CollectionMedia {
         Math.abs(checked.duration - asset.duration) > Math.max(.2, Math.min(1, asset.duration * .001))) throw Error('GPU 压缩后时长、音轨或原片身份核验失败，原片与记录已保留。');
     const bytes = fs.statSync(output).size;
     if (!bytes) throw Error('GPU 视频压缩结果为空，原片已保留。');
-    return { ...result, path: output, bytes, source,
+    return { ...result, path: output, bytes, source, ...(decodeFallback ? { decodeFallback } : {}),
       ...(forceKeyframeSeconds !== undefined ? { forceKeyframeSeconds: result.nvenc.forceKeyframeSeconds } : {}), accepted: bytes < before.size,
       note: quality === 'original' ? 'original 表示保持原尺寸，采用有损 NVENC 编码，并非无损。' : '采用有损 NVENC 编码；原片与转码记录保留。' };
   }

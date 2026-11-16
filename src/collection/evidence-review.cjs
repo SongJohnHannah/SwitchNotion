@@ -87,11 +87,13 @@ function parseLedger(value, source, checkGroups, chartProof) {
   return { ...result, declaredSteps, steps: [...steps.values()].sort((a, b) => a.number - b.number), stepGap, groupGap, unresolvedItems };
 }
 
-function containsUnsupportedOrdinal(text, steps) {
+function containsUnsupportedOrdinal(text, steps, declaredSteps = 0) {
   const numbers = new Set(steps.map(step => step.number));
   return text.split(/[。！？；;\n]/u).some(clause => {
     if (/待核实|待确认|读不清|不可辨|难以辨|无法确认|无法辨认|无法读/u.test(clause)) return false;
-    return [...clause.matchAll(numberedStep)].some(match => {
+    const claim = !declaredSteps && !steps.length && !/原片|原作者|作者|原视频/u.test(clause) ?
+      clause.replace(/(?:只|仅仅|仅|不过)是第[一1]\s*步/gu, '只是起点') : clause;
+    return [...claim.matchAll(numberedStep)].some(match => {
       return !numbers.has(stepNumber(match[1] || match[2]));
     });
   });
@@ -120,7 +122,7 @@ function confirmedCoaching(steps) {
     '[补充建议] 每次只教当前一关，让我提交实际操作结果并说清依据。检查结果后再解锁下一关。遇到偏差时只指出一处，给出修改示例，等我复验。'].join('');
 }
 
-function renderReview(markdown, { stepGap, groupGap, steps, groupProof, unresolvedItems }, practice, chartProof) {
+function renderReview(markdown, { stepGap, groupGap, steps, groupProof, unresolvedItems, declaredSteps }, practice, chartProof) {
   const sections = markdown.split(/^(##[ \t]+.+|###[ \t]+详情[ \t]*[｜|].+)$/gm);
   for (let i = 1; i < sections.length; i += 2) {
     const heading = sections[i], title = heading.replace(/^#{2,3}[ \t]+(?:详情[ \t]*[｜|][ \t]*)?/, '').trim();
@@ -132,7 +134,7 @@ function renderReview(markdown, { stepGap, groupGap, steps, groupProof, unresolv
       const numbered = steps.map(({ number, quote, label }) => `- **原片第 ${number} 步** ${quote}${label ? ` [${label}]` : ''}`);
       body = [...numbered, ...body.split('\n').filter(line => !numberedListItem.test(line))].join('\n').trim();
     }
-    if ((stepGap || steps.length) && containsUnsupportedOrdinal(body, steps)) return '';
+    if ((stepGap || steps.length) && containsUnsupportedOrdinal(body, steps, declaredSteps)) return '';
     if (groupGap && hasChart) body = removeUnprovedGroups(body, groupProof, unresolvedItems);
     if (chartProof && hasChart) {
       body = filterClauses(body, clause => !(/归属|分组|标签.*对应/u.test(clause) && /待核实|无法确认|不能确认|未能确认/u.test(clause)));

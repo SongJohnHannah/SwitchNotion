@@ -88,3 +88,46 @@ test('an explicit access restriction retries with the saved session and always r
   assert.equal(f.calls.join(','), 'anonymous,cookies,authenticated'); assert.equal(f.removed.length, 1);
   const timeout = downloader({ retryThrows: true }); await assert.rejects(timeout.run(), /ETIMEDOUT/); assert.equal(timeout.removed.length, 1);
 });
+
+function interceptedVideo({ late = false } = {}) {
+  const file = fs.readFileSync(new URL('../src/collection/media-kit/cdp-client.mjs', import.meta.url), 'utf8');
+  const source = file.slice(file.indexOf('export async function cdpExtractAndDownloadVideo'), file.indexOf('// ── File download through HTTP proxy')).replace('export async function', 'async function');
+  const events = [], downloads = []; let polls = 0;
+  class Socket {
+    constructor() { this.listeners = new Map(); queueMicrotask(() => this.emit('open', {})); }
+    addEventListener(name, handler) { this.listeners.set(name, [...this.listeners.get(name) || [], handler]); }
+    emit(name, value) { for (const handler of this.listeners.get(name) || []) handler(value); }
+    close() {}
+    send(raw) {
+      const request = JSON.parse(raw); events.push(request.method);
+      let result = {};
+      if (request.method === 'Runtime.evaluate') {
+        if (request.params.expression.includes("var title = ''")) result = { result: { value: '目标视频' } };
+        else result = { result: { value: JSON.stringify({ video: ++polls === 1 && late ? [] : ['https://douyinvod.example/target.mp4'], audio: [] }) } };
+      }
+      queueMicrotask(() => this.emit('message', { data: JSON.stringify({ id: request.id, result }) }));
+    }
+  }
+  const capture = vm.runInNewContext(source + '\ncdpExtractAndDownloadVideo', {
+    WebSocket: Socket, path, fs: { promises: { mkdir: async () => {} } },
+    cdpOpenTab: async (_base, url) => { events.push('open:' + url); return { tabId: 'fixture', wsUrl: 'ws://fixture' }; },
+    cdpCloseTab: async () => {}, keepBrowserAlive: async () => {}, logWarn() {}, safeFilename: value => value,
+    isVideoUrl: () => false, isAudioUrl: () => false,
+    downloadThroughProxy: async url => { downloads.push(url); return true; },
+    setTimeout: (fn, delay) => setTimeout(fn, delay >= 25000 ? 1000 : 0), clearTimeout,
+  });
+  return { run: () => capture('http://127.0.0.1:19333', 'https://www.douyin.com/video/123456', '/out', 'fallback'), events, downloads, polls: () => polls };
+}
+
+test('CDP video capture listens before navigation and reads standard response results for early media requests', async () => {
+  const f = interceptedVideo(), result = await f.run();
+  assert.equal(result.ok, true); assert.equal(path.basename(result.filePath), '目标视频.mp4');
+  assert.equal(f.events[0], 'open:about:blank');
+  assert.ok(f.events.indexOf('Network.enable') < f.events.indexOf('Page.navigate'));
+  assert.deepEqual(f.downloads, ['https://douyinvod.example/target.mp4']);
+});
+
+test('CDP video capture keeps waiting when a player has not exposed its media by the first poll', async () => {
+  const f = interceptedVideo({ late: true }), result = await f.run();
+  assert.equal(result.ok, true); assert.equal(f.polls(), 2);
+});

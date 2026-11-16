@@ -17,11 +17,15 @@ const textSpans = (text, href, bold) => {
   for (let i = 0; i < value.length; i += 2000) result.push({ type: 'text', text: { content: value.slice(i, i + 2000), ...(href && href.length <= 2000 ? { link: { url: href } } : {}) }, ...(bold ? { annotations: { bold: true } } : {}) });
   return result;
 };
-const paragraph = text => ({ object: 'block', type: 'paragraph', paragraph: { rich_text: textSpans(text) } });
+// Native Notion normalizes these invisible word breaks in ordinary Chinese
+// prose. Normalize before chunking, while leaving code and other Unicode intact.
+const nativeParagraphText = value => String(value || '').replace(/([\u3400-\u9fff])\u200b+(?=[\u3400-\u9fff])/g, '$1');
+const paragraph = text => ({ object: 'block', type: 'paragraph', paragraph: { rich_text: textSpans(nativeParagraphText(text)) } });
 function textBlocks(node) {
   if (node.kind === 'divider') return [{ object: 'block', type: 'divider', divider: {} }];
   const type = node.kind === 'heading' ? 'heading_' + (node.level || 2) : node.kind === 'quote' ? 'quote' : node.kind === 'list' ? 'bulleted_list_item' : node.kind === 'code' ? 'code' : 'paragraph';
-  const spans = node.spans?.length ? node.spans.flatMap(s => textSpans(s.text, s.href, s.bold)) : textSpans(node.text);
+  const value = text => type === 'paragraph' ? nativeParagraphText(text) : text;
+  const spans = node.spans?.length ? node.spans.flatMap(s => textSpans(value(s.text), s.href, s.bold)) : textSpans(value(node.text));
   if (!spans.length) return [];
   const blocks = []; let group = [], bytes = 0;
   const flush = () => { if (group.length) blocks.push({ object: 'block', type, [type]: { rich_text: group, ...(type === 'code' ? { language: 'plain text' } : {}) } }); group = []; bytes = 0; };
@@ -148,7 +152,21 @@ function batches(blocks, { maxBlocks = 80, maxBytes = 350000 } = {}) {
 }
 async function matchesWrittenBlock(session, current, expected, submitted) {
   const { children, ...content } = expected[expected.type];
-  if (!matchesBlockContent(current, { ...expected, [expected.type]: content }, submitted)) return false;
+  let same = matchesBlockContent(current, { ...expected, [expected.type]: content }, submitted);
+  if (!same && expected.type === 'paragraph' && submitted?.type === 'paragraph') {
+    const spans = content.rich_text || [], first = spans[0];
+    const plain = first && spans.every(span => span.type === 'text' && span.text && !span.text.link && !span.annotations?.code && JSON.stringify(span.annotations || {}) === JSON.stringify(first.annotations || {}));
+    if (plain) {
+      const original = spans.map(span => span.text.content).join(''), normalized = nativeParagraphText(original);
+      if (original !== normalized) {
+        const candidate = { ...expected, paragraph: { ...content, rich_text: [{ ...first, text: { ...first.text, content: normalized } }] } };
+        // Require both the initial server echo and the independent read to
+        // agree. A later user edit cannot be mistaken for normalization.
+        same = matchesBlockContent(submitted, candidate, submitted) && matchesBlockContent(current, candidate, submitted);
+      }
+    }
+  }
+  if (!same) return false;
   if (!children) return true;
   const result = await session.execute('read_block_children', { block_id: current.id });
   return !result.has_more && !result.next_cursor && result.results.length === children.length && children.every((child, index) => {
@@ -288,7 +306,10 @@ class CollectionNotion {
     if (state.id) {
       const current = await request('GET', 'file_uploads/' + state.id);
       if (current.status === 'uploaded') { state.uploaded = true; save(); return state; }
-      if (current.status === 'expired' || current.status === 'failed') { delete state.id; delete state.parts; }
+      if (current.status === 'expired' || current.status === 'failed') {
+        state.replaces = [...new Set([...(state.replaces || []), state.id])];
+        delete state.id; delete state.parts; state.uploaded = false; save();
+      }
     }
     const bytes = fs.statSync(file.path).size, partSize = 10 * 1024 ** 2, multipart = bytes > 20 * 1024 ** 2;
     if (!state.id) {
@@ -313,6 +334,39 @@ class CollectionNotion {
   }
   async write(job, nodes, save, signal) {
     await this.createPage(job, save, signal);
+    if (job.writeGroups) {
+      if (job.writeFingerprint && hash(JSON.stringify(job.writeGroups.flat())) !== job.writeFingerprint) throw Error('本地写入计划与正文不一致，未继续追加。');
+      // Resolve earlier submissions before renewing any upload IDs. An uncertain
+      // append must never be replaced with a newly rendered body.
+      for (let i = 0; i < job.writeGroups.length; i++) {
+        if (job.written?.[i]) continue;
+        const c = await this.connect(job.options.destination, signal, 'collection:' + job.id + ':batch:' + i);
+        const recovered = await this.recoverBatch(c, job, i, job.writeGroups[i]);
+        if (recovered) { job.written ||= []; job.written[i] = recovered; save(); }
+      }
+    }
+    const attached = new Set(job.writeGroups?.flatMap((group, i) => job.written?.[i] ? group.flatMap(block => block[block.type]?.file_upload?.id || []) : []) || []);
+    const renewed = new Map();
+    for (const node of nodes) {
+      const resource = job.resources[node.id];
+      if (resource?.error) continue;
+      for (const [i, file] of (resource?.parts || []).entries()) {
+        const state = resource.uploads?.[i];
+        if (!state?.id || attached.has(state.id)) continue;
+        const previous = state.id;
+        // Extraction can take longer than an unattached Notion upload lives.
+        await this.upload(file, job, state, save, signal);
+        if (state.id !== previous) renewed.set(previous, state.id);
+        for (const replaced of state.replaces || []) renewed.set(replaced, state.id);
+      }
+    }
+    if (renewed.size && job.writeGroups) {
+      job.writeGroups = job.writeGroups.map((group, i) => job.written?.[i] ? group : group.map(block => {
+        const value = block[block.type], id = value?.type === 'file_upload' && renewed.get(value.file_upload?.id);
+        return id ? { ...block, [block.type]: { ...value, file_upload: { id } } } : block;
+      }));
+      job.writeFingerprint = hash(JSON.stringify(job.writeGroups.flat())); save();
+    }
     const plan = renderDocument(job.document, nodes, job.resources, job.analyses, job.warnings, job.extraction, job.layout);
     const fingerprint = hash(JSON.stringify(plan.blocks));
     if (job.sourceRefresh?.pending && job.sourceSlots) return this.replaceCorrectedSource(job, nodes, plan, save, signal);
@@ -359,7 +413,8 @@ class CollectionNotion {
     if (!this.root) return null;
     const directory = path.join(this.root, 'write-journal'); if (!fs.existsSync(directory)) return null;
     const records = fs.readdirSync(directory).filter(name => /^content-[a-f\d]{64}\.json$/.test(name)).map(name => { try { return JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')); } catch { return null; } })
-      .filter(record => record?.workspace_id === job.options.destination.workspaceId && record.operation_scope === 'collection:' + job.id + ':batch:' + index && record.name === 'append_blocks');
+      .filter(record => record?.workspace_id === job.options.destination.workspaceId && record.operation_scope === 'collection:' + job.id + ':batch:' + index && record.name === 'append_blocks')
+      .filter(record => !(record.status === 'rejected' && ['rejected', 'not_submitted'].includes(record.error?.write_outcome)));
     if (!records.length) return null;
     if (records.length !== 1 || JSON.stringify(canonical(records[0].request?.body?.children)) !== JSON.stringify(canonical(blocks))) throw Error('此前正文写入计划存在差异，未重复追加。');
     const submitted = records[0].response?.results;
