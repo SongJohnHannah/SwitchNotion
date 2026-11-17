@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url), { CollectionBinaries, assets } = require('../src/collection/binaries.cjs');
+const require = createRequire(import.meta.url), { CollectionBinaries, resolveBinary, assets } = require('../src/collection/binaries.cjs');
 function fixture(t, { installed = '2026.07.04', corrupt = false } = {}) {
   const parent = path.resolve(import.meta.dirname, '../.notion-switch'); fs.mkdirSync(parent, { recursive: true });
   const root = fs.mkdtempSync(path.join(parent, 'test-downloader-version-'));
@@ -36,4 +36,16 @@ test('media downloads use the verified standalone distribution even when an exte
 test('an unverified downloader update is rejected and the existing installation remains intact', async t => {
   const f = fixture(t, { corrupt: true }); await assert.rejects(f.binaries.prepare(), /校验失败/);
   assert.equal(fs.readFileSync(f.external, 'utf8'), 'existing-system-downloader'); assert.equal(fs.existsSync(f.local), false);
+});
+
+test('Mac skips non-executable media tools while Windows keeps its executable-extension rules', { skip: process.platform === 'win32' }, t => {
+  const parent = path.resolve('.notion-switch'), root = fs.mkdtempSync(path.join(parent, 'test-media-mode-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const name = 'notion-fixture-media-tool', file = path.join(root, name);
+  fs.writeFileSync(file, 'fixture', { mode: 0o600 });
+  assert.equal(resolveBinary(name, root, { platform: 'darwin', env: { PATH: '' } }), null);
+  fs.chmodSync(file, 0o700);
+  assert.equal(resolveBinary(name, root, { platform: 'darwin', env: { PATH: '' } }), file);
+  fs.writeFileSync(file + '.exe', 'fixture', { mode: 0o600 });
+  assert.equal(resolveBinary(name, root, { platform: 'win32', env: { PATH: '' } }), file + '.exe');
 });

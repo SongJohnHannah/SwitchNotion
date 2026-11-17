@@ -1,3 +1,4 @@
+import { defaultOutputDirectory } from './default-output.mjs';
 /**
  * ytdlp-tool: Download videos from overseas platforms via yt-dlp.
  * 1800+ platforms: YouTube, Twitter/X, Instagram, TikTok, Facebook, etc.
@@ -17,7 +18,7 @@ import { logWarn } from "./utils.mjs";
 const execFileAsync = promisify(execFile);
 const YTDLP_TIMEOUT_MS = 2_280_000;
 const YTDLP_MAX_BUFFER = 10 * 1024 * 1024;
-const DEFAULT_OUTPUT_DIR = "/mnt/d/Download";
+const DEFAULT_OUTPUT_DIR = defaultOutputDirectory();
 const YTDLP_RETRYABLE_ERRORS = [
     "http error 403", "sign in", "captcha",
     "login required", "private video", "members-only", "age-restricted",

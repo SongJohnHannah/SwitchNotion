@@ -1,3 +1,4 @@
+import { defaultOutputDirectory } from './default-output.mjs';
 /**
  * media-kit: Standalone media download toolkit.
  *
@@ -26,7 +27,7 @@ import { validateNetworkTarget, validateResolvedHost } from "./network-policy.mj
 import { logWarn } from "./utils.mjs";
 import { videoDlDownload } from "./videodl-tool.mjs";
 import { ytdlpDownload } from "./ytdlp-tool.mjs";
-const DEFAULT_OUTPUT_DIR = "/mnt/d/Download/original_video";
+const DEFAULT_OUTPUT_DIR = defaultOutputDirectory({ video: true });
 export class MediaKit {
     config;
     constructor(config = {}) {

@@ -1,3 +1,4 @@
+import { documentation } from './distribution-files.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +9,7 @@ import { zipDirectory } from './portable-zip.mjs';
 const project = path.resolve(import.meta.dirname, '..');
 const scripts = ['asar.mjs', 'native-fs.mjs', 'desktop-compat.mjs', 'runtime-update.mjs', 'runtime-health.mjs',
   'source-discovery.mjs', 'find-notion.mjs', 'launch-lock.mjs', 'prepare-desktop.mjs', 'start-desktop.mjs',
-  'open-notion.mjs', 'open-settings.mjs', 'open-collection.mjs', 'open-update.mjs', 'update-helper.mjs', 'client-update-helper.mjs', 'login-helper.cjs', 'launch-macos.sh', 'launch-macos.mjs', 'check-meeting-summary.mjs'];
+  'open-notion.mjs', 'open-settings.mjs', 'open-collection.mjs', 'open-update.mjs', 'update-helper.mjs', 'client-update-helper.mjs', 'client-tests.mjs', 'login-helper.cjs', 'launch-macos.sh', 'launch-macos.mjs', 'check-meeting-summary.mjs'];
 function descendants(root) {
   const files = [];
   function visit(dir) { for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -19,7 +20,7 @@ function descendants(root) {
 export function stageMac({ sourceProject = project, destination, projectAware = false }) {
   const target = path.resolve(destination), relative = path.relative(path.join(sourceProject, 'dist'), target);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || fs.existsSync(target)) throw Error('Mac 分发目标必须是 dist 内的新目录。');
-  const sources = ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'MAC-USAGE.md', 'docs/CONTENT-COLLECTION.md', 'docs/MAC-CHECKLIST-ACCEPTANCE-2026-10-29.md', 'package.json', 'assets/notion.icns',
+  const sources = ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'MAC-USAGE.md', ...documentation.map(name => 'docs/' + name), 'package.json', 'assets/notion.icns',
     'Start-SwitchNotion.command', 'Configure-SwitchNotion.command', ...scripts.map(f => 'scripts/' + f),
     ...descendants(path.join(sourceProject, 'src')).map(f => path.relative(sourceProject, f))];
   const keys = localDeepSeekKeys(sourceProject);

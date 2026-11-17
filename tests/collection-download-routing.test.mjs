@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import { defaultOutputDirectory } from '../src/collection/media-kit/default-output.mjs';
 
 // Stub network/process boundaries, while executing the shipped routing code.
 function load(file, names, bindings) {
   const source = fs.readFileSync(new URL('../src/collection/media-kit/' + file, import.meta.url), 'utf8')
     .split('// Re-export everything')[0].replace(/^import .*;\r?$/gm, '').replace(/^export /gm, '');
-  return vm.runInNewContext(source + '\n;({' + names + '})', { fs, path, process: { env: {}, execPath: '/runtime/node', versions: { node: '22.0.0' } }, URL, Date, ...bindings });
+  return vm.runInNewContext(source + '\n;({' + names + '})', { fs, path, process: { env: {}, execPath: '/runtime/node', versions: { node: '22.0.0' } }, URL, Date, defaultOutputDirectory, ...bindings });
 }
 function toolkit(overrides = {}) {
   const calls = [];

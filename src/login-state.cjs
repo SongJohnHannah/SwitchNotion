@@ -300,7 +300,7 @@ class LoginService {
     requireLoginSync(this.platform);
     const { executable, helper } = this.runtime();
     return new Promise((resolve, reject) => {
-      this.execFileImpl(executable, [helper, action, '--root', this.root], { ...(this.platform.id === 'win32' ? { cwd: path.dirname(path.dirname(helper)) } : {}), windowsHide: true, timeout: 30000, maxBuffer: 65536, env: { ...process.env, ...(this.platform.id === 'win32' ? { NOTION_SWITCH_ROOT: this.root } : {}), NODE_NO_WARNINGS: '1' } }, (error, stdout) => {
+      this.execFileImpl(executable, [helper, action, '--root', this.root], { cwd: path.dirname(path.dirname(helper)), windowsHide: true, timeout: 30000, maxBuffer: 65536, env: { ...process.env, NOTION_SWITCH_ROOT: this.root, NODE_NO_WARNINGS: '1' } }, (error, stdout) => {
         try { const result = JSON.parse(stdout || '{}'); if (!result.ok) throw failure(Object.hasOwn(messages, result.code) ? result.code : 'helper_unavailable'); if (error) throw failure('helper_unavailable'); resolve(result.result); }
         catch (caught) { reject(safeError(caught, 'helper_unavailable')); }
       });
@@ -310,7 +310,7 @@ class LoginService {
     requireLoginSync(this.platform);
     const { executable, helper } = this.runtime();
     return new Promise((resolve, reject) => {
-      const child = this.spawnImpl(executable, [helper, 'apply-and-restart', '--root', this.root, '--stage', stageId, '--parent-pid', String(this.currentPid)], { ...(this.platform.id === 'win32' ? { cwd: path.dirname(path.dirname(helper)) } : {}), windowsHide: true, detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: { ...process.env, ...(this.platform.id === 'win32' ? { NOTION_SWITCH_ROOT: this.root } : {}), NODE_NO_WARNINGS: '1' } });
+      const child = this.spawnImpl(executable, [helper, 'apply-and-restart', '--root', this.root, '--stage', stageId, '--parent-pid', String(this.currentPid)], { cwd: path.dirname(path.dirname(helper)), windowsHide: true, detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: { ...process.env, NOTION_SWITCH_ROOT: this.root, NODE_NO_WARNINGS: '1' } });
       let settled = false;
       const timeout = setTimeout(() => finish(false), 10000);
       const finish = accepted => {

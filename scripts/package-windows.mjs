@@ -1,3 +1,4 @@
+import { documentation } from './distribution-files.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -6,9 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { assertDistributionFiles, localDeepSeekKeys } from './package-safety.mjs';
 import { planWindowsGpuAssets, copyWindowsGpuAssets, hashAsset, assertNewWindowsStage } from './package-windows-gpu.mjs';
 const project = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const runtimeScripts = ['asar.mjs', 'native-fs.mjs', 'desktop-compat.mjs', 'runtime-update.mjs', 'runtime-health.mjs', 'source-discovery.mjs', 'find-notion.mjs', 'bootstrap-windows.ps1', 'launch.ps1', 'launch-lock.mjs', 'prepare-desktop.mjs', 'start-desktop.mjs', 'open-notion.mjs', 'open-settings.mjs', 'open-collection.mjs', 'open-update.mjs', 'update-helper.mjs', 'client-update-helper.mjs', 'login-helper.cjs', 'check-windows.mjs', 'check-meeting-summary.mjs'];
-const documentation = ['CONTENT-COLLECTION.md', 'MAC-CHECKLIST-ACCEPTANCE-2026-10-29.md', 'WINDOWS-VALIDATION-CHECKLIST.md', 'AI-REFERENCE-COVERAGE.md', 'AI-INTEGRATION-AUDIT.md', 'NATIVE-FORMULA-INTERFACE.md', 'NATIVE-AUTOFILL-INTERFACE.md', 'NATIVE-AI-BLOCK-INTERFACE.md', 'NATIVE-DATABASE-BUILD-INTERFACE.md', 'NATIVE-INSTRUCTIONS-INTERFACE.md', 'WEB-SOURCES-INTERFACE.md', 'AI-MEETING-NOTES-INTERFACE.md',
-  'NATIVE-RESEARCH-INTERFACE.md', 'NATIVE-DOCUMENTS-INTERFACE.md', 'NATIVE-OCR-INTERFACE.md', 'MCP-CONNECTIONS.md', 'NATIVE-CALENDAR-INTERFACE.md', 'AI-APPROVALS.md', 'AI-CHAT-SHARING.md', 'OFFLINE-SPEECH.md', 'SPEECH-INTERFACE.md', 'GPU-OPERATOR-INTEGRATION.md', 'GPU-OPERATOR-README.md', 'WINDOWS-GPU-MIGRATION-VALIDATION.md', 'TRANSCRIBER-COMPARISON.md', 'MEETING-SUMMARY-INTERFACE.md', 'AUTOMATIC-COMPATIBILITY.md', 'PLATFORM-INTERFACE.md'];
+const runtimeScripts = ['asar.mjs', 'native-fs.mjs', 'desktop-compat.mjs', 'runtime-update.mjs', 'runtime-health.mjs', 'source-discovery.mjs', 'find-notion.mjs', 'bootstrap-windows.ps1', 'launch.ps1', 'launch-lock.mjs', 'prepare-desktop.mjs', 'start-desktop.mjs', 'open-notion.mjs', 'open-settings.mjs', 'open-collection.mjs', 'open-update.mjs', 'update-helper.mjs', 'client-update-helper.mjs', 'client-tests.mjs', 'login-helper.cjs', 'check-windows.mjs', 'check-meeting-summary.mjs'];
+
 const publicFiles = ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'WINDOWS-使用说明.md', 'MAC-USAGE.md', 'package.json', 'NotionSwitch 启动.vbs', 'NotionSwitch 配置.vbs', 'NotionSwitch 更新.vbs',
   ...documentation.map(name => 'docs/' + name)];
 const hash = hashAsset;

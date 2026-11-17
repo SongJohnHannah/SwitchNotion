@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
 import { stageMac } from '../scripts/package-macos.mjs';
 import { zipDirectory } from '../scripts/portable-zip.mjs';
@@ -26,6 +27,21 @@ test('Mac package is relocatable, carries the personal icon and preserves double
   assert.equal(packagedManifest.files.some(item => /(?:^|\/)(?:windows-gpu-native|windows-gpu-operator|\.notion-switch)(?:\/|$)/.test(item.file)), false);
   assert.equal(fs.existsSync(path.join(result.app, 'Contents/Resources/project/assets/windows-gpu-native')), false);
   assert.equal(fs.existsSync(path.join(result.app, 'Contents/Resources/project/.notion-switch')), false);
+  const payload = path.join(result.app, 'Contents/Resources/project');
+  const updater = await import(pathToFileURL(path.join(payload, 'scripts/client-update-helper.mjs')).href);
+  assert.equal(typeof updater.applyClientUpdate, 'function', 'The packaged updater must include every static dependency');
+  const documents = ['MAC-USAGE.md'], visited = new Set();
+  while (documents.length) {
+    const name = documents.shift(); if (visited.has(name)) continue; visited.add(name);
+    const content = fs.readFileSync(path.join(payload, name), 'utf8');
+    for (const [, target] of content.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
+      if (/^[a-z][a-z\d+.-]*:|^#/i.test(target)) continue;
+      const linked = path.normalize(path.join(path.dirname(name), decodeURIComponent(target.split('#')[0])));
+      assert.ok(fs.existsSync(path.join(payload, linked)), `${name} links to a missing packaged file: ${linked}`);
+      if (/\.md$/i.test(linked)) documents.push(linked);
+    }
+  }
+  assert.ok(visited.has(path.normalize('docs/AI-INTEGRATION-AUDIT.md')));
   for (const name of ['Start-SwitchNotion.command', 'Configure-SwitchNotion.command']) {
     assert.ok(fs.readFileSync(path.join(result.directory, name), 'utf8').includes('/SwitchNotion.app/Contents/Resources/project'));
   }

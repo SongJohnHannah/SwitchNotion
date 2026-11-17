@@ -19,7 +19,7 @@ function resolveBinary(name, directory, { platform = process.platform, env = pro
   const extensions = platform === 'win32' ? ['.exe'] : [''];
   for (const dir of [directory, ...(env.PATH || '').split(platform === 'win32' ? ';' : ':'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin']) {
     if (!dir) continue;
-    for (const ext of extensions) { const file = path.join(dir, name + ext); try { if (fs.statSync(file).isFile()) return file; } catch {} }
+    for (const ext of extensions) { const file = path.join(dir, name + ext); try { if (fs.statSync(file).isFile()) { if (platform !== 'win32') fs.accessSync(file, fs.constants.X_OK); return file; } } catch {} }
   }
   return null;
 }

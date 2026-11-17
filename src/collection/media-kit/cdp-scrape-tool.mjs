@@ -1,3 +1,4 @@
+import { defaultOutputDirectory } from './default-output.mjs';
 /**
  * cdp-scrape-tool: Extract text, images, and embedded videos from web pages via CDP.
  * Handles anti-scraping sites (X/Twitter, Douyin, Xiaohongshu, Instagram, Threads).
@@ -12,7 +13,7 @@ import { extractDomain } from "./domain-utils.mjs";
 import { resolveBin } from "./resolve-bin.mjs";
 import { logWarn } from "./utils.mjs";
 const execFileAsync = promisify(execFile);
-const DEFAULT_OUTPUT_DIR = "/mnt/d/Download";
+const DEFAULT_OUTPUT_DIR = defaultOutputDirectory();
 const EXTRACT_PAGE_JS = `(() => {
   const result = { title: document.title || 'untitled', url: location.href, text: '', images: [], videos: [] };
 

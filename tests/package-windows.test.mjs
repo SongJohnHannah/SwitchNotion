@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { stageWindows } from '../scripts/package-windows.mjs';
 import { verifyPackagedImagePreview } from './helpers/packaged-image-preview.mjs';
 import { verifyPackagedReferences, verifyPackagedInlineReferences, verifyPackagedAiBlockSources, verifyPackagedFormulaPreview, verifyPackagedAutofill, verifyPackagedDatabaseBuild, verifyPackagedInstructionSelection, verifyPackagedConversationScope, verifyPackagedWebSources, verifyPackagedResearchScope, verifyPackagedNativeWebResearch } from './helpers/packaged-references.mjs';
@@ -21,6 +22,8 @@ test('the portable package uses an allowlist, carries its runtime and licenses, 
   assert.equal(manifest.requiresOfficialNotion, true); assert.equal(manifest.includesUserData, false); assert.equal(manifest.license, 'MIT');
   assert.equal(manifest.includesWindowsGpuNative, false); assert.equal(manifest.includesWindowsGpuRuntime, false);
   assert.ok(manifest.files.some(item => item.file === 'NotionSwitch.exe'));
+  const updater = await import(pathToFileURL(path.join(destination, 'scripts/client-update-helper.mjs')).href);
+  assert.equal(typeof updater.applyClientUpdate, 'function', 'The packaged updater must include every static dependency');
   assert.equal(manifest.files.some(item => /Notion\.exe|private\.txt|deepseek-api-key\.txt/.test(item.file)), false);
   const documents = ['WINDOWS-使用说明.md'], visited = new Set();
   while (documents.length) {

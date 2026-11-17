@@ -1,3 +1,4 @@
+import { defaultOutputDirectory } from './default-output.mjs';
 /**
  * videodl-tool: Download videos from Chinese platforms.
  *
@@ -29,7 +30,7 @@ function needsCdpVideoExtraction(url) {
         return false;
     }
 }
-const DEFAULT_OUTPUT_DIR = "/mnt/d/Download/original_video";
+const DEFAULT_OUTPUT_DIR = defaultOutputDirectory({ video: true });
 function sanitizeFolderName(name) {
     return (name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "").substring(0, 100) || "untitled");
 }
