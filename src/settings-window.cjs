@@ -67,6 +67,7 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
     if (main.isMinimized()) main.restore(); main.show(); main.focus();
     return true;
   }
+  app.on('notion-switch:open-main', () => void openNotion());
   async function open() {
     await app.whenReady();
     if (window && !window.isDestroyed()) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); return; }
@@ -125,6 +126,7 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
       tray.setToolTip('Switch Notion · 快捷收集与配置');
       tray.setContextMenu(Menu.buildFromTemplate([{ label: '快捷收集', click: () => void collection.open() }, { label: '收集任务与选项', click: () => void collection.open(true) }, { label: '打开 NotionSwitch 配置', click: () => void open() }, { label: '一键启动 Notion', click: () => void openNotion() }, { type: 'separator' }, { label: '退出 NotionSwitch', click: () => app.quit() }]));
       tray.on('click', () => void collection.open());
+      tray.on('double-click', () => void collection.open());
     } catch {}
     if (process.env.NOTION_SWITCH_OPEN_SETTINGS === '1') await open();
     if (process.env.NOTION_SWITCH_OPEN_COLLECTION === '1') await collection.open();

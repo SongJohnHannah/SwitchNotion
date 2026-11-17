@@ -39,7 +39,8 @@ export function prepareRootLaunchers({ sourceProject = project, host = process.p
     const settings = path.join(staging, 'NotionSwitch 配置.exe');
     if (compile) compile(settings);
     else execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'scripts/compile-launcher.ps1'), '-Source', path.join(root, 'scripts/windows-launcher.cs'), '-Destination', settings], { windowsHide: true, stdio: 'pipe', timeout: 30000 });
-    const windows = [built, settings];
+    const collection = path.join(staging, 'NotionSwitch 快捷收集.exe'); fs.copyFileSync(settings, collection);
+    const windows = [built, settings, collection];
     for (const name of ['SwitchNotion.exe', 'NotionSwitch.exe']) { const file = path.join(staging, name); fs.copyFileSync(built, file); windows.push(file); }
     const update = path.join(staging, 'NotionSwitch 更新.exe'); fs.copyFileSync(settings, update); windows.push(update);
     assertDistributionFiles(staging, windows, keys);

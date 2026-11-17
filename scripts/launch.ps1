@@ -1,4 +1,4 @@
-﻿param([ValidateSet('notion', 'settings', 'update')][string]$Target = 'notion')
+﻿param([ValidateSet('notion', 'settings', 'collection', 'update')][string]$Target = 'notion')
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -7,6 +7,10 @@ function Write-LaunchStatus([string]$Message) {
   if ($env:NOTION_SWITCH_LAUNCHER_UI -eq '1') { [Console]::WriteLine('NOTION_SWITCH_STATUS:' + $Message) }
 }
 try {
+  if ($Target -ne 'update') {
+    Write-LaunchStatus '正在结束旧的 Switch Notion 进程并重新启动…'
+    & (Join-Path $PSScriptRoot 'restart-windows-runtime.ps1') -ProjectRoot $projectRoot
+  }
   Write-LaunchStatus '正在检查运行环境…'
   $nodePath = $null
   $bundledNode = Join-Path $projectRoot 'bin\node.exe'
@@ -28,7 +32,7 @@ try {
     $selected = & (Join-Path $PSScriptRoot 'bootstrap-windows.ps1') -NodePath $nodePath -ProjectRoot $projectRoot
     if (-not $selected) { exit 0 }
   }
-  $scriptName = if ($Target -eq 'settings') { 'open-settings.mjs' } elseif ($Target -eq 'update') { 'open-update.mjs' } else { 'open-notion.mjs' }
+  $scriptName = if ($Target -eq 'settings') { 'open-settings.mjs' } elseif ($Target -eq 'collection') { 'open-collection.mjs' } elseif ($Target -eq 'update') { 'open-update.mjs' } else { 'open-notion.mjs' }
   Set-Location -LiteralPath $projectRoot
   Write-LaunchStatus '正在准备并打开窗口，首次启动或更新可能需要几分钟…'
   $ErrorActionPreference = 'Continue'

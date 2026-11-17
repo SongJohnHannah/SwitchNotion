@@ -16,8 +16,9 @@ export async function waitForRuntime({ root, pid, timeoutMs = 15000, requireVisi
           const status = await response.json();
           onObservation({ state: 'status', pid, reportedPid: status.pid, ready: !!status.appReady,
             windows: status.windows?.map(window => ({ visible: window.visible, minimized: window.minimized, destroyed: window.destroyed })) });
-          if (status.pid === pid && status.appReady && status.windows?.length) {
-            if (!requireVisibleWindow || status.windows.some(window => window.visible === true && !window.destroyed)) return true;
+          if (status.pid === pid && status.appReady) {
+            if (status.windows?.some(window => !window.destroyed &&
+              (!requireVisibleWindow || window.visible === true && !window.minimized))) return true;
             if (activationAttempts < 3 && Date.now() >= nextActivation) {
               activationAttempts++; nextActivation = Date.now() + 500;
               await fetchImpl(`http://127.0.0.1:${info.port}/notion/open`, { method: 'POST',

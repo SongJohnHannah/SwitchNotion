@@ -61,6 +61,16 @@ test('a runtime with missing launch metadata gives root-directory instructions a
   assert.match(result.dialogs[0][1], /项目根目录.*Switch Notion/);
 });
 
+test('stale Windows runtime shortcuts return to the visible restart launcher when it is available', t => {
+  const f = fixture(t), launcher = path.join(f.project, 'Switch Notion.exe');
+  fs.writeFileSync(launcher, 'fixture Windows launcher');
+  const result = runHook(f);
+  assert.equal(result.spawned.length, 1);
+  assert.equal(result.spawned[0][0], launcher);
+  assert.deepEqual(Array.from(result.spawned[0][1]), []);
+  assert.deepEqual(result.exits, [0]);
+});
+
 test('only the isolated profile disables its built-in updater and all other saved state is preserved', t => {
   const f = fixture(t), profile = path.join(f.root, 'profile'); fs.mkdirSync(profile);
   const file = path.join(profile, 'state.json');

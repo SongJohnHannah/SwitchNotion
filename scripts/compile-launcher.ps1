@@ -4,7 +4,7 @@ $Source = [IO.Path]::GetFullPath($Source)
 $Destination = [IO.Path]::GetFullPath($Destination)
 $code = Get-Content -LiteralPath $Source -Raw -Encoding UTF8
 if (-not $IconPath) {
-  $iconName = if ([IO.Path]::GetFileName($Destination) -match '配置|更新') { 'notion-settings.ico' } else { 'notion.ico' }
+  $iconName = if ([IO.Path]::GetFileName($Destination) -match '配置|收集|更新') { 'notion-settings.ico' } else { 'notion.ico' }
   $IconPath = Join-Path (Split-Path -Parent (Split-Path -Parent $Source)) ('assets\' + $iconName)
 }
 $parameters = New-Object System.CodeDom.Compiler.CompilerParameters

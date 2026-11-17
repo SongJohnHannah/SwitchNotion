@@ -19,6 +19,7 @@ test('uncompressed root launchers include both systems, keep code current and pr
   assert.equal(path.basename(result.mac), 'Switch Notion.app');
   assert.match(fs.readFileSync(path.join(result.mac, 'Contents/Info.plist'), 'utf8'), /<key>CFBundleName<\/key><string>SwitchNotion<\/string>/);
   assert.equal(fs.readFileSync(path.join(root, 'bin/node.exe'), 'utf8'), 'fixture Node');
+  assert.equal(fs.readFileSync(path.join(root, 'NotionSwitch 快捷收集.exe'), 'utf8'), 'MZ fixture launcher');
   const entry = fs.readFileSync(path.join(result.mac, 'Contents/MacOS/SwitchNotion'), 'utf8');
   assert.ok(entry.includes('adjacent=')); assert.ok(entry.includes('.notion-switch/mac-arm64')); assert.ok(entry.includes('Application Support/Switch Notion'));
   assert.equal(fs.existsSync(path.join(result.mac, 'Contents/Resources/project/.notion-switch')), false);

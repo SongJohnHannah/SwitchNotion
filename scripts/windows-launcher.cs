@@ -21,7 +21,7 @@ internal static class NotionSwitchLauncher
             string script = Path.Combine(root, "scripts", "launch.ps1");
             if (!File.Exists(script)) throw new Exception("请先完整解压 NotionSwitch，再双击启动程序。");
             string name = Path.GetFileNameWithoutExtension(Assembly.GetExecutingAssembly().Location);
-            string target = name.Contains("配置") ? "settings" : name.Contains("更新") ? "update" : "notion";
+            string target = name.Contains("快捷收集") ? "collection" : name.Contains("配置") ? "settings" : name.Contains("更新") ? "update" : "notion";
             string identity;
             using (SHA256 hash = SHA256.Create())
             {
@@ -84,13 +84,13 @@ internal sealed class LaunchWindow : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
         Controls.Add(layout);
-        Label heading = new Label { Text = target == "settings" ? "正在打开配置中心" : target == "update" ? "正在检查更新" : "正在启动 NotionSwitch", Dock = DockStyle.Fill, Font = new Font(Font.FontFamily, 13F, FontStyle.Bold), Margin = Padding.Empty };
+        Label heading = new Label { Text = target == "settings" ? "正在打开配置中心" : target == "collection" ? "正在打开快捷收集" : target == "update" ? "正在检查更新" : "正在启动 NotionSwitch", Dock = DockStyle.Fill, Font = new Font(Font.FontFamily, 13F, FontStyle.Bold), Margin = Padding.Empty };
         layout.Controls.Add(heading, 0, 0);
         status = new Label { Text = "正在准备，请稍候…", Dock = DockStyle.Fill, Margin = new Padding(0, 5, 0, 5) };
         layout.Controls.Add(status, 0, 1);
         ProgressBar progress = new ProgressBar { Style = ProgressBarStyle.Marquee, MarqueeAnimationSpeed = 28, Dock = DockStyle.Fill, Margin = new Padding(0, 5, 0, 5) };
         layout.Controls.Add(progress, 0, 2);
-        Label hint = new Label { Text = "无需重复双击。关闭此窗口后仍会继续启动。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, Font = new Font(Font.FontFamily, 9F), Margin = new Padding(0, 12, 0, 0) };
+        Label hint = new Label { Text = "再次双击会结束上次启动并重新打开。", Dock = DockStyle.Fill, ForeColor = Color.DimGray, Font = new Font(Font.FontFamily, 9F), Margin = new Padding(0, 12, 0, 0) };
         layout.Controls.Add(hint, 0, 3);
         timer = new System.Windows.Forms.Timer { Interval = 150 };
         timer.Tick += Poll;
@@ -144,7 +144,31 @@ internal sealed class LaunchWindow : Form
 
     private void Poll(object sender, EventArgs args)
     {
-        if (wake.WaitOne(0)) { Show(); WindowState = FormWindowState.Normal; Activate(); }
+        if (wake.WaitOne(0))
+        {
+            Show(); WindowState = FormWindowState.Normal; Activate();
+            try
+            {
+                if (child != null)
+                {
+                    if (!child.HasExited)
+                    {
+                        using (Process stop = Process.Start(new ProcessStartInfo
+                        {
+                            FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "taskkill.exe"),
+                            Arguments = "/PID " + child.Id + " /T /F",
+                            UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden
+                        })) stop.WaitForExit(5000);
+                        if (!child.WaitForExit(5000)) throw new Exception("上次启动尚未退出，请稍后重新双击。");
+                    }
+                    child.Dispose(); child = null;
+                }
+                failure = null;
+                StartLaunch();
+            }
+            catch (Exception error) { Finish(error.Message); }
+            return;
+        }
         if (child != null && child.HasExited)
         {
             // The tagged failure message is normally delivered before exit;

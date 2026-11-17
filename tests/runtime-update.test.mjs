@@ -61,6 +61,18 @@ test('failed staging and incompatible releases keep the current runtime and orig
   assert.equal(fs.readdirSync(f.root).some(name => name.startsWith('runtime-staging-')), false);
 });
 
+test('the last synchronization result reports its own status independently of current compatibility', t => {
+  const f = fixture(t); build(f.source, '7.40.20'); prepareRuntime(f); acceptRuntime(f);
+  const success = updateStatus(f);
+  assert.equal(success.lastStatus, 'applied'); assert.equal(success.lastResult, '原型已同步，启动检查通过。');
+  build(f.source, '8.0.0');
+  const incompatible = updateStatus(f);
+  assert.equal(incompatible.compatible, false); assert.equal(incompatible.lastStatus, 'applied');
+  fs.writeFileSync(path.join(f.root, 'update-status.json'), JSON.stringify({ status: 'blocked', message: '更新未完成。' }));
+  build(f.source, '7.40.20');
+  assert.equal(updateStatus(f).compatible, true); assert.equal(updateStatus(f).lastStatus, 'blocked');
+});
+
 test('isolated runtimes omit the official installer feed so they cannot replace ordinary Notion shortcuts', t => {
   const f = fixture(t); build(f.source, '7.40.20');
   const feed = path.join(f.source, 'resources/app-update.yml');

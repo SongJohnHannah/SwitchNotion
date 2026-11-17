@@ -1,12 +1,13 @@
 const path = require('node:path');
 const { taskbarIds } = require('./platform/windows-identity.cjs');
-const icons = { main: path.join(__dirname, 'app-icon.png'), settings: path.join(__dirname, 'settings', 'app-icon.png') };
-const branded = new WeakSet(), installed = new WeakMap();
+const icons = { main: path.join(__dirname, 'app-icon.png'), settings: path.join(__dirname, 'settings', 'app-icon.png'),
+  collection: path.join(__dirname, 'settings', 'app-icon.png') };
+const branded = new WeakMap(), installed = new WeakMap();
 
 function appImage(nativeImage, kind = 'main', size) {
   let image = nativeImage.createFromPath(icons[kind] || icons.main);
   if (size) image = image.resize({ width: size, height: size });
-  branded.add(image);
+  branded.set(image, kind);
   return image;
 }
 function installAppBranding(electron, { moduleLoader = require('node:module'), platform = process.platform, project = process.env.NOTION_SWITCH_PROJECT } = {}) {
@@ -26,6 +27,10 @@ function installAppBranding(electron, { moduleLoader = require('node:module'), p
       construct(Target, args, NewTarget) {
         const tray = Reflect.construct(Target, [choose(args[0])], NewTarget), setImage = tray.setImage.bind(tray);
         tray.setImage = image => setImage(choose(image));
+        if (branded.get(args[0]) !== 'settings') {
+          // Restore after upstream handlers, which can toggle or hide the window.
+          tray.on?.('double-click', () => setImmediate(() => app.emit('notion-switch:open-main')));
+        }
         return tray;
       }
     }) });
@@ -41,14 +46,16 @@ function installAppBranding(electron, { moduleLoader = require('node:module'), p
   }
   installed.set(electron, exported); installed.set(exported, exported);
   app.on('browser-window-created', (_event, window) => {
-    const kind = /配置/.test(window.getTitle?.() || '') ? 'settings' : 'main';
+    const title = window.getTitle?.() || '';
+    const kind = /快捷收集/.test(title) ? 'collection' : /配置/.test(title) ? 'settings' : 'main';
     if (platform === 'win32' && window.setAppDetails) {
       const setDetails = window.setAppDetails.bind(window);
       const details = { appId: taskbarIds[kind],
         appIconPath: icons[kind].replace(/\.png$/, '.ico'), appIconIndex: 0 };
       if (typeof project === 'string' && path.win32.isAbsolute(project)) {
-        details.relaunchCommand = '"' + path.win32.join(project, kind === 'settings' ? 'NotionSwitch 配置.exe' : 'SwitchNotion.exe') + '"';
-        details.relaunchDisplayName = kind === 'settings' ? 'NotionSwitch 配置' : 'Switch Notion';
+        const launcher = { main: 'SwitchNotion', settings: 'NotionSwitch 配置', collection: 'NotionSwitch 快捷收集' }[kind];
+        details.relaunchCommand = '"' + path.win32.join(project, launcher + '.exe') + '"';
+        details.relaunchDisplayName = kind === 'main' ? 'Switch Notion' : launcher;
       }
       window.setAppDetails = value => setDetails({ ...value, ...details });
     }

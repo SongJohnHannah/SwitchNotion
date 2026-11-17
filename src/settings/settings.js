@@ -325,7 +325,7 @@ async function checkUpdates() {
   const automatic = info.automaticCompatibility;
   $('updates-web').textContent = automatic ? '网页自动适配已开启 · 本次已检查 ' + automatic.checked + ' 个脚本 · 自动适配 ' + automatic.adapted + ' 个 · 不兼容 ' + automatic.blocked + ' 个' : '网页模块加载时自动检查。';
   $('updates-message').textContent = info.message; $('rollback-update').hidden = !info.previousVersion;
-  result('updates-result', info.lastResult || '', !info.compatible || !info.clientCompatible);
+  result('updates-result', info.lastResult || '', ['blocked', 'held'].includes(info.lastStatus));
 }
 $('update-switch-notion').addEventListener('click', () => operation($('client-updates-card'), async () => {
   const button = $('update-switch-notion'); button.textContent = '正在更新…';

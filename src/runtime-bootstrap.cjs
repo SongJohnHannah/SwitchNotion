@@ -19,7 +19,9 @@ function initializeRuntime({ app, dialog, platform, env = process.env, resources
     const script = path.join(launcher.projectDirectory, 'scripts', 'open-notion.mjs');
     if (isFile(script)) {
       try {
-        const child = spawnImpl(launcher.nodeExecutable, [script], { cwd: launcher.projectDirectory, detached: true, windowsHide: true, stdio: 'ignore',
+        const windowsLauncher = path.join(launcher.projectDirectory, 'Switch Notion.exe');
+        const useWindowsLauncher = platform.id === 'win32' && isFile(windowsLauncher);
+        const child = spawnImpl(useWindowsLauncher ? windowsLauncher : launcher.nodeExecutable, useWindowsLauncher ? [] : [script], { cwd: launcher.projectDirectory, detached: true, windowsHide: true, stdio: 'ignore',
           env: { ...env, NOTION_SWITCH_ROOT: root, NOTION_SWITCH_PROJECT: launcher.projectDirectory } });
         child.on('error', () => {});
         if (!Number.isSafeInteger(child.pid)) throw Error('Launcher unavailable');

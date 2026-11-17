@@ -6,6 +6,23 @@ import { createRequire } from 'node:module';
 const { appImage, icons, installAppBranding } = createRequire(import.meta.url)('../src/app-branding.cjs');
 const { createDesktopPlatform } = createRequire(import.meta.url)('../src/platform/index.cjs');
 
+test('double-clicking the native Windows tray requests the main app after upstream handlers finish', async () => {
+  const app = new EventEmitter(); app.whenReady = async () => {};
+  const nativeImage = { createFromPath: file => ({ file, resize: () => ({ file }) }) };
+  class Tray extends EventEmitter { setImage() {} }
+  const electron = { app, nativeImage, Tray }, events = [];
+  app.on('notion-switch:open-main', () => events.push('show-main'));
+  installAppBranding(electron, { platform: 'win32' });
+  const tray = new electron.Tray('upstream.ico');
+  tray.on('double-click', () => events.push('upstream'));
+  tray.emit('double-click');
+  await new Promise(setImmediate);
+  assert.deepEqual(events, ['upstream', 'show-main']);
+  new electron.Tray(appImage(nativeImage, 'settings')).emit('double-click');
+  await new Promise(setImmediate);
+  assert.deepEqual(events, ['upstream', 'show-main'], 'The collection tray keeps its own window action');
+});
+
 test('startup and window details use a fresh branded taskbar identity instead of the cached prototype group', () => {
   const app = new EventEmitter(), processIds = [];
   app.whenReady = async () => {};
@@ -16,7 +33,8 @@ test('startup and window details use a fresh branded taskbar identity instead of
   assert.equal(processIds.at(-1), 'com.switchnotion.desktop.bear', 'Later native identity updates must preserve the branded group');
   const electron = { app, nativeImage: { createFromPath: file => ({ file }) } };
   installAppBranding(electron, { platform: 'win32' });
-  for (const [title, expected] of [['工作区', 'com.switchnotion.desktop.bear'], ['NotionSwitch 配置', 'com.switchnotion.desktop.bear.settings']]) {
+  for (const [title, expected] of [['工作区', 'com.switchnotion.desktop.bear'], ['NotionSwitch 配置', 'com.switchnotion.desktop.bear.settings'],
+    ['Switch Notion · 快捷收集', 'com.switchnotion.desktop.bear.collection']]) {
     const window = new EventEmitter(); window.getTitle = () => title;
     window.setAppDetails = details => { window.details = details; };
     app.emit('browser-window-created', {}, window);
@@ -42,13 +60,14 @@ test('both native and configuration trays retain their distinct personal icons a
   configuration.setImage(appImage(nativeImage, 'settings', 18));
   assert.equal(configuration.image.file, icons.settings);
   const current = electron.Tray; installAppBranding(electron); assert.equal(electron.Tray, current);
-  for (const [title, expected] of [['工作区', icons.main], ['NotionSwitch 配置', icons.settings]]) {
+  for (const [title, expected] of [['工作区', icons.main], ['NotionSwitch 配置', icons.settings], ['Switch Notion · 快捷收集', icons.collection]]) {
     const window = new EventEmitter(); window.getTitle = () => title; window.isDestroyed = () => false;
     window.setIcon = image => { window.image = image; };
     window.setAppDetails = details => { window.taskbar = details; };
     app.emit('browser-window-created', {}, window); assert.equal(window.image.file, expected);
     assert.equal(window.taskbar.appIconPath, expected.replace(/\.png$/, '.ico'));
-    assert.equal(window.taskbar.relaunchCommand, '"D:\\Switch Notion\\' + (title === 'NotionSwitch 配置' ? 'NotionSwitch 配置.exe' : 'SwitchNotion.exe') + '"');
+    const launcher = title === 'NotionSwitch 配置' ? 'NotionSwitch 配置.exe' : title === 'Switch Notion · 快捷收集' ? 'NotionSwitch 快捷收集.exe' : 'SwitchNotion.exe';
+    assert.equal(window.taskbar.relaunchCommand, '"D:\\Switch Notion\\' + launcher + '"');
     window.setAppDetails({ appIconPath: 'upstream-notion.ico', appId: 'notion.id' });
     assert.equal(window.taskbar.appIconPath, expected.replace(/\.png$/, '.ico'));
     window.image = null; window.emit('ready-to-show'); assert.equal(window.image.file, expected);
