@@ -4,7 +4,7 @@
 
 项目通过本机隔离副本和协议适配器接入 DeepSeek。原版 Notion 安装保持原样；已授权的页面和数据库操作复用 Notion API，原生编辑等入口按各自已适配协议执行。本项目是独立原型，与 Notion、DeepSeek 官方没有隶属关系，也不附带任何官方 AI 服务额度。
 
-第一次了解项目可阅读 [项目介绍](docs/PROJECT-OVERVIEW.md)，其中说明运行结构、功能边界、更新按钮调用链及 EXE/ZIP 的区别。使用入口见 [一键启动说明](一键启动说明.md)、[Windows 使用说明](WINDOWS-使用说明.md) 和 [Mac 使用说明](MAC-使用说明.md)。
+第一次了解项目可阅读 [项目介绍](docs/PROJECT-OVERVIEW.md)，其中说明运行结构、功能边界、更新按钮调用链及 EXE/ZIP 的区别。使用入口见 [一键启动说明](一键启动说明.md)、[Windows 使用说明](WINDOWS-使用说明.md) 和 [Mac 使用说明](MAC-USAGE.md)。
 
 ## 功能
 
@@ -34,13 +34,15 @@
 
 ## 启动入口与源码运行
 
-已有完整项目目录时，Windows 双击根目录 `Switch Notion.exe`，M1 Mac 双击 `Switch Notion.app`，Mac 也可用 `Switch Notion 启动.command`。入口按当前系统查找 Notion。Windows EXE 是启动器，依赖相邻的 `src`、`scripts`、`bin` 等文件，需保持目录完整；不能只复制 EXE 使用。
+已有完整项目目录时，Windows 双击根目录 `Switch Notion.exe`，M1 Mac 双击 `Switch Notion.app`，Mac 也可用 `Start-SwitchNotion.command`。入口按当前系统查找 Notion。Windows EXE 是启动器，依赖相邻的 `src`、`scripts`、`bin` 等文件，需保持目录完整；不能只复制 EXE 使用。
 
 直接克隆 Git 仓库不包含已编译的 Windows EXE、Node 二进制和本机运行资料。安装 Node.js 22 或更新版本后，可先使用下方 [源码运行命令](#从源码运行)；日常修改功能代码通常在重新启动后加载，无需重新编译启动器或生成 ZIP。启动器重新编译及分发包的用途见 [项目介绍](docs/PROJECT-OVERVIEW.md#启动器编译与打包)。
 
-下载源码后双击根目录的 `Switch Notion 启动.command`；配置入口为 `Switch Notion 配置.command`。Mac 分发包可双击 `SwitchNotion.app`，或把应用拖入“应用程序”后打开。首次自动查找官方 Notion，缺少运行环境时由窗口提示准备，无需输入终端命令。
+下载源码后双击根目录的 `Start-SwitchNotion.command`；配置入口为 `Configure-SwitchNotion.command`。Mac 分发包可双击 `SwitchNotion.app`，或把应用拖入“应用程序”后打开。首次自动查找官方 Notion，缺少运行环境时由窗口提示准备，无需输入终端命令。
 
-现有 Mac 版本由用户确认可用，新增 AI 引用链路通过两种分发包自动测试；本次 Windows 环境未执行新增功能的 Mac 原生控件验收。尚未提供 Apple Developer ID 公证。安装、首次系统确认及本机资料位置见 [Mac 使用说明](MAC-使用说明.md)。
+Mac 源码安装可双击 `Install-SwitchNotion.command`，以后从“应用程序”打开 `SwitchNotion.app`。这个入口继续读取原项目的代码和资料，项目文件夹应保留在原位置。Mac 入口、说明和接管组件模板现使用英文文件名；更新失败后的处理见 [Mac 更新排错](MAC-USAGE.md#更新失败时)。
+
+现有 Mac 版本由用户确认可用，新增 AI 引用链路通过两种分发包自动测试；本次 Windows 环境未执行新增功能的 Mac 原生控件验收。尚未提供 Apple Developer ID 公证。安装、首次系统确认及本机资料位置见 [Mac 使用说明](MAC-USAGE.md)。
 
 ## Windows 使用
 

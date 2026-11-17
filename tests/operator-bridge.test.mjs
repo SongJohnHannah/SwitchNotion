@@ -62,13 +62,21 @@ test('caller pipe closure aborts an active worker rather than leaving GPU work o
   assert.match(f.events().at(-1).message, /断开/);
 });
 
-test('CLI returns its final JSON and exits while its parent keeps stdin open', async () => {
+for (const alias of [false, true]) test(alias
+  ? 'CLI resolves directory aliases on Windows and Mac before detecting its entry point'
+  : 'CLI returns its final JSON and exits while its parent keeps stdin open', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'operator-bridge-pipe-'));
   let child;
   try {
     await fs.copyFile(new URL('../src/speech/operator-bridge.mjs', import.meta.url), path.join(directory, 'bridge.mjs'));
     await fs.writeFile(path.join(directory, 'operator.cjs'), 'exports.describe=()=>({model:"large-v3-turbo",gpuProbePerformed:false});');
-    child = spawn(process.execPath, [path.join(directory, 'bridge.mjs')], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let entry = path.join(directory, 'bridge.mjs');
+    if (alias) {
+      const link = path.join(directory, 'entry alias');
+      await fs.symlink(await fs.realpath(directory), link, process.platform === 'win32' ? 'junction' : 'dir');
+      entry = path.join(link, 'bridge.mjs');
+    }
+    child = spawn(process.execPath, [entry], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let output = '', stderr = '';
     child.stdout.setEncoding('utf8'); child.stdout.on('data', data => { output += data; });
     child.stderr.setEncoding('utf8'); child.stderr.on('data', data => { stderr += data; });

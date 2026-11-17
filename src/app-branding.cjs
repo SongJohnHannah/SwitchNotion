@@ -46,8 +46,8 @@ function installAppBranding(electron, { moduleLoader = require('node:module'), p
       const setDetails = window.setAppDetails.bind(window);
       const details = { appId: taskbarIds[kind],
         appIconPath: icons[kind].replace(/\.png$/, '.ico'), appIconIndex: 0 };
-      if (typeof project === 'string' && path.isAbsolute(project)) {
-        details.relaunchCommand = '"' + path.join(project, kind === 'settings' ? 'NotionSwitch 配置.exe' : 'SwitchNotion.exe') + '"';
+      if (typeof project === 'string' && path.win32.isAbsolute(project)) {
+        details.relaunchCommand = '"' + path.win32.join(project, kind === 'settings' ? 'NotionSwitch 配置.exe' : 'SwitchNotion.exe') + '"';
         details.relaunchDisplayName = kind === 'settings' ? 'NotionSwitch 配置' : 'Switch Notion';
       }
       window.setAppDetails = value => setDetails({ ...value, ...details });

@@ -117,4 +117,4 @@ powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/
 
 验收记录按源码/协议、合成调用和真实窗口分别保存。2026-11-16 的共用 AI 客户端回归为 54 个测试文件、447 项通过、0 跳过；这不等于全部功能或所有平台的实机验收。后续结果见 [AI 对接检查](AI-INTEGRATION-AUDIT.md) 及 [Windows 验证清单](WINDOWS-VALIDATION-CHECKLIST.md)。
 
-使用入口和日常操作参见仓库根目录的 [README](../README.md)、[Windows 使用说明](../WINDOWS-使用说明.md) 与 [Mac 使用说明](../MAC-使用说明.md)。
+使用入口和日常操作参见仓库根目录的 [README](../README.md)、[Windows 使用说明](../WINDOWS-使用说明.md) 与 [Mac 使用说明](../MAC-USAGE.md)。

@@ -18,6 +18,7 @@ test('Mac package is relocatable, carries the personal icon and preserves double
   assert.match(fs.readFileSync(path.join(result.app,'Contents/Resources/project/docs/MAC-CHECKLIST-ACCEPTANCE-2026-10-29.md'),'utf8'), /C10 建库菜单位置/);
   const plist = fs.readFileSync(path.join(result.app, 'Contents/Info.plist'), 'utf8');
   assert.equal(path.basename(result.app), 'SwitchNotion.app');
+  assert.ok(fs.existsSync(path.join(result.directory, 'MAC-USAGE.md')));
   assert.match(plist, /<key>CFBundleName<\/key><string>SwitchNotion<\/string>/);
   assert.match(plist, /<key>CFBundleDisplayName<\/key><string>SwitchNotion<\/string>/); assert.ok(plist.includes('notion.icns'));
   const packagedManifest = JSON.parse(fs.readFileSync(path.join(result.directory, 'package-manifest.json')));
@@ -25,7 +26,7 @@ test('Mac package is relocatable, carries the personal icon and preserves double
   assert.equal(packagedManifest.files.some(item => /(?:^|\/)(?:windows-gpu-native|windows-gpu-operator|\.notion-switch)(?:\/|$)/.test(item.file)), false);
   assert.equal(fs.existsSync(path.join(result.app, 'Contents/Resources/project/assets/windows-gpu-native')), false);
   assert.equal(fs.existsSync(path.join(result.app, 'Contents/Resources/project/.notion-switch')), false);
-  for (const name of ['Switch Notion 启动.command', 'Switch Notion 配置.command']) {
+  for (const name of ['Start-SwitchNotion.command', 'Configure-SwitchNotion.command']) {
     assert.ok(fs.readFileSync(path.join(result.directory, name), 'utf8').includes('/SwitchNotion.app/Contents/Resources/project'));
   }
   assert.deepEqual(fs.readFileSync(path.join(result.app, 'Contents/Resources/notion.icns')), fs.readFileSync(path.join(project, 'assets/notion.icns')));
@@ -61,7 +62,7 @@ test('Mac package is relocatable, carries the personal icon and preserves double
     at += 46 + length + extra + comment;
   }
   for (const [name, mode] of modes) if (/\.command$|\.sh$|Contents\/MacOS\//.test(name)) assert.equal(mode, 0o755, name);
-  assert.ok([...modes.keys()].some(name => name.endsWith('/Switch Notion 启动.command')));
+  assert.ok([...modes.keys()].some(name => name.endsWith('/Start-SwitchNotion.command')));
   assert.ok([...modes.keys()].some(name => name.includes('/SwitchNotion.app/Contents/Info.plist')));
   assert.throws(() => stageMac({ destination: result.directory }), /新目录/);
 });

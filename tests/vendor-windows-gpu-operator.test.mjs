@@ -13,7 +13,7 @@ async function put(root, file, data) {
   await fs.writeFile(target, typeof data === 'object' && !Buffer.isBuffer(data) ? JSON.stringify(data, null, 2) + '\n' : data);
 }
 async function fixture(t) {
-  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'vendor-gpu-'));
+  const temp = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'vendor-gpu-'));
   t.after(() => fs.rm(temp, { recursive: true, force: true }));
   const source = path.join(temp, 'original'), project = path.join(temp, 'project');
   const dll = Buffer.from('MZ-stable-native'), ready = Buffer.from('{"ready":true}\n');

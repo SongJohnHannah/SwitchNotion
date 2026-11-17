@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { prepareRuntime, acceptRuntime, rollbackRuntime, previousRuntime, updateStatus } from '../scripts/runtime-update.mjs';
 import platformModule from '../src/platform/index.cjs';
 import adapter from '../src/macos-adapter-loader.cjs';
@@ -41,6 +42,27 @@ function bundleBytes(directory) {
   function visit(dir) { for (const item of fs.readdirSync(dir, { withFileTypes: true })) { const file = path.join(dir, item.name); if (item.isDirectory()) visit(file); else result[path.relative(directory, file)] = fs.readFileSync(file).toString('base64'); } }
   visit(directory); return result;
 }
+test('Mac adapter filenames produce the same traversal order in English and Chinese runtimes', () => {
+  const collators = ['en-US', 'zh-CN'].map(locale => new Intl.Collator(locale));
+  function visit(directory) {
+    const entries = fs.readdirSync(directory, { withFileTypes: true });
+    const names = entries.map(entry => entry.name);
+    for (const name of names) assert.match(name, /^[\x20-\x7e]+$/, 'Adapter filenames must use ASCII: ' + path.join(directory, name));
+    assert.deepEqual([...names].sort(collators[0].compare), [...names].sort(collators[1].compare), directory);
+    for (const entry of entries) if (entry.isDirectory()) visit(path.join(directory, entry.name));
+  }
+  visit(path.resolve('src'));
+});
+test('Mac snapshots load with either an English or Chinese process locale', t => {
+  const f = fixture(t), prepared = prepareRuntime(f);
+  const code = 'const loader = require(process.argv[1]); console.log(loader.resolveMacAdapter({ resourcesPath: process.argv[2], env: {} }));';
+  for (const language of ['en_US.UTF-8', 'zh_CN.UTF-8']) {
+    const hook = execFileSync(process.execPath, ['-e', code, path.resolve('src/macos-adapter-loader.cjs'), f.resourcesPath], {
+      encoding: 'utf8', env: { ...process.env, LANG: language, LC_ALL: language }
+    }).trim();
+    assert.equal(hook, path.join(f.root, 'adapters', prepared.adapterHash, 'src', 'desktop-hook.cjs'));
+  }
+});
 test('Mac adapter updates preserve every signed bundle byte, load the selected verified snapshot and support rollback', t => {
   const f = fixture(t), first = prepareRuntime(f); acceptRuntime(f);
   const signed = bundleBytes(f.resourcesPath), firstHook = adapter.resolveMacAdapter(f);

@@ -9,7 +9,7 @@
 - 101 项既有 Agent/建库回归全部通过；Windows 只读环境检测通过；没有新增永久测试脚本。私有证据为 `wizard-calendar-regression.log`、`calendar-wizard-result.json`、`wizard-ui-result.json`、`wizard-live-result.json`。
 - 真实 Notion/Calendar 写入为 0，官方 Calendar 登录与真实回包、Mac 原生窗口待用户实测。重复日程修改、删除、自动会议链接及原建库内核未支持字段仍保留限制。此处优先于后面的历史“独立向导/日历写入尚未实现”记录。
 
-操作和预期结果见 [Mac 使用说明 N14/N15](../MAC-使用说明.md#新增-ai-手动验收清单)、[建库接口](NATIVE-DATABASE-BUILD-INTERFACE.md)、[日历接口](NATIVE-CALENDAR-INTERFACE.md)。
+操作和预期结果见 [Mac 使用说明 N14/N15](../MAC-USAGE.md#新增-ai-手动验收清单)、[建库接口](NATIVE-DATABASE-BUILD-INTERFACE.md)、[日历接口](NATIVE-CALENDAR-INTERFACE.md)。
 
 更新日期：2026-10-28。已拉取代码基线：`e8ba1ea`；历史引用基线：`f377592`，Mac 原生界面补充验收：`c4976f9`。本轮新增功能尚未提交；结果见末尾记录，后续接手先保留本机修改再更新。
 

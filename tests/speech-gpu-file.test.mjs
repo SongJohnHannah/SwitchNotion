@@ -134,7 +134,7 @@ test('the private runtime and its accumulation switch reach the actual worker sp
   for (const fp16Gemm of [false, true]) {
     let environment;
     const plan = normalizePlan({ runtimeVariant: 'sm75-native-fp16-accum-v1', runtimeRevision, fp16Gemm });
-    const provider = providerFor({ root, runtime, plan, spawnImpl: (_file, _args, options) => { environment = options.env; throw Error('captured-before-process'); } });
+    const provider = providerFor({ root, runtime, plan, platform, spawnImpl: (_file, _args, options) => { environment = options.env; throw Error('captured-before-process'); } });
     await assert.rejects(provider.start(), /captured-before-process/);
     assert.equal(environment.NOTION_SWITCH_CT2_MODULE_PATH, directory);
     assert.equal(environment.CT2_CUDA_TRUE_FP16_GEMM, fp16Gemm ? '1' : '0');
@@ -153,7 +153,7 @@ test('the selected CUDA cache reaches the actual child environment without chang
   const runtime = { ...platform.profile, pythonExecutable: path.join(root, 'python.exe'), modelDirectory: path.join(root, 'model'), dllDirectories: [] };
   for (const [allocatorCache, expected] of [['default', '4,3,12,209715200'], ['large', '4,3,14,1073741824'], ['compact', '2,6,28,1073741824']]) {
     let environment;
-    const provider = providerFor({ root, runtime, plan: normalizePlan({ allocatorCache }),
+    const provider = providerFor({ root, runtime, platform, plan: normalizePlan({ allocatorCache }),
       spawnImpl: (_file, _args, options) => { environment = options.env; throw Error('captured-before-process'); } });
     await assert.rejects(provider.start(), /captured-before-process/);
     assert.equal(environment.CT2_CUDA_CACHING_ALLOCATOR_CONFIG, expected);

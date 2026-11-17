@@ -1,6 +1,6 @@
 # NotionSwitch Windows 使用说明
 
-当前项目在 Windows 直接双击根目录 **Switch Notion.exe** 即可使用，无需重新打包。迁移包附带 Node.js 运行环境；本机已经完成配置的项目继续使用现有入口和资料。Mac 的既有使用方式见 `MAC-使用说明.md`，本次不重新打包 Mac。
+当前项目在 Windows 直接双击根目录 **Switch Notion.exe** 即可使用，无需重新打包。迁移包附带 Node.js 运行环境；本机已经完成配置的项目继续使用现有入口和资料。Mac 的既有使用方式见 `MAC-USAGE.md`，本次不重新打包 Mac。
 
 接手验证、修复和后续实现请使用 [Windows 待验证与修复清单](docs/WINDOWS-VALIDATION-CHECKLIST.md)。清单已包含最新引用修复、Mac 原生验收证据、Windows 引用逐项矩阵及尚未对接的 AI 功能待办；请分别记录待实现和实机验收结果。
 

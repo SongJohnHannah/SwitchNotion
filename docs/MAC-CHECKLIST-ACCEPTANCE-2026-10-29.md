@@ -131,4 +131,4 @@ Mac 启动、Mac 分发及新增账号状态三个现有测试文件共 23 项�
 
 详细日志位于忽略目录 `.notion-switch/mac-arm64/mac-ai-live/`，不随提交携带：`latest-source-tests-native.log`、`final-mac-scope-tests.log`、`new-checklist-protocol-result.json`、`generated-native-download-result.json`。公开客户端脚本仅缓存在忽略的 `research/.public-assets/`，不随代码提交。
 
-原生录音的实际开始、暂停、继续、停止、摘要和音频播放证据沿用 [Mac 使用说明](../MAC-使用说明.md#解锁后原生会议补验)。本轮新资源通过连续两次停止/尾音回放，不将其表述为新做了一场真实会议。上述未补验和受阻项目均保留，不能据源码通过宣称整份清单全部实机通过。
+原生录音的实际开始、暂停、继续、停止、摘要和音频播放证据沿用 [Mac 使用说明](../MAC-USAGE.md#解锁后原生会议补验)。本轮新资源通过连续两次停止/尾音回放，不将其表述为新做了一场真实会议。上述未补验和受阻项目均保留，不能据源码通过宣称整份清单全部实机通过。

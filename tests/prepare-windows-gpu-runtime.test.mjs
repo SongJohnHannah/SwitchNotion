@@ -12,7 +12,7 @@ async function put(root,file,bytes) {
   await fs.writeFile(path.join(root,file),typeof bytes==='object'&&!Buffer.isBuffer(bytes)?JSON.stringify(bytes,null,2)+'\n':bytes);
 }
 async function fixture(t) {
-  const temp=await fs.mkdtemp(path.join(os.tmpdir(),'prepare-gpu-'));
+  const temp=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'prepare-gpu-'));
   t.after(()=>fs.rm(temp,{recursive:true,force:true}));
   const source=path.join(temp,'source'),project=path.join(temp,'clone');
   const code=path.join(project,'src/speech/windows-operator'),native=path.join(project,'assets/windows-gpu-native');

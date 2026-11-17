@@ -70,7 +70,7 @@ export function startOperatorBridge({ input = process.stdin, output = process.st
   });
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   process.exitCode = await startOperatorBridge();
   // The bridge owns this one-request pipe. On Windows a paused, open parent
   // stdin can otherwise keep Node alive after the final JSON response. Let

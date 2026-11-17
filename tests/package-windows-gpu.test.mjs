@@ -35,7 +35,7 @@ test('Windows staging copies only canonical locked GPU files and reports optiona
   // this never copies the developer's actual multi-GB GPU installation.
   for (const folder of ['src', 'scripts', 'docs']) fs.cpSync(path.resolve(folder), path.join(f.project, folder), { recursive: true });
   writeJson(path.join(f.project, 'src/speech/windows-operator/asset-lock.json'), f.canonical);
-  for (const name of ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'WINDOWS-使用说明.md', 'MAC-使用说明.md', 'package.json', 'NotionSwitch 启动.vbs', 'NotionSwitch 配置.vbs', 'NotionSwitch 更新.vbs']) fs.copyFileSync(path.resolve(name), path.join(f.project, name));
+  for (const name of ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'WINDOWS-使用说明.md', 'MAC-USAGE.md', 'package.json', 'NotionSwitch 启动.vbs', 'NotionSwitch 配置.vbs', 'NotionSwitch 更新.vbs']) fs.copyFileSync(path.resolve(name), path.join(f.project, name));
   fs.writeFileSync(path.join(f.roots.runtime, 'private-transcript.txt'), 'unlisted private words');
   fs.writeFileSync(path.join(f.roots.runtime, 'gpu-owner.lock'), 'unlisted lease');
   fs.mkdirSync(path.join(f.project, '.notion-switch/profile')); fs.writeFileSync(path.join(f.project, '.notion-switch/profile/Cookies'), 'unlisted login');

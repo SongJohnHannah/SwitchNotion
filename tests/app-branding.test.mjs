@@ -48,7 +48,7 @@ test('both native and configuration trays retain their distinct personal icons a
     window.setAppDetails = details => { window.taskbar = details; };
     app.emit('browser-window-created', {}, window); assert.equal(window.image.file, expected);
     assert.equal(window.taskbar.appIconPath, expected.replace(/\.png$/, '.ico'));
-    assert.ok(window.taskbar.relaunchCommand.endsWith('.exe"'));
+    assert.equal(window.taskbar.relaunchCommand, '"D:\\Switch Notion\\' + (title === 'NotionSwitch 配置' ? 'NotionSwitch 配置.exe' : 'SwitchNotion.exe') + '"');
     window.setAppDetails({ appIconPath: 'upstream-notion.ico', appId: 'notion.id' });
     assert.equal(window.taskbar.appIconPath, expected.replace(/\.png$/, '.ico'));
     window.image = null; window.emit('ready-to-show'); assert.equal(window.image.file, expected);

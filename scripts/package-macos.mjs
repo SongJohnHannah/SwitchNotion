@@ -19,8 +19,8 @@ function descendants(root) {
 export function stageMac({ sourceProject = project, destination, projectAware = false }) {
   const target = path.resolve(destination), relative = path.relative(path.join(sourceProject, 'dist'), target);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || fs.existsSync(target)) throw Error('Mac 分发目标必须是 dist 内的新目录。');
-  const sources = ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'MAC-使用说明.md', 'docs/CONTENT-COLLECTION.md', 'docs/MAC-CHECKLIST-ACCEPTANCE-2026-10-29.md', 'package.json', 'assets/notion.icns',
-    'Switch Notion 启动.command', 'Switch Notion 配置.command', ...scripts.map(f => 'scripts/' + f),
+  const sources = ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'MAC-USAGE.md', 'docs/CONTENT-COLLECTION.md', 'docs/MAC-CHECKLIST-ACCEPTANCE-2026-10-29.md', 'package.json', 'assets/notion.icns',
+    'Start-SwitchNotion.command', 'Configure-SwitchNotion.command', ...scripts.map(f => 'scripts/' + f),
     ...descendants(path.join(sourceProject, 'src')).map(f => path.relative(sourceProject, f))];
   const keys = localDeepSeekKeys(sourceProject);
   assertDistributionFiles(sourceProject, sources.map(f => path.join(sourceProject, f)), keys);
@@ -32,7 +32,7 @@ export function stageMac({ sourceProject = project, destination, projectAware = 
   }
   fs.mkdirSync(path.join(app, 'Contents/MacOS'), { recursive: true });
   fs.copyFileSync(path.join(sourceProject, 'assets/notion.icns'), path.join(resources, 'notion.icns'));
-  fs.copyFileSync(path.join(sourceProject, 'MAC-使用说明.md'), path.join(target, '使用说明.md'));
+  fs.copyFileSync(path.join(sourceProject, 'MAC-USAGE.md'), path.join(target, 'MAC-USAGE.md'));
   const version = JSON.parse(fs.readFileSync(path.join(sourceProject, 'package.json'), 'utf8')).version;
   fs.writeFileSync(path.join(app, 'Contents/Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
@@ -45,7 +45,7 @@ export function stageMac({ sourceProject = project, destination, projectAware = 
   const sourceMode = projectAware ? 'adjacent=$(CDPATH= cd "$(dirname "$0")/../../.." && pwd -P)\nif [ -f "$adjacent/scripts/launch-macos.mjs" ] && [ -f "$adjacent/src/desktop-hook.cjs" ]; then\n  base="$adjacent"\n  export NOTION_SWITCH_ROOT="${NOTION_SWITCH_ROOT:-$base/.notion-switch/mac-arm64}"\nelse\n  export NOTION_SWITCH_ROOT="${NOTION_SWITCH_ROOT:-$HOME/Library/Application Support/Switch Notion}"\nfi\n' : 'export NOTION_SWITCH_ROOT="${NOTION_SWITCH_ROOT:-$HOME/Library/Application Support/Switch Notion}"\n';
   fs.writeFileSync(entry, '#!/bin/sh\nset -eu\nbase=$(CDPATH= cd "$(dirname "$0")/../Resources/project" && pwd -P)\n' + sourceMode + 'exec /bin/sh "$base/scripts/launch-macos.sh" notion "$base"\n', { mode: 0o755 });
   fs.chmodSync(entry, 0o755);
-  for (const [name, targetMode] of [['Switch Notion 启动.command', 'notion'], ['Switch Notion 配置.command', 'settings']]) {
+  for (const [name, targetMode] of [['Start-SwitchNotion.command', 'notion'], ['Configure-SwitchNotion.command', 'settings']]) {
     const launcher = path.join(target, name);
     fs.writeFileSync(launcher, '#!/bin/sh\nset -eu\nbase=$(CDPATH= cd "$(dirname "$0")/' + path.basename(app) + '/Contents/Resources/project" && pwd -P)\nexport NOTION_SWITCH_ROOT="$HOME/Library/Application Support/Switch Notion"\nexec /bin/sh "$base/scripts/launch-macos.sh" ' + targetMode + ' "$base"\n', { mode: 0o755 });
     fs.chmodSync(launcher, 0o755);

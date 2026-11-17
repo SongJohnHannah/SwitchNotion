@@ -71,13 +71,13 @@ function execute(file, args, { signal, timeout = 240000 } = {}) {
     function finish(error) { if (ended) return; ended = true; clearTimeout(timer); signal?.removeEventListener('abort', stop); error ? reject(error) : resolve(); }
   });
 }
-function providerFor({ root, runtime, plan, spawnImpl = spawn }) {
+function providerFor({ root, runtime, plan, spawnImpl = spawn, platform }) {
   if (plan.runtimeVariant !== 'bundled') {
     const ready = path.join(root, 'speech/gpu-v1/variants', plan.runtimeVariant, 'READY.json');
     if (!fs.existsSync(ready)) throw Error('GPU 运行库变体尚未完整准备，不能开始验收。');
     if (plan.runtimeRevision && hash(fs.readFileSync(ready)) !== plan.runtimeRevision) throw Error('GPU 运行库版本与方案不一致，请使用对应的冻结变体。');
   }
-  const platform = createSpeechPlatform({ model: runtime.model, computeType: plan.computeType });
+  platform ||= createSpeechPlatform({ model: runtime.model, computeType: plan.computeType });
   if (platform.profile.device !== 'cuda') throw Error('此方法要求 Windows NVIDIA GPU，不支持 CPU 回退。');
   return new SpeechProvider({ root, runtime: { ...runtime, device: 'cuda', computeType: plan.computeType }, platform, timeoutMs: 120000,
     spawnImpl: (file, args, options) => spawnImpl(file, args, { ...options, windowsHide: true, env: { ...options.env,
