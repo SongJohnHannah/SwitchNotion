@@ -14,8 +14,8 @@ function attachmentType(filename, type) {
   return { format: 'media-transcript', mediaType: mime };
 }
 class MediaTranscript {
-  constructor({ root, speech, operator, binaries = new CollectionBinaries({ root }), backend, chooseOpen, chooseSave, isBusy = () => false, ocr = new NativeOcr({ root }) }) {
-    Object.assign(this, { root, speech, binaries, chooseOpen, chooseSave, isBusy, ocr }); this.backend = backend || new CollectionMedia({ root, speech, operator, binaries }); this.queue = Promise.resolve(); this.active = 0; this.pending = 0; this.queuedBytes = 0; this.job = null;
+  constructor({ root, speech, operator, platform = process.platform, binaries = new CollectionBinaries({ root, platform }), backend, chooseOpen, chooseSave, isBusy = () => false, ocr = new NativeOcr({ root }) }) {
+    Object.assign(this, { root, speech, binaries, chooseOpen, chooseSave, isBusy, ocr }); this.backend = backend || new CollectionMedia({ root, speech, operator, binaries, platform }); this.queue = Promise.resolve(); this.active = 0; this.pending = 0; this.queuedBytes = 0; this.job = null;
   }
   status() { if (!this.job) return { status: 'idle' }; const { controller, ...job } = this.job; return structuredClone(job); }
   async request(action, input = {}) {
@@ -38,7 +38,7 @@ class MediaTranscript {
         const stat = fs.lstatSync(file), filename = path.basename(file);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0 || stat.size > 2 * 1024 ** 3 || attachmentType(filename, '').format !== 'media-transcript') throw Error('Notion 附件请选择 2 GB 内的音视频文件。');
         if (this.pending >= 8) throw Error('Notion 附件等待转写的任务过多，请稍后重试。');
-        const job = { id: randomUUID(), filename, status: 'queued', progress: '等待独立 GPU 转写算子…', text: '', error: null, controller: new AbortController() };
+        const job = { id: randomUUID(), filename, status: 'queued', progress: this.backend.platform === 'darwin' ? '等待本机 CPU 离线转写…' : '等待独立 GPU 转写算子…', text: '', error: null, controller: new AbortController() };
         this.job = job; this.pending++;
         const run = async () => {
           const signal = job.controller.signal;
@@ -51,7 +51,7 @@ class MediaTranscript {
             signal.throwIfAborted(); const final = fs.lstatSync(file);
             if (!final.isFile() || final.isSymbolicLink() || final.ino !== stat.ino || final.dev !== stat.dev || final.size !== stat.size || final.mtimeMs !== stat.mtimeMs) throw Error('Notion 附件文件在转写期间发生变化，请重新选择。');
             if (result.text.length > 500000) throw Error('Notion 附件逐字稿过长，请分段处理。');
-            job.text = result.text; job.operator = result.operator; job.device = result.device; job.status = 'completed'; job.progress = result.note || 'GPU 逐字稿已完成，可保存为 TXT。';
+            job.text = result.text; job.operator = result.operator; job.device = result.device; job.status = 'completed'; job.progress = result.note || (result.device === 'cpu' ? '本机逐字稿已完成，可保存为 TXT。' : 'GPU 逐字稿已完成，可保存为 TXT。');
           } catch (error) { job.status = signal.aborted ? 'stopped' : 'failed'; job.error = error.message; job.errorCode = error.code || null; }
           finally { this.active = Math.max(0, this.active - 1); this.pending--; }
         };
@@ -92,7 +92,7 @@ class MediaTranscript {
         const result = await this.backend.transcript({ ...info, path: file, bytes: bytes.length, kind: type.mediaType.startsWith('video/') ? 'video' : 'audio' }, { ...options, language: options.language || 'auto' });
         if (result.text.length > 200000) throw Error('Notion 附件逐字稿超过文字上限，请分段。');
         return { filename, format: 'media-transcript', text: result.text, duration_seconds: info.duration, complete: true, source_bytes: bytes.length, active_content_executed: false, external_resources_fetched: false,
-          device: result.device, operator: result.operator, notes: [result.note, '独立 GPU 算子识别音轨；没有分析视频画面，未自动润色或翻译；语音识别可能有误字。'].filter(Boolean) };
+          device: result.device, operator: result.operator, notes: [result.note, (result.device === 'cpu' ? '本机 CPU 离线识别音轨' : '独立 GPU 算子识别音轨') + '；没有分析视频画面，未自动润色或翻译；语音识别可能有误字。'].filter(Boolean) };
       } catch (error) {
         options.signal?.throwIfAborted();
         throw error;

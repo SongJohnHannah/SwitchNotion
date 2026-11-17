@@ -18,7 +18,7 @@ function fixture(t, execute) {
     if (execute) await execute(options);
     return { text: 'A complete GPU transcript.', device: 'cuda', complete: true, sourceIdentity: 'operator-owned', eventsFile, checkpointFile };
   } }) });
-  const media = new MediaTranscript({ root, operator, binaries: {}, speech: { probe: () => assert.fail('old GPU provider must not load') }, chooseOpen: async () => path.join(root, 'video.mp4') });
+  const media = new MediaTranscript({ root, platform: 'win32', operator, binaries: {}, speech: { probe: () => assert.fail('old GPU provider must not load') }, chooseOpen: async () => path.join(root, 'video.mp4') });
   media.backend.probe = async () => ({ audio: true, duration: 60 });
   return { root, media, calls };
 }

@@ -509,7 +509,7 @@ test('a music-only video completes collection and uses the frames for its summar
     assert.equal(vision.text, '画面识别结果');
     return { text: '基于画面的总结' };
   } } });
-  const media = new CollectionMedia({ operator: { transcribeFile: ({ source, language, signal }) => transcribeGpuFile({
+  const media = new CollectionMedia({ platform: 'win32', operator: { transcribeFile: ({ source, language, signal }) => transcribeGpuFile({
     source, language, signal, root: f.root, outputDirectory: path.join(f.root, 'transcription'),
     ffmpeg: process.execPath, runtime: { model: 'large-v3-turbo', pythonExecutable: process.execPath, modelDirectory: f.root },
     executeImpl: async (_file, args) => fs.writeFileSync(args.at(-1), Buffer.alloc(16000 * 2)),

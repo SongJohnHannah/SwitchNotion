@@ -344,7 +344,7 @@ test('local Qwen vision is serialized while cloud vision stays concurrent', asyn
 test('an incomplete, CPU or degenerate operator result never becomes a collection transcript', async () => {
   for (const result of [{ text: 'partial', complete: false, device: 'cuda' }, { text: 'CPU result', complete: true, device: 'cpu' }, { text: '!'.repeat(224), complete: true, device: 'cuda' }]) {
     let calls = 0;
-    const media = new CollectionMedia({ operator: { transcribeFile: async () => { calls++; return result; } } });
+    const media = new CollectionMedia({ platform: 'win32', operator: { transcribeFile: async () => { calls++; return result; } } });
     await assert.rejects(media.transcript({ path: path.resolve('fixture.mp4'), audio: true }), /AI 总结已暂停/);
     assert.equal(calls, 1);
   }
@@ -362,7 +362,7 @@ test('legacy minute checkpoints are preserved as history and ignored by whole-fi
   const file = path.join(directory, 'original.wav'); fs.writeFileSync(file, 'preserved-media'); const stat = fs.statSync(file), duration = 60;
   const identity = hash(JSON.stringify([stat.size, stat.mtimeMs, duration, 'fixture', 'minute-checkpoints-10s-inference']));
   fs.writeFileSync(path.join(directory, 'transcript-progress.json'), JSON.stringify({ identity, backend: 'cpu', chunks: { 0: '已保存的文字' } }));
-  let calls = 0; const media = new CollectionMedia({ operator: { transcribeFile: async options => {
+  let calls = 0; const media = new CollectionMedia({ platform: 'win32', operator: { transcribeFile: async options => {
     calls++; assert.equal(options.source, file); return { text: '独立算子的完整逐字稿', device: 'cuda', complete: true };
   } }, speech: { probe: () => assert.fail('must not probe the old runtime') } });
   const result = await media.transcript({ path: file, kind: 'audio', bytes: stat.size, duration, audio: true });

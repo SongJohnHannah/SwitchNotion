@@ -23,7 +23,7 @@ const describeVisual = [
 const visionMarker = (frame, index, video, ocrPaths) =>
   `${video ? `关键帧 ${index} · 视频时间 ${frame.time.toFixed(1)} 秒` : `原始图片 ${index}`} · ${ocrPaths.has(frame.frame) ? '已有本机 OCR 文字' : '无本机 OCR 文字'}`;
 class CollectionMedia {
-  constructor({ root, browser, binaries, speech, operator = new GpuOperatorClient({ root }), provider, ollama, ocr, fetchImpl = fetch, platform = process.platform, runImpl = run }) { Object.assign(this, { root, browser, binaries, speech, operator, provider, ollama, ocrEngine: ocr, fetchImpl, platform }); this.runMedia = runImpl; this.localVisionQueue = Promise.resolve(); this.ocrQueue = Promise.resolve(); this.ocrSession = null; this.ocrStarting = null; }
+  constructor({ root, browser, binaries, speech, operator, provider, ollama, ocr, fetchImpl = fetch, platform = process.platform, runImpl = run }) { Object.assign(this, { root, browser, binaries, speech, operator: operator || (platform === 'darwin' ? null : new GpuOperatorClient({ root })), provider, ollama, ocrEngine: ocr, fetchImpl, platform }); this.runMedia = runImpl; this.localVisionQueue = Promise.resolve(); this.ocrQueue = Promise.resolve(); this.ocrSession = null; this.ocrStarting = null; }
   get localOcr() { return !!this.ocrEngine; }
   async importLocal(source, directory, { signal, progress = () => {} } = {}) {
     const { checkLocal } = require('./local-media.cjs'); checkLocal(source); signal?.throwIfAborted();
@@ -200,6 +200,7 @@ class CollectionMedia {
     signal?.throwIfAborted();
     if (!asset.audio && asset.kind !== 'audio') return { text: '', note: '此媒体没有音轨。' };
     if (directory && !path.isAbsolute(directory)) throw Error('转写记录目录须为绝对路径。');
+    if (this.platform === 'darwin') return require('./macos-transcript.cjs').transcribeMacMedia(this, asset, { signal, progress, directory, language });
     progress('正在准备独立 GPU 逐字稿…');
     const result = await this.operator.transcribeFile({ source: asset.path, outputDirectory: directory, language, profile, allowExperimental, signal,
       onProgress: event => {
