@@ -82,6 +82,12 @@ function extractionBlocks(extraction) {
   return blocks;
 }
 const isPlayable = node => node.kind === 'video' || node.kind === 'audio';
+function collapsedBlocks(title, children) {
+  const groups = batches(children, { maxBlocks: 79, maxBytes: 340000 });
+  return (groups.length ? groups : [[]]).map((items, index) => ({ object: 'block', type: 'toggle', toggle: {
+    rich_text: textSpans(title + (index ? `（续 ${index + 1}）` : '')), ...(items.length ? { children: items } : {})
+  } }));
+}
 function renderDocument(document, nodes, resources, analyses = {}, warnings = [], extraction, layout) {
   const resultFirst = layout === 'result-first', result = [], anchors = {};
   const positions = {}, slots = {};
@@ -112,17 +118,19 @@ function renderDocument(document, nodes, resources, analyses = {}, warnings = []
   if (resultFirst) {
     if (nodes.some(node => mediaKinds.has(node.kind))) {
       anchors.analysis = result.length;
-      result.push(...textBlocks({ kind: 'heading', text: '识别附录', level: 2 }));
+      const recognition = [], transcripts = [];
       for (const [key, title] of [['ocr', '关键帧文字'], ['vision', '画面识别'], ['transcript', '逐字稿']]) {
+        const target = key === 'transcript' ? transcripts : recognition;
         const items = nodes.filter(node => recognitionResult(analyses[node.id], key));
-        if (items.length) result.push(...textBlocks({ kind: 'heading', text: title, level: 2 }));
+        if (items.length) target.push(...textBlocks({ kind: 'heading', text: title, level: 2 }));
         for (const node of items) {
           const { text, note } = recognitionResult(analyses[node.id], key);
-          result.push(...textBlocks({ kind: 'heading', text: `素材 ${nodes.indexOf(node) + 1}${node.caption ? ' · ' + node.caption : ''}`, level: 3 }),
+          target.push(...textBlocks({ kind: 'heading', text: `素材 ${nodes.indexOf(node) + 1}${node.caption ? ' · ' + node.caption : ''}`, level: 3 }),
             ...textBlocks({ kind: 'paragraph', text: text || note || '没有识别结果。' }));
-          if (text && note) result.push(paragraph(note));
+          if (text && note) target.push(paragraph(note));
         }
       }
+      result.push(...collapsedBlocks('识别附录', recognition), ...transcripts);
     }
     return { blocks: result, positions, slots, anchors };
   }
@@ -530,7 +538,7 @@ class CollectionNotion {
     job.sourceSlots = Object.fromEntries(Object.entries(plan.slots).map(([id, slot]) => [id, { ...slot, ids: written.slice(slot.start, slot.start + slot.count), original: plan.blocks.slice(slot.start, slot.start + slot.count) }]));
     job.writeAnalyses = structuredClone(job.analyses); job.savedAnalysis = hash(JSON.stringify(job.analyses)); job.savedAnalysisItems = analysisItemHashes(job.analyses);
     job.writeExtraction = job.savedExtraction = job.extraction?.text ? hash(JSON.stringify(job.extraction)) : '';
-    delete job.analysisBatches; delete job.extractionBatches;
+    delete job.analysisBatches; delete job.analysisFormats; delete job.extractionBatches;
     state.pending = false; state.completedAt = new Date().toISOString(); save();
     return this.repair(job, nodes, plan, save, signal);
   }
@@ -599,10 +607,14 @@ class CollectionNotion {
         }
       }
       job.analysisBatches ||= {};
+      job.analysisFormats ||= {};
       for (const [key, blocks, anchor] of [[analysisFingerprint, supplementary, analysisAnchor], [analysisFingerprint + ':transcript', transcripts]]) {
         if (!blocks.length) continue;
         const title = analysisAnchor ? '补全的识别结果（此前未完成项以本次记录为准）' : '补全的逐字稿与识别结果（此前未完成项以本次记录为准）';
-        const groups = batches([paragraph(title), ...blocks]), done = job.analysisBatches[key] ||= [];
+        const done = job.analysisBatches[key] ||= [];
+        const collapsed = job.analysisFormats[key] ??= !!anchor && !done.some(Boolean);
+        const content = [paragraph(title), ...blocks];
+        const groups = batches(collapsed ? collapsedBlocks('识别附录（补全）', content) : content);
         for (let i = 0; i < groups.length; i++) if (!done[i]) {
           const after = anchor && (done[i - 1]?.at(-1) || anchor);
           const response = await this.appendRecoverably(c, job, groups[i], after);
