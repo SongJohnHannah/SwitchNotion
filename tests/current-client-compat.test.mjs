@@ -11,7 +11,10 @@ const entries = [
   ['recording', '89269-0b37eab23d323462.js', 'this.deadlineAtMs=e.clock.now()+12e3', 'this.deadlineAtMs=e.clock.now()+120e3'],
   ['provider', '58104-05a8357fa0359922.js', '"mystery"', '"changed-provider"'],
   ['attachments', '51103-e26284a203102910.js', 'processAgentAttachment', 'processAgentAttachmentChanged'],
-  ['autofill', '57590-b67533fec6321f39.js', 'triggerLiteAgentAutofill', 'triggerLiteAgentAutofillChanged']
+  ['autofill', '57590-b67533fec6321f39.js', 'triggerLiteAgentAutofill', 'triggerLiteAgentAutofillChanged'],
+  ['availability', '95271-3b930ea252348c71.js', 'workspaceRestriction:g', 'workspaceRestriction:undefined'],
+  ['autofill', '57590-1ff6559994fff905.js', 'subscribeToTaskOutput', 'subscribeToTaskOutputChanged'],
+  ['attachments', '51103-2e3dc6cde9c9f009.js', 'processAgentAttachment', 'processAgentAttachmentChanged']
 ];
 const options = { localSpeechEnabled: true, audioEndpoint: 'http://127.0.0.1:32123', inputMode: 'microphone' };
 

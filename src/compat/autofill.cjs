@@ -8,7 +8,9 @@ const reviewed = new Map([
   [sourceHash, { viewFunction: 'S', captureAt: 'let k=i.id,v=null==(t=a.collectionViewStore())?void 0:t.id;', pendingFunction: 'U' }],
   [currentSourceHash, { viewFunction: 'P', captureAt: 'let v=i.id,k=null==(t=a.collectionViewStore())?void 0:t.id;', pendingFunction: 'E' }],
   ['304f2d8639a6ed6601a3fcdbf27ee14e209d1684cdc37dc2ef3cf3d9ea880983', { viewFunction: 'P', captureAt: 'let v=i.id,k=null==(t=a.collectionViewStore())?void 0:t.id;', pendingFunction: 'E' }],
-  ['95a7847f96438c75f8dce0e3eb489c2210cb47aaf93639eabb977f480773fd8a', { viewFunction: 'S', captureAt: 'let k=i.id,v=null==(t=a.collectionViewStore())?void 0:t.id;', pendingFunction: 'U' }]
+  ['95a7847f96438c75f8dce0e3eb489c2210cb47aaf93639eabb977f480773fd8a', { viewFunction: 'S', captureAt: 'let k=i.id,v=null==(t=a.collectionViewStore())?void 0:t.id;', pendingFunction: 'U' }],
+  // November 18: named task-output exports; view scope and write guards remain.
+  ['050fb2d6878e6fd0b5eff90326a1a713892641170bf98239c1caa205a7d48438', { viewFunction: 'S', captureAt: 'let k=i.id,v=null==(t=a.collectionViewStore())?void 0:t.id;', pendingFunction: 'U', subscriber: 'subscribeToTaskOutput' }]
 ]);
 const isAutofillAsset = asset => /^57590-[a-f\d]{16}\.js$/.test(asset);
 const isAutofillCandidate = (source, asset) => isAutofillAsset(asset) || /[,{]\s*414741\s*\(/.test(source);
@@ -77,10 +79,11 @@ function adaptAutofill(source, asset, onAdaptation) {
   if ([...source.matchAll(calls)].length !== 4) throw Error('Changed native Autofill entry points');
   const poll = '(' + pollNativeAutofill.toString() + ')';
   let result = source.replace(calls, (_, environment, endpoint) => `await (${invokeLiteAutofill.toString()})(${environment},r,${poll},{eventName:"${endpoint}"`);
-  const original = 'if("failed"===l.type)return{success:!1};try{var n;let e=await (0,r(655696).cK)';
+  const subscriber = '(0,r(655696).' + (profile.subscriber || 'cK') + ')';
+  const original = 'if("failed"===l.type)return{success:!1};try{var n;let e=await ' + subscriber;
   if (result.split(original).length !== 2) throw Error('Changed native Autofill queue subscriber');
   const queued = 'if(l.type==="success"&&l.data?.notionSwitchAutofill?.version===1&&/^addf11ed-/i.test(l.data.notionSwitchAutofill.jobId)){await l.handleRecordMapForResponsePromise;a?.(l.data.notionSwitchAutofill.initial.value);return{success:true};}';
-  result = result.replace(original, 'if("failed"===l.type)return{success:!1};' + queued + 'try{var n;let e=await (0,r(655696).cK)');
+  result = result.replace(original, 'if("failed"===l.type)return{success:!1};' + queued + 'try{var n;let e=await ' + subscriber);
   const begin = result.indexOf('async function ' + profile.viewFunction + '(e)'), end = result.indexOf('function _(e)', begin);
   if (begin < 0 || end < begin) throw Error('Changed native Autofill view producer');
   let view = result.slice(begin, end);

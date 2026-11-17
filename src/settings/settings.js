@@ -323,7 +323,7 @@ async function checkUpdates() {
   }
   $('updates-versions').textContent = '本机原版 ' + info.originalVersion + ' · 当前原型 ' + info.prototypeVersion;
   const automatic = info.automaticCompatibility;
-  $('updates-web').textContent = automatic ? '网页自动适配已开启 · 本次已检查 ' + automatic.checked + ' 个脚本 · 自动适配 ' + automatic.adapted + ' 个 · 不兼容 ' + automatic.blocked + ' 个' : '网页模块加载时自动检查。';
+  $('updates-web').textContent = automatic ? '网页自动适配已开启 · 本次检查 ' + automatic.checked + ' 个脚本 · 通过 ' + automatic.passed + ' 个（自动识别 ' + automatic.adapted + '）· 不兼容 ' + automatic.blocked + ' 个' : '网页模块加载时自动检查。';
   $('updates-message').textContent = info.message; $('rollback-update').hidden = !info.previousVersion;
   result('updates-result', info.lastResult || '', ['blocked', 'held'].includes(info.lastStatus));
 }

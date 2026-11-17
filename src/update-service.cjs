@@ -23,7 +23,8 @@ class UpdateService {
         const value = module.updateStatus({ root: this.root, platform: this.platform }), ui = this.getCompatibility();
         const client = await this.clientUpdates.status(); client.needsRestart = await this.needsClientRestart(module);
         return { ok: true, result: { ...value, client, openOnStartup: process.env.NOTION_SWITCH_UPDATE_VIEW === '1', clientCompatible: !ui.unsupportedAssets?.length,
-          automaticCompatibility: { enabled: true, checked: ui.adaptedAssets?.length || 0, adapted: ui.automaticAssets?.length || 0, blocked: ui.unsupportedAssets?.length || 0 },
+          automaticCompatibility: { enabled: true, checked: new Set([...(ui.adaptedAssets || []), ...(ui.unsupportedAssets || [])]).size,
+            passed: ui.adaptedAssets?.length || 0, adapted: ui.automaticAssets?.length || 0, blocked: ui.unsupportedAssets?.length || 0 },
           ...(value.compatible && ui.unsupportedAssets?.length ? { message: '检测到网页模块的实质变化，已暂停不兼容的接管。请更新 Switch Notion；客户端回退不一定能恢复独立更新的网页模块。' } : {}) } };
       }
       this.platform.requireCapability('prepareRuntime');

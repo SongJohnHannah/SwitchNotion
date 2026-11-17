@@ -16,6 +16,7 @@ const reviewedAssets = {
   '95271-b60a0efc9a0c9841.js': '09d2a5234723e209d284f85effa8901af5a32b8ef79ed45bdd2dd361bd9ccccc',
   '95271-38f67378ed14d977.js': 'aa4b7254388e55f1d96a469faf605be2a6795499a603e1f1a61f2bd800517b63',
   '95271-adc4a76136e50ec0.js': '42f25bad44545977b7a2c3701e2d10ac56bff334189ce4dcc56ca12c7280282f',
+  '95271-3b930ea252348c71.js': '85102aa8e3204187f0ff56266dd0bff4072645535b9100b87661f9c7a48238a5',
   '96975-4c75c565bc617fbf.js': '3188c95ce2ef27304666ccd3f837ef5470c9b8189f9f493aa35cdc38b8c1e2f3',
   '32453-3994faac607efd3c.js': '7182f2549341e708950bdf1edafb99f2fdb98790d8a9b73f198a6893c63f92b5',
   '17521-084ec2bc2599898c.js': 'b2fd9db2056c98776f578bec7ea6e4c37a2866e85a9475816245ce92f685c105',
@@ -24,6 +25,11 @@ const reviewedAssets = {
   '17048-31dd3b95acbe5529.js': '50dbcf4bb07f9bd2ab9c1baedfd63ba94480a2452edb38b849dfe232f35b19f2'
 };
 const anchor = /let [A-Za-z_$][\w$]*=\(null==\(r=\(o=e\[u\]\)\.isOverrideAllowed\)\?void 0:r\.call\(o,n\.data\)\)\?\?!0/g;
+// The reviewed November 18 chunk extracts the unchanged override-expiry
+// calculation into an exported helper and renames its feature binding.
+const availabilityProfiles = {
+  '95271-3b930ea252348c71.js': { feature: 'd', anchor: /let v=\(null==\(r=\(o=e\[d\]\)\.isOverrideAllowed\)\?void 0:r\.call\(o,n\.data\)\)\?\?!0/g }
+};
 // A fully reviewed page-local handshake takes precedence over the older
 // generic module hash, so all recording roles register in the same renderer.
 const useSpeechVariant = (source, asset, known) => speechVariants.isMacSpeechCandidate(source, asset) &&
@@ -69,10 +75,11 @@ function adaptClient(source, asset, { localSpeechEnabled = false, audioEndpoint,
     if ([...source.matchAll(title)].length !== 1) throw Error('Unsupported native provider label module');
     return source.replace(title, 'title:"mystery"===e.providerFamily?"DeepSeek 官方 API":e.providerDisplayName');
   }
-  const matches = [...source.matchAll(anchor)];
+  const profile = availabilityProfiles[asset], feature = profile?.feature || 'u';
+  const matches = [...source.matchAll(profile?.anchor || anchor)];
   if (matches.length !== 1) throw Error('Unsupported native availability module');
-  const speech = localSpeechEnabled ? 'if(u==="ai_meeting_notes"&&n.data.space?.isTranscriptionEnabled?.()!==false)return{type:"available",limit:{type:"cumulative",total:"unlimited",current:n.data.current??0}};' : '';
-  return source.replace(matches[0][0], 'if(u==="ai_usage")return{type:"available",limit:{type:"per_use",amount:"unlimited"}};if(u==="ai_model_selection")return{type:"available",limit:{type:"none"}};if(u==="dashboard_view")return{type:"available",limit:{type:"none"}};' + speech + matches[0][0]);
+  const speech = localSpeechEnabled ? `if(${feature}==="ai_meeting_notes"&&n.data.space?.isTranscriptionEnabled?.()!==false)return{type:"available",limit:{type:"cumulative",total:"unlimited",current:n.data.current??0}};` : '';
+  return source.replace(matches[0][0], `if(${feature}==="ai_usage")return{type:"available",limit:{type:"per_use",amount:"unlimited"}};if(${feature}==="ai_model_selection")return{type:"available",limit:{type:"none"}};if(${feature}==="dashboard_view")return{type:"available",limit:{type:"none"}};` + speech + matches[0][0]);
 }
 async function adaptClientAsync(source, asset, options = {}) {
   if (clientVariants.isMacClientAsset(asset)) return adaptClient(source, asset, options);

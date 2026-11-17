@@ -39,9 +39,15 @@ test('configuration reports automatic webpage compatibility separately from desk
   const f = fixture(t, { getCompatibility: () => ({ adaptedAssets: ['a', 'b'], automaticAssets: ['b'], unsupportedAssets: [] }) });
   const result = await f.service.request('update.status');
   assert.equal(result.result.clientCompatible, true);
-  assert.deepEqual(result.result.automaticCompatibility, { enabled: true, checked: 2, adapted: 1, blocked: 0 });
+  assert.deepEqual(result.result.automaticCompatibility, { enabled: true, checked: 2, passed: 2, adapted: 1, blocked: 0 });
   assert.equal(f.restarted(), false, 'Checking automatic compatibility cannot restart an active app');
 });
+test('web script totals include failed scripts and expose the passed subset', async t => {
+  const f = fixture(t, { getCompatibility: () => ({ adaptedAssets: ['a', 'b', 'c', 'd'], automaticAssets: ['d'], unsupportedAssets: ['x', 'y', 'z'] }) });
+  const result = await f.service.request('update.status');
+  assert.deepEqual(result.result.automaticCompatibility, { enabled: true, checked: 7, passed: 4, adapted: 1, blocked: 3 });
+});
+
 test('a relocated Mac app keeps update helpers in its payload while state lives under Application Support', async t => {
   const payload = path.resolve('.notion-switch', 'fixture-app', 'Contents', 'Resources', 'project');
   const platform = platformModule.createDesktopPlatform({ id: 'darwin', arch: 'arm64' });

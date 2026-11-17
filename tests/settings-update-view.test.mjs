@@ -28,3 +28,10 @@ test('a failed synchronization stays red even when the installed client and webp
   const view = await render({ compatible: true, clientCompatible: true, lastStatus: 'blocked', lastResult: '更新未完成。' });
   assert.equal(view.messages.find(args => args[0] === 'updates-result')[2], true);
 });
+
+test('web compatibility text separates total checks, passes, automatic matches, and failures', async () => {
+  const view = await render({ compatible: true, clientCompatible: false, automaticCompatibility: { checked: 7, passed: 4, adapted: 1, blocked: 3 } });
+  const text = view.element('updates-web').textContent;
+  assert.match(text, /检查 7 个脚本/); assert.match(text, /通过 4 个/);
+  assert.match(text, /自动识别 1/); assert.match(text, /不兼容 3 个/);
+});
