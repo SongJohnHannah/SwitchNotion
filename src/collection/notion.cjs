@@ -12,9 +12,10 @@ function analysisItemHashes(analyses) {
     return result ? [[id + ':' + key, hash(JSON.stringify(result))]] : [];
   })));
 }
-const textSpans = (text, href, bold) => {
+const textSpans = (text, href, bold, italic) => {
   const result = []; const value = String(text || '');
-  for (let i = 0; i < value.length; i += 2000) result.push({ type: 'text', text: { content: value.slice(i, i + 2000), ...(href && href.length <= 2000 ? { link: { url: href } } : {}) }, ...(bold ? { annotations: { bold: true } } : {}) });
+  const annotations = bold || italic ? { ...(bold ? { bold: true } : {}), ...(italic ? { italic: true } : {}) } : null;
+  for (let i = 0; i < value.length; i += 2000) result.push({ type: 'text', text: { content: value.slice(i, i + 2000), ...(href && href.length <= 2000 ? { link: { url: href } } : {}) }, ...(annotations ? { annotations } : {}) });
   return result;
 };
 // Native Notion normalizes these invisible word breaks in ordinary Chinese
@@ -23,9 +24,10 @@ const nativeParagraphText = value => String(value || '').replace(/([\u3400-\u9ff
 const paragraph = text => ({ object: 'block', type: 'paragraph', paragraph: { rich_text: textSpans(nativeParagraphText(text)) } });
 function textBlocks(node) {
   if (node.kind === 'divider') return [{ object: 'block', type: 'divider', divider: {} }];
-  const type = node.kind === 'heading' ? 'heading_' + (node.level || 2) : node.kind === 'quote' ? 'quote' : node.kind === 'list' ? 'bulleted_list_item' : node.kind === 'code' ? 'code' : 'paragraph';
+  const type = node.kind === 'heading' ? 'heading_' + (node.level || 2) : node.kind === 'quote' ? 'quote' :
+    node.kind === 'list' ? (node.ordered ? 'numbered_list_item' : 'bulleted_list_item') : node.kind === 'code' ? 'code' : 'paragraph';
   const value = text => type === 'paragraph' ? nativeParagraphText(text) : text;
-  const spans = node.spans?.length ? node.spans.flatMap(s => textSpans(value(s.text), s.href, s.bold)) : textSpans(value(node.text));
+  const spans = node.spans?.length ? node.spans.flatMap(s => textSpans(value(s.text), s.href, s.bold, s.italic)) : textSpans(value(node.text));
   if (!spans.length) return [];
   const blocks = []; let group = [], bytes = 0;
   const flush = () => { if (group.length) blocks.push({ object: 'block', type, [type]: { rich_text: group, ...(type === 'code' ? { language: 'plain text' } : {}) } }); group = []; bytes = 0; };

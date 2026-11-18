@@ -69,7 +69,11 @@ function normalizeDocument(value) {
     if (n.url) { try { node.url = publicUrl(new URL(n.url, sourceUrl).href); } catch {} }
     if (n.poster) { try { node.poster = publicUrl(new URL(n.poster, sourceUrl).href); } catch {} }
     if (n.level) node.level = Math.min(3, Math.max(1, Number(n.level) || 1));
-    if (Array.isArray(n.spans)) node.spans = n.spans.filter(s => s && typeof s.text === 'string').map(s => ({ text: s.text, ...(s.href && /^https?:\/\//.test(s.href) ? { href: s.href } : {}) }));
+    if (n.kind === 'list' && n.ordered === true) node.ordered = true;
+    if (Array.isArray(n.spans)) node.spans = n.spans.filter(s => s && typeof s.text === 'string').map(s => ({
+      text: s.text, ...(s.href && /^https?:\/\//.test(s.href) ? { href: s.href } : {}),
+      ...(s.bold === true ? { bold: true } : {}), ...(s.italic === true ? { italic: true } : {})
+    }));
     if (n.duration > 0) node.duration = Number(n.duration);
     if (n.platform) node.platform = String(n.platform).slice(0, 40);
     if (typeof n.contentId === 'string' && /^[a-f\d]{64}$/.test(n.contentId)) node.contentId = n.contentId;

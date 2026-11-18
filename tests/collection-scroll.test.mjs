@@ -4,7 +4,31 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { scrollPage } = require('../src/collection/browser.cjs');
+const { cdpCommand, scrollPage } = require('../src/collection/browser.cjs');
+
+test('a retained CDP command keeps focus emulation attached until extraction releases it', async () => {
+  const opened = [];
+  class Socket extends EventTarget {
+    constructor() {
+      super();
+      opened.push(this);
+      queueMicrotask(() => this.dispatchEvent(new Event('open')));
+    }
+    send(value) {
+      const { id, method } = JSON.parse(value);
+      queueMicrotask(() => this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ id, result: { method } }) })));
+    }
+    close() { this.closed = true; }
+  }
+  const command = vm.runInNewContext('(' + cdpCommand.toString() + ')', { WebSocket: Socket, setTimeout, clearTimeout });
+  const focus = await command('ws://fixture', 'Emulation.setFocusEmulationEnabled', { enabled: true }, { keepOpen: true });
+  assert.equal(opened[0].closed, undefined);
+  assert.equal((await command('ws://fixture', 'Page.navigate')).method, 'Page.navigate');
+  assert.equal(opened[1].closed, true);
+  assert.equal(opened[0].closed, undefined);
+  focus.close();
+  assert.equal(opened[0].closed, true);
+});
 
 async function checkScroll(url) {
   let scrolls = 0;

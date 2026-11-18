@@ -35,10 +35,17 @@ async function scrollPage() {
   window.scrollTo(0, 0);
   await new Promise(resolve => setTimeout(resolve, 800));
 }
-function cdpCommand(wsUrl, method, params = {}, { signal, timeout = 30000 } = {}) {
+function cdpCommand(wsUrl, method, params = {}, { signal, timeout = 30000, keepOpen = false } = {}) {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted(); const socket = new WebSocket(wsUrl);
-    const finish = (error, value) => { clearTimeout(timer); signal?.removeEventListener('abort', abort); socket.close(); error ? reject(error) : resolve(value); };
+    let finished = false;
+    const finish = (error, value) => {
+      if (finished) return;
+      finished = true; clearTimeout(timer); signal?.removeEventListener('abort', abort);
+      if (error || !keepOpen) socket.close();
+      if (error) reject(error);
+      else resolve(keepOpen ? { close: () => socket.close() } : value);
+    };
     const abort = () => finish(signal.reason || Error('操作已停止。'));
     const timer = setTimeout(() => finish(Error('浏览器操作超时。')), timeout);
     signal?.addEventListener('abort', abort, { once: true });
@@ -87,14 +94,22 @@ class CollectionBrowser {
     signal?.throwIfAborted(); if (!ready) throw Error('收集浏览器未就绪，请安装 Chrome、Edge 或 Brave，或在设置中选择浏览器。');
     return { m, config };
   }
-  async tab(url, signal) {
+  async tab(url, signal, { emulateFocus = false } = {}) {
     await assertPublicUrl(url); const { m } = await this.ensure(signal);
     const tab = await this.backgroundTab(signal);
     try {
+      // X leaves article images as empty placeholders while the tab is hidden.
+      // Keep this CDP session open from navigation until extraction finishes.
+      if (emulateFocus) {
+        try {
+          const focus = await cdpCommand(tab.wsUrl, 'Emulation.setFocusEmulationEnabled', { enabled: true }, { signal, keepOpen: true });
+          tab.releaseFocus = focus.close;
+        } catch (error) { if (error.cdpCode !== -32601) throw error; }
+      }
       const navigation = await cdpCommand(tab.wsUrl, 'Page.navigate', { url }, { signal, timeout: 60000 });
       if (navigation.errorText) throw Error('原网页加载失败（' + String(navigation.errorText).replace(/[^A-Za-z0-9_:.-]/g, '') + '），请检查网络或代理配置。');
       return tab;
-    } catch (error) { await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); throw error; }
+    } catch (error) { tab.releaseFocus?.(); await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); throw error; }
   }
   async waitReady(tab, signal) {
     const until = Date.now() + 45000; let stable = 0, lastUrl = '';
@@ -195,7 +210,9 @@ class CollectionBrowser {
       return normalizeDocument({ title: decodeURIComponent(new URL(url).pathname.split('/').pop()), url,
         nodes: [{ kind: ['mp4', 'm4v', 'webm', 'mov', 'mkv'].includes(extension) ? 'video' : ['mp3', 'm4a', 'wav', 'ogg', 'flac', 'aac', 'opus', 'aif', 'aiff', 'wma'].includes(extension) ? 'audio' : 'image', url, direct: true }] });
     }
-    const tab = await this.tab(url, signal), { m } = await this.ensure(signal);
+    const source = new URL(url);
+    const xPost = /(^|\.)(x|twitter)\.com$/i.test(source.hostname) && /\/(?:status|article)\/\d+(?:\/|$)/.test(source.pathname);
+    const { m } = await this.ensure(signal), tab = await this.tab(url, signal, { emulateFocus: xPost });
     try {
       progress('正在加载正文和媒体…');
       const evaluate = async expression => {
@@ -213,7 +230,7 @@ class CollectionBrowser {
       }
       if (!doc.nodes.length && !doc.incomplete) throw Error('没有读取到正文，请确认原网页加载成功且内容可见。');
       return doc;
-    } finally { await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); }
+    } finally { tab.releaseFocus?.(); await m.cdpCloseTab(this.endpoint, tab.tabId).catch(() => {}); }
   }
   async downloadMedia(node, directory, signal) {
     const m = await mediaKit(), config = await this.downloadConfig(signal);

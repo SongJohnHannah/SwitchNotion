@@ -36,32 +36,58 @@ function extractPage() {
     return { title: nodes.find(node => node.kind === 'paragraph')?.text || root?.querySelector('h1')?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.title,
       url: location.href, nodes, sourceRevision: 'douyin-note-v1', requiresLogin: challenge, incomplete: !!warnings.length, warnings };
   }
-  const candidates = [...document.querySelectorAll(isX ? '[data-testid="twitterArticleRichTextView"],article' : 'article,[role="article"],.article-content,.post-content,.entry-content,#js_content,main,[role="main"]')].filter(visible);
+  const xArticle = isX ? [...document.querySelectorAll('[data-testid="twitterArticleRichTextView"]')].find(visible) : null;
+  const xArticleView = xArticle?.closest('[data-testid="twitterArticleReadView"],article') ||
+    (isX ? document.querySelector('[data-testid="twitterArticleReadView"]') : null);
+  const xArticleRoute = isX && /\/article\/\d+(?:\/|$)/.test(location.pathname);
+  const xMediaSelector = 'a[href*="/article/"][href*="/media/"]';
+  const xMediaLinks = new Set([...(xArticleView?.querySelectorAll(xMediaSelector) || [])].filter(link =>
+    link.origin === location.origin && /^\/\w+\/article\/\d+\/media\/\d+\/?$/.test(link.pathname) && !link.innerText?.trim()));
+  const candidates = [...document.querySelectorAll(isX ? 'article' : 'article,[role="article"],.article-content,.post-content,.entry-content,#js_content,main,[role="main"]')].filter(visible);
   const score = el => (el.innerText || '').length - [...el.querySelectorAll('nav,aside')].reduce((n, e) => n + (e.innerText || '').length, 0);
   const articles = candidates.filter(el => el.matches('article,[role="article"],.article-content,.post-content,.entry-content,#js_content'));
   let root = (articles.length ? articles : candidates).sort((a, b) => score(b) - score(a))[0] || document.body;
   if (platform === 'bilibili') root = document.querySelector('.left-container') || document.querySelector('.video-container-v1') || document.querySelector('main') || root;
   else if (platform) root = document.querySelector(platform === 'youtube' ? '#primary' : '[data-e2e="video-detail"],main') || root;
   if (isX) {
-    const article = document.querySelector('[data-testid="twitterArticleRichTextView"]');
     const status = location.pathname.match(/\/status\/(\d+)/)?.[1];
-    root = article || (status && [...document.querySelectorAll('article')].find(el => [...el.querySelectorAll('a[href]')].some(a => new URL(a.href).pathname.endsWith('/status/' + status)))) || root;
+    root = xArticle || (status && articles.find(el => [...el.querySelectorAll('a[href]')].some(a => a.pathname?.endsWith('/status/' + status)))) || root;
   }
   const nodes = [], warnings = [];
+  let xMediaPending = false;
   function spans(el) {
     const result = [];
-    function visit(n, href) {
-      if (n.nodeType === 3) { if (n.textContent) result.push({ text: n.textContent, ...(href ? { href } : {}) }); return; }
+    function append(text, href, bold, italic) {
+      if (!text) return;
+      const previous = result.at(-1);
+      if (previous && previous.href === href && !!previous.bold === bold && !!previous.italic === italic) previous.text += text;
+      else result.push({ text, ...(href ? { href } : {}), ...(bold ? { bold } : {}), ...(italic ? { italic } : {}) });
+    }
+    function visit(n, href, bold = false, italic = false) {
+      if (n.nodeType === 3) { append(n.textContent, href, bold, italic); return; }
       if (n.nodeType !== 1 || n.matches(noise) || !visible(n)) return;
-      if (n.tagName === 'BR') { result.push({ text: '\n' }); return; }
+      if (n.tagName === 'BR') { append('\n', href, bold, italic); return; }
       const next = n.tagName === 'A' && /^https?:/.test(n.href) ? n.href : href;
-      for (const child of n.childNodes) visit(child, next);
+      if (xArticle) {
+        bold ||= n.matches('b,strong') || /^(?:bold|[6-9]00)$/.test(n.style?.fontWeight);
+        italic ||= n.matches('i,em') || n.style?.fontStyle === 'italic';
+      }
+      for (const child of n.childNodes) visit(child, next, bold, italic);
     }
     visit(el); return result;
   }
   function textNode(el, kind, extra = {}) {
     const rich = spans(el), text = rich.map(s => s.text).join('').trim();
     if (text) nodes.push({ kind, text, spans: rich, ...extra });
+  }
+  function imageNode(raw, caption) {
+    if (!/^https?:/.test(raw)) return;
+    let url; try { url = new URL(raw); } catch { return; }
+    if (url.hostname === 'pbs.twimg.com') {
+      url.searchParams.set('name', 'orig');
+      if (url.searchParams.get('format') === 'webp') url.searchParams.set('format', 'jpg');
+    }
+    nodes.push({ kind: 'image', url: url.href, caption });
   }
   function media(el) {
     const tag = el.tagName;
@@ -70,10 +96,9 @@ function extractPage() {
       if ((w && w < 40) || (h && h < 30) || /(?:^|[ _-])(?:avatar|emoji|icon)(?:$|[ _-])/i.test(String(el.className))) return;
       const set = [el.getAttribute('srcset'), ...[...(el.closest('picture')?.querySelectorAll('source') || [])].map(s => s.srcset)].filter(Boolean).join(',');
       const choices = set.split(',').map(s => s.trim().split(/\s+/)).filter(s => /^https?:/.test(s[0])).sort((a, b) => parseFloat(b[1]) - parseFloat(a[1]));
-      let url = el.getAttribute('data-original') || choices[0]?.[0] || el.getAttribute('data-src') || el.currentSrc || el.src;
+      const url = el.getAttribute('data-original') || choices[0]?.[0] || el.getAttribute('data-src') || el.currentSrc || el.src;
       if (isX && (/\/profile_images\/|\/profile_banners\//.test(url) || el.alt === 'X logo')) return;
-      if (/pbs\.twimg\.com/.test(url)) { const u = new URL(url); u.searchParams.set('name', 'orig'); if (u.searchParams.get('format') === 'webp') u.searchParams.set('format', 'jpg'); url = u.href; }
-      if (/^https?:/.test(url)) nodes.push({ kind: 'image', url, caption: el.closest('figure')?.querySelector('figcaption')?.innerText || el.alt || '' });
+      imageNode(url, el.closest('figure')?.querySelector('figcaption')?.innerText || el.alt || '');
       return;
     }
     if (tag === 'VIDEO' || tag === 'AUDIO') {
@@ -94,24 +119,38 @@ function extractPage() {
     const tag = el.tagName;
     if (['IMG', 'VIDEO', 'AUDIO', 'IFRAME'].includes(tag)) { if (tag !== 'IMG' || visible(el)) media(el); return; }
     if (!visible(el)) return;
+    // X renders a CSS preview and an IMG for the same photo. Resolve the media
+    // link as one slot so repeated photos elsewhere in the article stay intact.
+    if (xMediaLinks.has(el)) {
+      const start = nodes.length;
+      const attachment = el.querySelector('video,audio') || el.querySelector('img');
+      if (attachment) media(attachment);
+      if (nodes.length === start) for (const child of el.children) walk(child);
+      xMediaPending ||= !nodes.slice(start).some(node => ['image', 'video', 'audio'].includes(node.kind));
+      return;
+    }
     const background = getComputedStyle(el).backgroundImage.match(/^url\(["']?(https?:\/\/.*?)["']?\)$/)?.[1];
-    if (background && el.getBoundingClientRect().width >= 80 && el.getBoundingClientRect().height >= 50 && !el.querySelector('img')) nodes.push({ kind: 'image', url: background, caption: el.getAttribute('aria-label') || '' });
+    if (background && el.getBoundingClientRect().width >= 80 && el.getBoundingClientRect().height >= 50 && !el.querySelector('img')) imageNode(background, el.getAttribute('aria-label') || '');
     if (tag === 'FIGCAPTION') return;
     if (tag === 'HR') { nodes.push({ kind: 'divider' }); return; }
     const containsMedia = el.querySelector('img,video,audio,iframe');
     if (!containsMedia && /^(P|H[1-6]|BLOCKQUOTE|LI|PRE|TD|TH)$/.test(tag)) {
       const kind = /^H/.test(tag) ? 'heading' : tag === 'BLOCKQUOTE' ? 'quote' : tag === 'LI' ? 'list' : tag === 'PRE' ? 'code' : 'paragraph';
-      textNode(el, kind, kind === 'heading' ? { level: Math.min(3, Number(tag[1])) } : {}); return;
+      textNode(el, kind, kind === 'heading' ? { level: Math.min(3, Number(tag[1])) } : tag === 'LI' && el.parentElement.tagName === 'OL' ? { ordered: true } : {}); return;
     }
-    if (!containsMedia && isX && el.matches('[data-testid="tweetText"]')) { textNode(el, 'paragraph'); return; }
+    const xParagraph = xArticle && el.matches('div[data-block="true"]') &&
+      ![...el.querySelectorAll(xMediaSelector)].some(link => xMediaLinks.has(link));
+    if (!containsMedia && (xParagraph || isX && el.matches('[data-testid="tweetText"]'))) { textNode(el, 'paragraph'); return; }
     for (const child of el.childNodes) walk(child);
   }
-  walk(root);
+  const xCover = xArticle && [...xMediaLinks].find(link => !xArticle.contains(link) && visible(link));
+  if (xCover) walk(xCover);
+  if (xArticle || !xArticleView && !xArticleRoute) walk(root);
   const videoPage = platform === 'bilibili' ? /^\/video\/(?:BV|av)/i.test(location.pathname) :
     platform === 'douyin' || platform === 'tiktok' ? /\/video\/\d+/.test(location.pathname) :
     platform === 'youtube' ? location.pathname === '/watch' && !!new URL(location.href).searchParams.get('v') || /^\/shorts\//.test(location.pathname) || /(^|\.)youtu\.be$/.test(host) : false;
-  const xVideo = isX && /\/status\/\d+/.test(location.pathname) && !document.querySelector('[data-testid="twitterArticleRichTextView"]') && !!root.querySelector('video');
-  const declaredVideo = /^(?:video|video\.[a-z]+)$/i.test(document.querySelector('meta[property="og:type"]')?.content || '') && !document.querySelector('[data-testid="twitterArticleRichTextView"]');
+  const xVideo = isX && /\/status\/\d+/.test(location.pathname) && !xArticle && !xArticleView && !!root.querySelector('video');
+  const declaredVideo = /^(?:video|video\.[a-z]+)$/i.test(document.querySelector('meta[property="og:type"]')?.content || '') && !xArticle && !xArticleView;
   let douyinTitles;
   if (videoPage || xVideo || declaredVideo) {
     const video = [...root.querySelectorAll('video')].find(visible);
@@ -140,7 +179,12 @@ function extractPage() {
   if (preview) warnings.push('页面可能只展示了预览内容，请登录或展开原文后重试。');
   if (errorPage) warnings.push('原网页返回了错误、验证或不可用提示，尚未取得原始内容。');
   if (verification) warnings.push('原站要求人工验证，请在收集浏览器中完成验证码后重新读取。');
-  return { title: root.querySelector('h1')?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.querySelector('h1')?.innerText || document.title,
-    ...(douyinTitles ? { douyinTitles } : {}), url: location.href, author: document.querySelector('meta[name="author"]')?.content || (isX ? location.pathname.match(/^\/([^/]+)\/status\//)?.[1] : '') || '', nodes, requiresLogin: blocked || verification, incomplete: blocked || preview || errorPage || verification, warnings };
+  const xArticlePending = Boolean(xArticle || xArticleView || xArticleRoute) && (!xArticle || !nodes.some(node => node.text));
+  if (xArticlePending) warnings.push('X 文章正文尚未加载，请重新读取原文。');
+  if (xMediaPending) warnings.push('X 文章的封面或配图尚未加载完整，请重新读取原文。');
+  const title = xArticleView?.querySelector('[data-testid="twitter-article-title"]')?.innerText?.trim() ||
+    root.querySelector('h1')?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.querySelector('h1')?.innerText || document.title;
+  return { title, ...(douyinTitles ? { douyinTitles } : {}), url: location.href, author: document.querySelector('meta[name="author"]')?.content || (isX ? location.pathname.match(/^\/([^/]+)\/status\//)?.[1] : '') || '',
+    nodes, requiresLogin: blocked || verification, incomplete: blocked || preview || errorPage || verification || xArticlePending || xMediaPending, warnings };
 }
 module.exports = { extractPage };

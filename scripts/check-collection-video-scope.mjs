@@ -15,7 +15,7 @@ const browser = await chromium.launch({ executablePath, headless: true });
 try {
   const page = await browser.newPage();
   let html = '', videoDocument;
-  await page.route('**/*', route => route.request().isNavigationRequest() ? route.fulfill({ contentType: 'text/html', body: html }) : route.abort());
+  await page.route('**/*', route => route.request().isNavigationRequest() ? route.fulfill({ contentType: 'text/html; charset=utf-8', body: html }) : route.abort());
   for (const [name, url, root, caption] of [
     ['Bilibili', 'https://www.bilibili.com/video/BVfixture', 'left-container', 'desc-info-text'],
     ['Douyin', 'https://www.douyin.com/video/123', 'video-detail', 'description'],
@@ -38,6 +38,46 @@ try {
   await page.goto('https://x.com/example/status/123'); const post = await page.evaluate(extractPage);
   assert.deepEqual(post.nodes.map(n => n.kind), ['video', 'paragraph']);
   assert.equal(post.nodes[0].url, 'https://x.com/example/status/123');
+  html = `<title>(3) Example on X: “X article title” / X</title>
+    <article data-testid="twitterArticleReadView">
+      <a href="/example/article/123/media/1"><img width="600" height="240" src="https://pbs.twimg.com/media/cover?format=jpg&name=large"></a>
+      <div data-testid="twitter-article-title">X article title</div>
+      <div>Reply and like counts</div>
+      <div data-testid="twitterArticleRichTextView">
+        <div data-block="true"><div><span>One </span><a href="https://example.com/article/123/media/456"><span style="font-weight: bold;">linked phrase</span></a><span style="font-style: italic;"> in a paragraph.</span></div></div>
+        <h2>First section</h2>
+        <ol><li>First step</li><li>Second step</li></ol>
+        <ul><li>One bullet</li></ul>
+        <blockquote>A quote</blockquote>
+        <div data-block="true"><a href="/example/article/123/media/2">
+          <div style="width: 600px; height: 400px; background-image: url('https://pbs.twimg.com/media/inline?format=jpg&name=900x900');"></div>
+          <img width="600" height="400" src="https://pbs.twimg.com/media/inline?format=jpg&name=900x900">
+        </a></div>
+        <div data-block="true"><span>Last paragraph</span></div>
+      </div>
+    </article>
+    <article><h2>Unrelated reply</h2><img width="600" height="400" src="https://pbs.twimg.com/media/unrelated"></article>`;
+  await page.goto('https://x.com/example/status/123');
+  const xArticle = normalizeDocument(await page.evaluate(extractPage));
+  assert.equal(xArticle.title, 'X article title');
+  assert.equal(xArticle.incomplete, false);
+  assert.deepEqual(xArticle.nodes.map(n => n.kind), ['image', 'paragraph', 'heading', 'list', 'list', 'list', 'quote', 'image', 'paragraph']);
+  assert.deepEqual(xArticle.nodes.filter(n => n.kind === 'image').map(n => n.url), [
+    'https://pbs.twimg.com/media/cover?format=jpg&name=orig',
+    'https://pbs.twimg.com/media/inline?format=jpg&name=orig'
+  ]);
+  const xBlocks = renderDocument(xArticle, xArticle.nodes, {}).blocks;
+  const xParagraph = xBlocks.find(block => block.paragraph?.rich_text[0].text.content === 'One ').paragraph.rich_text;
+  assert.deepEqual(xParagraph[1].text, { content: 'linked phrase', link: { url: 'https://example.com/article/123/media/456' } });
+  assert.equal(xParagraph[1].annotations.bold, true);
+  assert.equal(xParagraph[2].annotations.italic, true);
+  assert.equal(xBlocks.filter(block => block.type === 'numbered_list_item').length, 2);
+  assert.equal(xBlocks.filter(block => block.type === 'bulleted_list_item').length, 1);
+  html = html.replace(/<img width="600" height="240"[^>]+>/, '');
+  await page.goto('https://x.com/example/status/123');
+  const xArticleWithPlaceholder = await page.evaluate(extractPage);
+  assert.equal(xArticleWithPlaceholder.incomplete, true, 'An unloaded cover must not pass as a complete article');
+  assert.equal(xArticleWithPlaceholder.requiresLogin, false);
   html = '<article><h1>Article title</h1><p>First paragraph</p><img width="600" height="400" src="https://example.com/article-image.jpg"><p>Last paragraph</p></article><aside><img width="600" height="400" src="https://example.com/ad.jpg"></aside>';
   await page.goto('https://example.com/article'); const article = await page.evaluate(extractPage);
   assert.deepEqual(article.nodes.map(n => n.kind), ['heading', 'paragraph', 'image', 'paragraph']);
@@ -58,13 +98,20 @@ try {
       write: async (job, nodes, save) => { plan = renderDocument(job.document, nodes, job.resources, job.analyses, job.warnings, job.extraction); job.page = { id: randomUUID(), url: 'https://www.notion.so/test' }; save(); } };
     service = new CollectionService({ root, binaries: { directory: root, status: () => ({}) }, browser, media, notion });
     service.settings = preferences({ destination: { workspaceId: randomUUID(), id: randomUUID(), kind: 'page', label: 'fixture' }, keepLocal: false, keepHistory: true, transcribe: false, vision: false, extraction: { mode: 'off' } });
-    for (const [doc, expectedDownloads, expectedSaved] of [[videoDocument, ['video'], ['video']], [article, ['image'], ['image']]]) {
+    for (const [doc, expectedDownloads, expectedSaved] of [[videoDocument, ['video'], ['video']], [article, ['image'], ['image']], [xArticle, ['image', 'image'], ['image', 'image']]]) {
       current = doc; downloaded.length = 0; plan = undefined;
-      const created = await service.create({ input: doc.url });
+      const options = doc === xArticle ? { keepLocal: true, outputDirectory: path.join(root, 'export') } : {};
+      const created = await service.create({ input: doc.url, options });
       for (let i = 0; service.active && i < 400; i++) await new Promise(resolve => setTimeout(resolve, 10));
-      assert.equal(service.jobs.get(created.jobs[0].id).status, 'completed');
+      const job = service.jobs.get(created.jobs[0].id);
+      assert.equal(job.status, 'completed');
       assert.deepEqual(downloaded, expectedDownloads, 'Only the selected source media may be downloaded');
       assert.deepEqual(plan.blocks.filter(block => ['image', 'video'].includes(block.type)).map(block => block.type), expectedSaved);
+      if (doc === xArticle) {
+        const markdown = fs.readFileSync(path.join(job.exportDirectory, '原文.md'), 'utf8');
+        assert.ok(markdown.includes('[**linked phrase**](<https://example.com/article/123/media/456>) *in a paragraph.*'));
+        assert.ok(markdown.includes('\n1. First step\n\n1. Second step\n\n- One bullet\n\n> A quote\n'));
+      }
     }
   } finally {
     service?.close();

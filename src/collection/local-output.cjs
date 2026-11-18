@@ -37,6 +37,11 @@ function foldDetails(markdown, citations) {
   if (detail) lines.push('', '</details>');
   return lines.join('\n');
 }
+function sourceSpan(span) {
+  const marker = (span.bold ? '**' : '') + (span.italic ? '*' : '');
+  const content = marker ? span.text.replace(/^(\s*)([\s\S]*?\S)(\s*)$/, (_match, before, text, after) => before + marker + text + marker + after) : span.text;
+  return span.href ? '[' + content.replaceAll(']', '\\]') + '](<' + span.href + '>)' : content;
+}
 function writeLocalOutput(job) {
   if (!job.exportOwned || !job.exportDirectory || !fs.existsSync(job.exportDirectory)) return;
   const directory = ownedExport(job); if (!directory) return;
@@ -57,8 +62,11 @@ function writeLocalOutput(job) {
   for (const node of nodes) {
     if (['video', 'audio'].includes(node.kind) && !mediaHeading) { text.push('## 原始音视频', ''); mediaHeading = true; }
     if (node.text) {
-      const content = node.spans?.length ? node.spans.map(s => s.href ? '[' + s.text.replaceAll(']', '\\]') + '](<' + s.href + '>)' : s.text).join('') : node.text;
-      text.push((node.kind === 'heading' ? '#'.repeat((node.level || 1) + 1) + ' ' : '') + content, '');
+      const content = node.spans?.length ? node.spans.map(sourceSpan).join('') : node.text;
+      if (node.kind === 'heading') text.push('#'.repeat((node.level || 1) + 1) + ' ' + content, '');
+      else if (node.kind === 'quote') text.push(content.split('\n').map(line => '> ' + line).join('\n'), '');
+      else if (node.kind === 'list') text.push((node.ordered ? '1. ' : '- ') + content, '');
+      else text.push(content, '');
     }
     if (['image', 'video', 'audio'].includes(node.kind)) {
       const name = node.caption || ({ image: '图片', video: '视频', audio: '音频' }[node.kind]);
