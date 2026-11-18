@@ -1,7 +1,9 @@
 const { createHash } = require('node:crypto');
 const { modules: macModules } = require('./compat/macos-reviewed.json');
 const reviewed = {
-  '95271': { '811656': { hashes: ['f2be3eb51416adf2699c8fd44fdf7cdecfb53ab21b299dbf77e57acafe74d801'] } },
+  '95271': { '811656': { hashes: ['f2be3eb51416adf2699c8fd44fdf7cdecfb53ab21b299dbf77e57acafe74d801',
+    // Reviewed override-expiry helper release, also repacked on November 18.
+    '7695a27f56e7fb061158d9558a3309c757c7e77b3ca3fec274872990d63b854f'] } },
   '96975': { '459724': { hashes: ['6ab3eed179a1e223dfe221d164c59774bb0b3a3a38e7e6090e2359e44c50b332'] } },
   '32453': { '60217': { hashes: ['38a7afc2235c70aebd54da1792dfcdc9c0278d3c2a58a0167a91feeef61a4329'] } },
   '17521': { '328616': { hashes: ['8899023157d4755e66eaaf959bd7d76a755505b7a938f311a8b7ad1eb0a042d7',
@@ -54,7 +56,7 @@ function matchModule(source, asset) {
   if (end <= start) return null;
   const module = source.slice(start, end), hash = digest(module);
   if (!record.hashes.includes(hash) && macModules[id]?.moduleHash !== hash && !(id === '811656' && stableAvailability(module))) return null;
-  return { moduleId: id, gateModuleId: record.gateModuleId, transportModuleId: record.transportModuleId };
+  return { moduleId: id, moduleHash: hash, gateModuleId: record.gateModuleId, transportModuleId: record.transportModuleId };
 }
 function compatibleModule(source, asset) { return matchModule(source, asset) !== null; }
 module.exports = { compatibleModule, matchModule };

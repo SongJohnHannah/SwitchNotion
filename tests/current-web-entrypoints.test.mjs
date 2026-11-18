@@ -7,7 +7,7 @@ const require = createRequire(import.meta.url);
 const { parse } = require('../src/compat/parser.cjs');
 const { adaptClient } = require('../src/client-compat.cjs');
 const assets = {
-  availability: '95271-3b930ea252348c71.js',
+  availability: '95271-adf135991da29369.js',
   autofill: '57590-1ff6559994fff905.js',
   attachments: '51103-2e3dc6cde9c9f009.js'
 };

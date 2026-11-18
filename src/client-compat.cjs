@@ -25,10 +25,11 @@ const reviewedAssets = {
   '17048-31dd3b95acbe5529.js': '50dbcf4bb07f9bd2ab9c1baedfd63ba94480a2452edb38b849dfe232f35b19f2'
 };
 const anchor = /let [A-Za-z_$][\w$]*=\(null==\(r=\(o=e\[u\]\)\.isOverrideAllowed\)\?void 0:r\.call\(o,n\.data\)\)\?\?!0/g;
-// The reviewed November 18 chunk extracts the unchanged override-expiry
-// calculation into an exported helper and renames its feature binding.
+// The reviewed November 18 module extracts override expiry into an exported
+// helper and renames its feature binding. Select by exact module bytes so
+// repacking unrelated neighbours does not reintroduce the hosted quota gate.
 const availabilityProfiles = {
-  '95271-3b930ea252348c71.js': { feature: 'd', anchor: /let v=\(null==\(r=\(o=e\[d\]\)\.isOverrideAllowed\)\?void 0:r\.call\(o,n\.data\)\)\?\?!0/g }
+  '7695a27f56e7fb061158d9558a3309c757c7e77b3ca3fec274872990d63b854f': { feature: 'd', anchor: /let v=\(null==\(r=\(o=e\[d\]\)\.isOverrideAllowed\)\?void 0:r\.call\(o,n\.data\)\)\?\?!0/g }
 };
 // A fully reviewed page-local handshake takes precedence over the older
 // generic module hash, so all recording roles register in the same renderer.
@@ -75,7 +76,7 @@ function adaptClient(source, asset, { localSpeechEnabled = false, audioEndpoint,
     if ([...source.matchAll(title)].length !== 1) throw Error('Unsupported native provider label module');
     return source.replace(title, 'title:"mystery"===e.providerFamily?"DeepSeek 官方 API":e.providerDisplayName');
   }
-  const profile = availabilityProfiles[asset], feature = profile?.feature || 'u';
+  const profile = availabilityProfiles[matched?.moduleHash], feature = profile?.feature || 'u';
   const matches = [...source.matchAll(profile?.anchor || anchor)];
   if (matches.length !== 1) throw Error('Unsupported native availability module');
   const speech = localSpeechEnabled ? `if(${feature}==="ai_meeting_notes"&&n.data.space?.isTranscriptionEnabled?.()!==false)return{type:"available",limit:{type:"cumulative",total:"unlimited",current:n.data.current??0}};` : '';
