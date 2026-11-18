@@ -5,6 +5,8 @@ function extractPage() {
   const noise = 'nav,footer,aside,script,style,noscript,button,form,[role="navigation"],[role="banner"],[aria-hidden="true"],.advertisement,.ads,.recommend-list,#comments,#secondary,.reply-list,.recommend-panel';
   const host = location.hostname;
   const isX = /(^|\.)(x|twitter)\.com$/.test(host);
+  const xStatus = isX ? location.pathname.match(/\/status\/(\d+)(?:\/|$)/)?.[1] : null;
+  const xHandle = isX ? location.pathname.match(/^\/([a-z\d_]+)\/status\//i)?.[1] : null;
   const platform = /(^|\.)douyin\.com$/.test(host) ? 'douyin' : /(^|\.)bilibili\.com$/.test(host) ? 'bilibili' : /(^|\.)(?:youtube\.com|youtu\.be)$/.test(host) ? 'youtube' : /(^|\.)tiktok\.com$/.test(host) ? 'tiktok' : '';
   if (platform === 'douyin' && /^\/note\/\d+\/?$/.test(location.pathname)) {
     const root = document.querySelector('[data-e2e="note-detail"]'), nodes = [], warnings = [];
@@ -46,13 +48,14 @@ function extractPage() {
   const candidates = [...document.querySelectorAll(isX ? 'article' : 'article,[role="article"],.article-content,.post-content,.entry-content,#js_content,main,[role="main"]')].filter(visible);
   const score = el => (el.innerText || '').length - [...el.querySelectorAll('nav,aside')].reduce((n, e) => n + (e.innerText || '').length, 0);
   const articles = candidates.filter(el => el.matches('article,[role="article"],.article-content,.post-content,.entry-content,#js_content'));
+  // Prefer the post's own timestamp permalink. A reply can link to the same post.
+  const linksToStatus = link => link?.origin === location.origin && link.pathname.endsWith('/status/' + xStatus);
+  const xPost = xStatus ? articles.find(el => [...el.querySelectorAll('a[href] time')].some(time => time.closest('article') === el && linksToStatus(time.closest('a')))) ||
+    articles.find(el => [...el.querySelectorAll('a[href]')].some(linksToStatus)) : null;
   let root = (articles.length ? articles : candidates).sort((a, b) => score(b) - score(a))[0] || document.body;
   if (platform === 'bilibili') root = document.querySelector('.left-container') || document.querySelector('.video-container-v1') || document.querySelector('main') || root;
   else if (platform) root = document.querySelector(platform === 'youtube' ? '#primary' : '[data-e2e="video-detail"],main') || root;
-  if (isX) {
-    const status = location.pathname.match(/\/status\/(\d+)/)?.[1];
-    root = xArticle || (status && articles.find(el => [...el.querySelectorAll('a[href]')].some(a => a.pathname?.endsWith('/status/' + status)))) || root;
-  }
+  if (isX) root = xArticle || xPost || root;
   const nodes = [], warnings = [];
   let xMediaPending = false;
   function spans(el) {
@@ -182,9 +185,19 @@ function extractPage() {
   const xArticlePending = Boolean(xArticle || xArticleView || xArticleRoute) && (!xArticle || !nodes.some(node => node.text));
   if (xArticlePending) warnings.push('X 文章正文尚未加载，请重新读取原文。');
   if (xMediaPending) warnings.push('X 文章的封面或配图尚未加载完整，请重新读取原文。');
-  const title = xArticleView?.querySelector('[data-testid="twitter-article-title"]')?.innerText?.trim() ||
+  let xPostTitle;
+  if (xStatus && !xArticle && !xArticleView) {
+    const caption = [...(xPost?.querySelectorAll('[data-testid="tweetText"]') || [])]
+      .find(el => el.closest('article') === xPost && !el.closest('[data-testid="quoteTweet"]') && visible(el));
+    const line = caption?.innerText?.split(/\r?\n/).map(text =>
+      text.replace(/(^|\s)(?:https?:\/\/|(?:t\.co|pic\.x\.com)\/)\S+/gi, '$1').trim().replace(/\s+/g, ' ')).find(Boolean);
+    const characters = [...(line || '')];
+    xPostTitle = characters.length > 100 ? characters.slice(0, 99).join('').trimEnd() + '…' : line;
+    xPostTitle ||= ['X 帖子', xHandle && '@' + xHandle, xStatus].filter(Boolean).join(' · ');
+  }
+  const title = xArticleView?.querySelector('[data-testid="twitter-article-title"]')?.innerText?.trim() || xPostTitle ||
     root.querySelector('h1')?.innerText || document.querySelector('meta[property="og:title"]')?.content || document.querySelector('h1')?.innerText || document.title;
-  return { title, ...(douyinTitles ? { douyinTitles } : {}), url: location.href, author: document.querySelector('meta[name="author"]')?.content || (isX ? location.pathname.match(/^\/([^/]+)\/status\//)?.[1] : '') || '',
+  return { title, ...(douyinTitles ? { douyinTitles } : {}), url: location.href, author: document.querySelector('meta[name="author"]')?.content || xHandle || '',
     nodes, requiresLogin: blocked || verification, incomplete: blocked || preview || errorPage || verification || xArticlePending || xMediaPending, warnings };
 }
 module.exports = { extractPage };

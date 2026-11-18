@@ -34,10 +34,25 @@ try {
   await page.goto('https://example.com/watch/123'); const genericVideo = await page.evaluate(extractPage);
   assert.deepEqual(genericVideo.nodes.map(n => n.kind), ['video', 'paragraph']);
   assert.equal(genericVideo.nodes[0].url, 'https://example.com/watch/123', 'Download the requested page instead of an arbitrary embedded video');
-  html = '<article><a href="https://x.com/example/status/123">post</a><div data-testid="tweetText">Source post text</div><video></video><img width="600" height="400" src="https://example.com/ad.jpg"></article>';
-  await page.goto('https://x.com/example/status/123'); const post = await page.evaluate(extractPage);
+  const xVideoHtml = `<article data-testid="tweet">
+    <a href="/example/status/123">A link back to the source</a><div data-testid="tweetText">A reply with unrelated text.</div>
+  </article><article data-testid="tweet">
+    <div data-testid="tweetText"><a href="https://t.co/reference">https://t.co/reference</a><br><br>从五个步骤精简流程<br><br>正文的下一行</div>
+    <video></video><img width="600" height="400" src="https://example.com/ad.jpg">
+    <a href="/example/status/123"><time datetime="2026-01-01">1月1日</time></a>
+  </article>`;
+  html = xVideoHtml;
+  await page.goto('https://x.com/example/status/123'); const post = normalizeDocument(await page.evaluate(extractPage));
+  assert.equal(post.title, '从五个步骤精简流程');
   assert.deepEqual(post.nodes.map(n => n.kind), ['video', 'paragraph']);
   assert.equal(post.nodes[0].url, 'https://x.com/example/status/123');
+  assert.match(post.nodes[1].text, /正文的下一行/);
+  html = '<title>(3) Example on X / X</title><meta property="og:title" content="X conversation"><h1>Post</h1>' + xVideoHtml;
+  await page.goto('https://x.com/example/status/123');
+  assert.equal((await page.evaluate(extractPage)).title, '从五个步骤精简流程', 'Use the caption when X supplies a tab title too');
+  html = xVideoHtml.replace('从五个步骤精简流程<br><br>正文的下一行', '');
+  await page.goto('https://x.com/example/status/123');
+  assert.equal((await page.evaluate(extractPage)).title, 'X 帖子 · @example · 123');
   html = `<title>(3) Example on X: “X article title” / X</title>
     <article data-testid="twitterArticleReadView">
       <a href="/example/article/123/media/1"><img width="600" height="240" src="https://pbs.twimg.com/media/cover?format=jpg&name=large"></a>
