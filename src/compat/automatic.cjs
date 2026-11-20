@@ -11,7 +11,7 @@ const scriptAsset = /^\d+-[a-f\d]{16}\.js$/;
 const digest = source => createHash('sha256').update(source).digest('hex');
 const likelyTarget = (source, asset) => knownAsset.test(asset) || typeof source === 'string' && (hint.test(source) || /[,{]\s*(?:414741|175529|697264|372201)\s*\(/.test(source));
 
-function modulesIn(source) {
+function chunkProperties(source) {
   if (typeof source !== 'string' || source.length > 2 * 1024 * 1024) throw Error('Unsupported script size');
   let tokens = 0;
   const ast = parse(source, { ecmaVersion: 2024, onToken() { if (++tokens > 1000000) throw Error('Script complexity limit'); } });
@@ -26,14 +26,18 @@ function modulesIn(source) {
       receiver.right.operator === '||' && sameMember(receiver.left, receiver.right.left) && emptyArray(receiver.right.right));
   const object = call?.type === 'CallExpression' && call.arguments[0]?.type === 'ArrayExpression' && call.arguments[0].elements[1];
   if (callee?.type !== 'MemberExpression' || callee.computed || callee.property.name !== 'push' || !(member(receiver) || assigned) || object?.type !== 'ObjectExpression') throw Error('Changed chunk registration');
+  return object.properties;
+}
+function reviewedModules(source, properties) {
   const found = [], seen = new Set();
-  for (const property of object.properties) {
+  for (const property of properties) {
     const id = String(property.key?.value); if (!reviewed[id]) continue;
     if (seen.has(id) || property.type !== 'Property' || property.computed || property.value.type !== 'FunctionExpression') throw Error('Ambiguous native module');
     seen.add(id); found.push({ id, start: property.start, end: property.end, source: source.slice(property.start, property.end) });
   }
   return found;
 }
+const modulesIn = source => reviewedModules(source, chunkProperties(source));
 function endpoint(value) {
   const url = new URL(value);
   if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port || url.pathname !== '/' || url.search || url.hash || url.username || url.password) throw Error('Expected local audio endpoint');
@@ -47,11 +51,38 @@ function edit(source, changes) {
   }
   return source;
 }
-function patchModule(module, id, options) {
+function matchesTierRanking(module, info, source, properties, ranking) {
+  const requireBinding = info.ast.body[0].expression.properties[0].value.params[2];
+  const binding = info.bindings.get(requireBinding);
+  if (!binding) return false;
+  const imports = [];
+  for (const node of info.nodes) {
+    if (node.type !== 'MemberExpression' || node.computed || node.property.name !== 'o3') continue;
+    const call = node.object, argument = call.arguments?.[0];
+    if (call.type === 'CallExpression' && info.bindings.get(call.callee) === binding && call.arguments.length === 1 &&
+      argument?.type === 'Literal' && Number.isSafeInteger(argument.value)) imports.push(argument);
+  }
+  const dependencyId = imports[0]?.value;
+  if (dependencyId === undefined || imports.some(argument => argument.value !== dependencyId)) return false;
+  const normalized = dependencyId === ranking.moduleId ? info : inspect(edit(module, imports.map(argument => ({
+    start: argument.start - 2, end: argument.end - 2, text: String(ranking.moduleId)
+  }))));
+  if (normalized.fingerprint !== ranking.availabilityFingerprint) return false;
+
+  // An import can move with the chunk, but an opaque or ambiguous dependency
+  // cannot prove that the new module ID exports the same tier ordering.
+  if (properties.some(property => property.type !== 'Property' || property.computed)) return false;
+  const dependencies = properties.filter(property => String(property.key.value) === String(dependencyId));
+  if (dependencies.length !== 1 || dependencies[0].value.type !== 'FunctionExpression') return false;
+  const dependency = dependencies[0];
+  return inspect('0' + source.slice(dependency.key.end, dependency.end)).fingerprint === ranking.fingerprint;
+}
+function patchModule(module, id, options, source, properties) {
   const record = reviewed[id], info = inspect(module);
   // The Mac release adds stop-source telemetry. Its reviewed methods keep
   // the same selectors, capture permissions and drain deadlines as before.
-  if (![record.fingerprint, ...(record.additionalFingerprints || []), macModules[id]?.fingerprint].includes(info.fingerprint)) throw Error('Changed native module behavior');
+  if (![record.fingerprint, ...(record.additionalFingerprints || []), macModules[id]?.fingerprint].includes(info.fingerprint) &&
+    !(record.tierRanking && matchesTierRanking(module, info, source, properties, record.tierRanking))) throw Error('Changed native module behavior');
   const node = key => { const value = info.at(record.selectors[key]); if (!value?.type) throw Error('Missing native selector'); return value; };
   const sourceOf = value => module.slice(value.start - 2, value.end - 2);
   const changes = [], replace = (value, text) => changes.push({ start: value.start - 2, end: value.end - 2, text });
@@ -86,12 +117,14 @@ function patchModule(module, id, options) {
 }
 function adaptAutomatic(source, asset, options = {}) {
   if (!scriptAsset.test(asset) || !likelyTarget(source, asset)) throw Error('Unreviewed native client asset');
-  const modules = modulesIn(source); if (!modules.length) throw Error('Unreviewed native client asset');
+  const properties = chunkProperties(source), modules = reviewedModules(source, properties);
+  if (!modules.length) throw Error('Unreviewed native client asset');
   const changes = [], records = [];
   for (const module of modules) {
-    const key = JSON.stringify([module.id, digest(module.source), !!options.localSpeechEnabled, options.inputMode || 'meeting', options.audioEndpoint || '']);
+    // The ranking check depends on what else is registered in the chunk.
+    const key = JSON.stringify([module.id, digest(reviewed[module.id].tierRanking ? source : module.source), !!options.localSpeechEnabled, options.inputMode || 'meeting', options.audioEndpoint || '']);
     if (!cache.has(key)) {
-      let value; try { value = { output: patchModule(module.source, module.id, options) }; } catch { value = { failed: true }; }
+      let value; try { value = { output: patchModule(module.source, module.id, options, source, properties) }; } catch { value = { failed: true }; }
       if (cache.size >= 16) cache.delete(cache.keys().next().value);
       cache.set(key, value);
     }

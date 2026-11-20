@@ -247,7 +247,12 @@
       },
       "additionalFingerprints": [
         "373cf1443ea4d907524e7f474ee47a456b37250bf510b9bcfc87ce613ffba0a3"
-      ]
+      ],
+      "tierRanking": {
+        "moduleId": 197459,
+        "fingerprint": "f950108551daca764767c99b63c202fd0a21ea58cdf34792ed11338763bc5406",
+        "availabilityFingerprint": "88c9c467211d2c789bcb68de1fc3d65341edb3a12e9063371eff10ee09456a01"
+      }
     }
   }
 }
