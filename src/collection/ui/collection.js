@@ -6,10 +6,15 @@ const names = { paragraph: '正文', heading: '标题', quote: '引用', list: '
 const statuses = { queued: '等待下载', reading: '识别中', downloading: '下载中', waiting_processing: '等待整理', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需检查原网页', completed: '已保存', partial: '处理未完成', failed: '失败', paused: '已暂停', cancelled: '已停止', interrupted: '可继续' };
 const active = ['queued', 'reading', 'downloading', 'waiting_processing', 'processing', 'uploading', 'saving'];
 const resumable = ['failed', 'partial', 'paused', 'cancelled', 'interrupted', 'needs_login'];
-function taskStatus() {
-  const processing = state.jobs.filter(job => active.includes(job.status)).length;
-  const attention = state.jobs.filter(job => !active.includes(job.status) && job.status !== 'completed').length;
-  const completed = state.jobs.length - processing - attention;
+function taskCards() {
+  const { jobs, latestCompletion } = state;
+  if (jobs.length || !latestCompletion?.title) return jobs;
+  return [{ ...latestCompletion, status: 'completed', message: '已保存到 Notion' }];
+}
+function taskStatus(jobs) {
+  const processing = jobs.filter(job => active.includes(job.status)).length;
+  const attention = jobs.filter(job => !active.includes(job.status) && job.status !== 'completed').length;
+  const completed = jobs.length - processing - attention;
   const text = [processing ? '处理中 ' + processing : '', attention ? '未完成 ' + attention : '', completed ? '已完成 ' + completed : ''].filter(Boolean).join(' · ');
   return { text, tone: attention ? 'attention' : processing ? 'busy' : 'done' };
 }
@@ -58,10 +63,10 @@ async function refresh() {
   $('shortcut').textContent = state.settings.shortcut.replace('CommandOrControl', navigator.platform.includes('Mac') ? '⌘' : 'Ctrl').replaceAll('+', ' ');
   $('destination-pill').textContent = chosen ? (chosen.workspaceName ? chosen.workspaceName + ' / ' : '') + chosen.label + ' ⌄' : '选择工作区、数据库或页面 ⌄';
   $('queue-state').textContent = state.active ? state.active + ' 个任务处理中' : '支持链接与本地路径，原始内容优先';
-  const tasks = taskStatus();
-  $('task-status').hidden = !state.jobs.length; $('queue-state').hidden = !!state.jobs.length;
+  const cards = taskCards(), tasks = taskStatus(cards);
+  $('task-status').hidden = !cards.length; $('queue-state').hidden = !!cards.length;
   $('task-status').className = 'task-status ' + tasks.tone; $('task-status').textContent = tasks.text;
-  $('task-status').title = state.jobs.length + ' 条收集任务，点击查看进度';
+  $('task-status').title = cards.length + ' 条收集任务，点击查看进度';
   renderQueueControls();
   $('keep-history').checked = state.settings.keepHistory;
   $('result-link').hidden = !state.latestCompletion;
@@ -72,7 +77,7 @@ async function refresh() {
   $('prepare').disabled = state.preparing;
   $('local-directory').textContent = '本地资料保存到：' + (state.settings.outputDirectory || state.defaultDownloadDirectory || '系统下载目录 / NotionSwitch') + ' / 链接标题';
   if (state.shortcutError || state.configError) message(state.shortcutError || state.configError, true);
-  renderFavorites(); renderTasks();
+  renderFavorites(); renderTasks(cards);
   if (selectedJob) renderSelection(state.jobs.find(j => j.id === selectedJob));
 }
 async function loadWorkspaces() {
@@ -147,13 +152,16 @@ function renderSelection(job) {
   $('save-selected').disabled = !['awaiting_selection', 'needs_login'].includes(job.status); $('save-selected').textContent = job.preview.incomplete ? '保存所选的已获取内容' : '收集所选内容';
   $('reread').hidden = !!job.page || active.includes(job.status); $('reread').textContent = job.local ? '重新读取文件' : '重新读取原文';
 }
-function renderTasks() {
+function renderTasks(cards = taskCards()) {
   const filter = $('status-filter').value, query = $('task-search').value.trim().toLowerCase();
-  const jobs = state.jobs.filter(j => (filter === 'all' || filter === 'active' && active.includes(j.status) || filter === 'completed' && j.status === 'completed' || filter === 'attention' && !active.includes(j.status) && j.status !== 'completed') && (j.title + ' ' + j.url + ' ' + j.options.destination?.label).toLowerCase().includes(query));
-  $('tasks-section').hidden = !state.jobs.length;
+  const jobs = cards.filter(j => (filter === 'all' || filter === 'active' && active.includes(j.status) || filter === 'completed' && j.status === 'completed' || filter === 'attention' && !active.includes(j.status) && j.status !== 'completed') &&
+    [j.title, j.url, j.options?.destination?.label].join(' ').toLowerCase().includes(query));
+  $('tasks-section').hidden = !cards.length;
   const root = $('tasks'); root.replaceChildren(); if (!jobs.length) root.append(element('div', 'empty', '当前筛选下没有内容'));
   for (const job of jobs.slice(0, 100)) { const card = element('article', 'task ' + job.status), title = element('div', 'task-title', job.title); title.append(element('span', 'badge', statuses[job.status] || job.status));
-    card.append(title, element('div', 'task-meta', (job.local ? '本地文件' : new URL(job.url).hostname) + ' · ' + (job.options.destination?.label || '尚未选择位置')), element('div', 'task-message', job.message));
+    card.append(title);
+    if (job.options) card.append(element('div', 'task-meta', (job.local ? '本地文件' : new URL(job.url).hostname) + ' · ' + (job.options.destination?.label || '尚未选择位置')));
+    card.append(element('div', 'task-message', job.message));
     if (['partial', 'needs_login'].includes(job.status) && job.warnings.length) {
       const reasons = element('ul', 'task-warnings');
       for (const warning of job.warnings.slice(0, 5)) reasons.append(element('li', '', warning));
@@ -165,7 +173,7 @@ function renderTasks() {
     if (job.preview) actions.append(button(['awaiting_selection', 'needs_login'].includes(job.status) ? '选择内容' : '查看内容', () => { selectedJob = job.id; renderSelection(job); }));
     if (job.pages?.length) actions.append(...reportLinks(job));
     else if (job.page) actions.append(button('打开 Notion ↗', () => request('open-page', { id: job.id })));
-    if (job.status === 'completed' && !job.local) actions.append(button('重新收集为新记录', async () => { await request('create', { input: job.url, options: { ...readOptions(), extraction: job.options.extraction, vision: job.options.vision }, force: true }); await refresh(); }));
+    if (job.status === 'completed' && job.options && !job.local) actions.append(button('重新收集为新记录', async () => { await request('create', { input: job.url, options: { ...readOptions(), extraction: job.options.extraction, vision: job.options.vision }, force: true }); await refresh(); }));
     if (job.canRedistill) actions.append(button('按视频制作再蒸馏', () => openRedistill({ id: job.id, title: job.title })));
     if (active.includes(job.status)) actions.append(button('停止', async () => { await request('cancel', { id: job.id }); await refresh(); }));
     if (resumable.includes(job.status)) actions.append(button('继续／重试', async () => { await request('retry', { id: job.id }); await refresh(); }));
@@ -181,8 +189,8 @@ function renderTasks() {
       }, 'text danger');
       remove.title = '删除本机任务及相关文件，保留已保存的 Notion 页面和原始本地文件'; actions.append(remove);
     }
-    actions.append(button(job.local ? '打开文件位置' : '打开原文／登录', () => request('open-source', { id: job.id })));
-    if (job.options.keepLocal && job.status === 'completed') actions.append(button('本地副本', () => request('open-local', { id: job.id })));
+    if (job.options) actions.append(button(job.local ? '打开文件位置' : '打开原文／登录', () => request('open-source', { id: job.id })));
+    if (job.options?.keepLocal && job.status === 'completed') actions.append(button('本地副本', () => request('open-local', { id: job.id })));
     card.append(actions); root.append(card);
   }
 }

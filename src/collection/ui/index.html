@@ -21,6 +21,8 @@
     <p id="message" role="status" hidden></p>
 
     <div id="expanded" hidden>
+      <details id="tasks-section" class="panel tasks-panel" hidden><summary hidden></summary><div class="section-heading task-filters"><label class="sr-only" for="task-search">搜索收集任务</label><input id="task-search" placeholder="搜索标题、来源或保存位置"><label class="sr-only" for="status-filter">任务状态</label><select id="status-filter"><option value="all">全部状态</option><option value="active">处理中</option><option value="attention">待处理</option><option value="completed">已完成</option></select></div><div id="tasks" class="tasks"></div></details>
+      <section id="selection-section" class="panel" hidden><div class="section-heading"><div><h2>选择要收集的内容</h2><p>点击整行即可勾选。</p></div><button id="select-all" class="secondary">全选／清空</button></div><p id="selection-title"></p><div id="selection-list" class="selection-list"></div><div class="action-row"><button id="save-selected" class="primary">收集所选内容</button><button id="reread" class="secondary">登录后重新读取</button></div></section>
       <nav class="settings-tabs" role="tablist" aria-label="收集设置">
         <button id="settings-tab-destination" type="button" role="tab" aria-selected="true" aria-controls="panel-destination" data-tab="destination">保存位置</button>
         <button id="settings-tab-options" type="button" role="tab" aria-selected="false" aria-controls="panel-options" tabindex="-1" data-tab="options">处理选项</button>
@@ -79,8 +81,6 @@
         <div class="setting-group component-row"><div><h3>下载与媒体组件</h3><p id="components" class="hint"></p></div><button id="prepare" class="secondary">检测并准备组件</button></div>
         <div class="setting-group"><label class="option-card history-setting"><span><strong>保留已完成的收集历史</strong><small>关闭时只保留处理中和需要补全的任务</small></span><input id="keep-history" type="checkbox"></label><p class="hint">清理本机历史不影响 Notion 内容、主动保留的副本或网站登录。</p></div>
       </section>
-      <section id="selection-section" class="panel" hidden><div class="section-heading"><div><h2>选择要收集的内容</h2><p>点击整行即可勾选。</p></div><button id="select-all" class="secondary">全选／清空</button></div><p id="selection-title"></p><div id="selection-list" class="selection-list"></div><div class="action-row"><button id="save-selected" class="primary">收集所选内容</button><button id="reread" class="secondary">登录后重新读取</button></div></section>
-      <details id="tasks-section" class="panel tasks-panel" hidden><summary hidden></summary><div class="section-heading task-filters"><label class="sr-only" for="task-search">搜索收集任务</label><input id="task-search" placeholder="搜索标题、来源或保存位置"><label class="sr-only" for="status-filter">任务状态</label><select id="status-filter"><option value="all">全部状态</option><option value="active">处理中</option><option value="attention">待处理</option><option value="completed">已完成</option></select></div><div id="tasks" class="tasks"></div></details>
       <footer>关闭窗口后继续在后台处理 · 未完成的内容可随时恢复</footer>
     </div>
   </main>

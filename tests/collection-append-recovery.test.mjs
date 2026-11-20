@@ -6,7 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const { CollectionNotion } = require('../src/collection/notion.cjs');
+const { CollectionNotion, textBlocks } = require('../src/collection/notion.cjs');
 const { matchesBlockContent } = require('../src/notion-blocks.cjs');
 const linked = url => ({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: [{ type: 'text', text: { content: '[S1]', link: { url } } }] } });
 
@@ -59,4 +59,26 @@ test('late report recovery refuses changed content, moved blocks and incomplete 
     const f = fixture(t); change(f);
     await assert.rejects(f.client.appendRecoverably(f.connection, f.job, f.blocks, f.anchor), /回执|核验|不一致|不确定/);
   }
+});
+
+test('an older pending transcript append is recovered with its original block shape', async t => {
+  const f = fixture(t), pageId = f.job.page.id, node = { id: randomUUID(), kind: 'video' };
+  const blocks = [
+    ...textBlocks({ kind: 'paragraph', text: '补全的识别结果（此前未完成项以本次记录为准）' }),
+    ...textBlocks({ kind: 'heading', level: 3, text: '素材 1 · 逐字稿' }),
+    ...textBlocks({ kind: 'paragraph', text: '已提交的旧版逐字稿' })
+  ];
+  const submitted = blocks.map(block => ({ ...block, id: randomUUID(), parent: { page_id: pageId } }));
+  const ids = submitted.map(block => block.id);
+  Object.assign(f.job, { resources: {}, analyses: { [node.id]: { transcript: { text: '已提交的旧版逐字稿', note: '新布局才显示的备注' } } },
+    sourceSlots: {}, written: [[f.anchor]], writeAnchors: { analysis: 0 } });
+  Object.assign(f.record, { intended: { block_id: pageId, blocks }, request: { body: { children: blocks } },
+    response: { results: submitted }, result: { verified: false, created_block_ids: ids } });
+  f.save();
+  f.actual.splice(1, f.actual.length - 1, ...submitted);
+  f.client.connect = async () => f.connection;
+  await f.client.repair(f.job, [node], { slots: {} }, () => {});
+  assert.deepEqual(Object.values(f.job.analysisFormats), [false]);
+  assert.deepEqual(Object.values(f.job.analysisBatches).flat(), [ids]);
+  assert.equal(JSON.parse(fs.readFileSync(f.file)).status, 'verified');
 });

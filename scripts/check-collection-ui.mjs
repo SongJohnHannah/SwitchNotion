@@ -242,12 +242,23 @@ try {
   });
   await page.locator('.task .badge').getByText('等待整理', { exact: true }).waitFor();
   await page.locator('#status-filter').selectOption('active');
+  assert.equal(await page.locator('#tasks-section').evaluate(section => section.getBoundingClientRect().bottom <= document.querySelector('.settings-tabs').getBoundingClientRect().top), true);
   assert.equal(await page.locator('.task').count(), 1);
   assert.equal(await page.locator('.task-actions').getByText('停止', { exact: true }).count(), 1);
   assert.equal(await page.locator('.task-actions').getByText('删除任务', { exact: true }).count(), 0);
   await page.screenshot({ path: path.join(output, 'waiting-processing.png') });
   await page.locator('#status-filter').selectOption('all');
-  await page.evaluate(() => { window._collectionFixture.jobs = []; window._changeCollection(); });
+  await page.evaluate(() => {
+    window._collectionFixture.jobs = [];
+    window._collectionFixture.latestCompletion = { id: 'saved-receipt', title: '刚完成的任务', page: { id: 'saved-page' } };
+    window._changeCollection();
+  });
+  await page.getByRole('button', { name: '已完成 1' }).waitFor({ timeout: 5000 });
+  await page.getByRole('button', { name: '已完成 1' }).click();
+  await page.locator('.task.completed .badge').getByText('已保存', { exact: true }).waitFor();
+  assert.equal(await page.locator('.task.completed').count(), 1);
+  assert.equal(await page.locator('#status-filter').isVisible(), true);
+  await page.evaluate(() => { window._collectionFixture.latestCompletion = null; window._changeCollection(); });
   await page.locator('#tasks-section').waitFor({ state: 'hidden' });
   await page.locator('#queue-controls').waitFor({ state: 'hidden' });
   for (const width of [480, 580, 620, 820]) {

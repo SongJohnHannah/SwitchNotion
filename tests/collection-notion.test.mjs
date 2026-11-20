@@ -8,6 +8,26 @@ import path from 'node:path';
 const require = createRequire(import.meta.url);
 const { CollectionNotion, renderDocument, batches, textBlocks } = require('../src/collection/notion.cjs');
 const { normalizeDocument, preferences } = require('../src/collection/model.cjs');
+const blockText = block => block?.[block.type]?.rich_text?.map(span => span.text.content).join('');
+
+test('a target workspace reports its own API failure separately from a read-only connection', async () => {
+  const workspaceId = randomUUID(), otherId = randomUUID(), target = { workspaceId, id: randomUUID(), kind: 'page' };
+  const calls = [];
+  let unavailable = [
+    { workspace_id: otherId, error: 'Notion API 返回 HTTP 401。' },
+    { workspace_id: workspaceId, error: 'Notion API 连接失败，请检查网络后重试。' }
+  ];
+  let workspaces = [];
+  const notion = new CollectionNotion({ root: '/fixture', router: { prepare: async (_signal, id) => {
+    calls.push(id); return { workspaces, unavailable };
+  } } });
+  await assert.rejects(notion.verifyTarget(target), /Notion API 连接失败/);
+  await assert.rejects(notion.search(workspaceId), /Notion API 连接失败/);
+  unavailable = [];
+  workspaces = [{ id: workspaceId, cfg: { readOnly: true } }];
+  await assert.rejects(notion.verifyTarget(target), /设为只读/);
+  assert.deepEqual(calls, [workspaceId, workspaceId, workspaceId]);
+});
 
 async function sourceCorrectionFixture() {
   const store = new Map(), order = [], calls = []; let pages = 0, failTrash = 0;
@@ -181,17 +201,31 @@ test('new video pages start with video, put expandable instructions first and en
   const plan = renderDocument(doc, doc.nodes, { [video.id]: { uploads: [{ id: randomUUID(), uploaded: true }] } },
     { [video.id]: { transcript: { text: '原始逐字稿' }, vision: { text: '原始字幕', ocrText: '原始字幕' } } }, [], extraction, 'result-first');
   assert.equal(plan.blocks[0].type, 'video');
-  const toggles = plan.blocks.filter(block => block.type === 'toggle' && !block.toggle.rich_text[0].text.content.startsWith('识别附录'));
+  const toggles = plan.blocks.filter(block => block.type === 'toggle' && /^步骤/.test(blockText(block)));
   assert.deepEqual(toggles.map(block => block.toggle.children.length), [79, 11, 1]);
   assert.match(toggles[0].toggle.rich_text[0].text.content, /步骤 1｜创建项目/);
   assert.ok(plan.blocks.indexOf(toggles.at(-1)) < plan.slots[intro.id].start);
-  assert.equal(plan.blocks.at(-1).paragraph.rich_text[0].text.content, '原始逐字稿');
+  const transcript = plan.blocks.at(-1);
+  assert.equal(transcript.type, 'toggle');
+  assert.equal(blockText(transcript), '语音逐字稿');
+  assert.equal(blockText(transcript.toggle.children.at(-1)), '原始逐字稿');
   const appendix = plan.blocks.find(block => block.toggle?.rich_text[0]?.text.content === '识别附录');
   assert.ok(appendix);
   assert.equal(plan.blocks.filter(block => block.paragraph?.rich_text[0]?.text.content === '原始字幕').length, 0);
   assert.equal(appendix.toggle.children.filter(block => block.paragraph?.rich_text[0]?.text.content === '原始字幕').length, 1);
   assert.ok(appendix.toggle.children.some(block => block.heading_2?.rich_text[0]?.text.content === '关键帧文字'));
   assert.ok(batches(plan.blocks).every(group => group.reduce((total, block) => total + 1 + (block.toggle?.children.length || 0), 0) <= 80));
+});
+test('original-order pages preserve every line and note in bounded transcript toggles', () => {
+  const doc = normalizeDocument({ url: 'https://example.com/a', nodes: [{ kind: 'audio', url: 'https://example.com/a.wav' }] });
+  const [audio] = doc.nodes;
+  const text = '完整逐字稿\n'.repeat(65000), note = '语音资料备注';
+  const plan = renderDocument(doc, doc.nodes, {}, { [audio.id]: { transcript: { text, note } } });
+  const toggles = plan.blocks.filter(block => block.type === 'toggle');
+  assert.ok(toggles.length > 1);
+  assert.equal(blockText(toggles[0]), '语音逐字稿');
+  assert.equal(toggles.flatMap(block => block.toggle.children).map(blockText).join(''), text + note);
+  assert.ok(batches(plan.blocks).every(group => Buffer.byteLength(JSON.stringify(group)) <= 350000));
 });
 test('large recognition appendices stay inside bounded toggles without dropping recognition text', () => {
   const doc = normalizeDocument({ url: 'https://example.com/gallery', nodes: Array.from({ length: 45 }, (_, i) => ({ kind: 'image', url: `https://example.com/${i}.jpg` })) });
@@ -266,10 +300,39 @@ test('a late summary and vision result are inserted above the original transcrip
   await client.write(job, doc.nodes, () => {});
   assert.equal(inserted.length, 2);
   assert.equal(order[0].type, 'video');
-  assert.equal(order.filter(block => block.type === 'toggle').length, 3);
+  assert.equal(order.filter(block => block.type === 'toggle').length, 4);
   const appendix = order.find(block => block.toggle?.rich_text[0]?.text.content === '识别附录（补全）');
   assert.ok(appendix.toggle.children.some(block => block.paragraph?.rich_text[0]?.text.content === '画面细节'));
   const intro = order.findIndex(block => block.paragraph?.rich_text[0].text.content === '原始简介');
   assert.ok(order.findIndex(block => block.type === 'toggle') < intro);
-  assert.equal(order.at(-1).paragraph.rich_text[0].text.content, '原始逐字稿');
+  assert.equal(blockText(order.at(-1)), '语音逐字稿');
+  assert.equal(blockText(order.at(-1).toggle.children.at(-1)), '原始逐字稿');
+});
+
+test('a transcript completed after page creation is folded in either layout and is only appended once', async () => {
+  for (const layout of [undefined, 'result-first']) {
+    const pageId = randomUUID(), order = [];
+    const session = { execute: async (name, args) => {
+      if (name === 'read_block_children') return { results: order, next_cursor: null };
+      assert.equal(name, 'append_blocks');
+      const blocks = args.blocks.map(block => ({ ...block, id: randomUUID() }));
+      order.push(...blocks);
+      return { verified: true, created_block_ids: blocks.map(block => block.id) };
+    } };
+    const client = new CollectionNotion({ root: '/fixture' });
+    client.connect = async () => ({ session }); client.createPage = async () => {};
+    const doc = normalizeDocument({ url: 'https://example.com/a', nodes: [{ kind: 'audio', url: 'https://example.com/a.wav' }] });
+    const [audio] = doc.nodes;
+    const job = { id: randomUUID(), layout, document: doc, options: preferences(), page: { id: pageId },
+      resources: { [audio.id]: { uploads: [{ id: randomUUID(), uploaded: true }] } }, analyses: {}, warnings: [] };
+    await client.write(job, doc.nodes, () => {});
+    job.analyses[audio.id] = { transcript: { text: '后来补齐的语音', note: '留存备注' } };
+    await client.write(job, doc.nodes, () => {});
+    await client.write(job, doc.nodes, () => {});
+    const toggles = order.filter(block => block.type === 'toggle' && /^语音逐字稿/.test(blockText(block)));
+    assert.equal(toggles.length, 1);
+    assert.ok(toggles[0].toggle.children.map(blockText).includes('后来补齐的语音'));
+    assert.ok(toggles[0].toggle.children.map(blockText).includes('留存备注'));
+    assert.ok(!order.some(block => blockText(block) === '后来补齐的语音'));
+  }
 });

@@ -61,7 +61,16 @@ class GpuOperatorClient {
     const operator = this.load();
     outputDirectory ||= this.outputDirectoryFor(source, { profile, language });
     if (!path.isAbsolute(outputDirectory)) throw Error('转写记录目录须为绝对路径。');
-    const result = await operator.transcribeFile({ source, outputDirectory, language, profile, allowExperimental, signal, onProgress });
+    const options = { source, outputDirectory, language, profile, allowExperimental, signal, onProgress };
+    let result;
+    try { result = await operator.transcribeFile(options); }
+    catch (error) {
+      signal?.throwIfAborted();
+      if (!['SPEECH_MODEL_LOAD_TIMEOUT', 'SPEECH_GPU_CONTEXT_FAILED'].includes(error?.code)) throw error;
+      onProgress({ stage: 'retrying' });
+      signal?.throwIfAborted();
+      result = await operator.transcribeFile(options);
+    }
     signal?.throwIfAborted();
     if (!result?.complete || result.device !== 'cuda' || typeof result.text !== 'string') throw Error('项目内置 GPU 算子未完成整份音轨转写；AI 总结已暂停。');
     const issue = transcriptQualityIssue(result.text);

@@ -207,6 +207,7 @@ class CollectionMedia {
         if (event.stage === 'waiting-gpu') progress('独立 GPU 转写正在等待其他 GPU 任务释放资源…');
         else if (event.stage === 'transcribing') progress(`正在生成逐字稿（独立 NVIDIA GPU）：${Math.floor((event.seconds || 0) / 60)} / ${Math.ceil((event.totalSeconds || asset.duration || 0) / 60)} 分钟`);
         else if (event.stage === 'preparing') progress('正在准备独立 GPU 转写音轨…');
+        else if (event.stage === 'retrying') progress('正在重启 NVIDIA GPU 转写进程，继续未完成的音频段…');
       } });
     signal?.throwIfAborted();
     if (!result?.complete || result.device !== 'cuda' || typeof result.text !== 'string') throw Error('独立 GPU 算子未完成整份音轨转写；AI 总结已暂停。');

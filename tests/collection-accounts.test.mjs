@@ -16,18 +16,19 @@ function inspect(site, { url, title = '', selectors = {}, state, response, fetch
   };
   return vm.runInNewContext('(' + inspectAccount.toString() + ')(' + JSON.stringify(site) + ')', context);
 }
-const element = ({ href, text = '', style = {}, hidden = false, rect = {}, children = [], parent } = {}) => ({
+const element = ({ href, testId, text = '', style = {}, hidden = false, rect = {}, children = {}, parent } = {}) => ({
   innerText: text, style, parentElement: parent, closest: () => hidden ? {} : null,
   getClientRects: () => [{ width: 32, height: 32, top: 0, left: 0, bottom: 32, right: 32, ...rect }],
-  getAttribute: name => name === 'href' ? href : null, querySelectorAll: selector => selector === 'img' ? children : []
+  getAttribute: name => ({ href, 'data-testid': testId })[name] ?? null, querySelectorAll: selector => children[selector] || []
 });
 const visible = element();
 const xAccount = '[data-testid="SideNav_AccountSwitcher_Button"]', xProfile = 'a[data-testid="AppTabBar_Profile_Link"]';
+const xAvatar = '[data-testid^="UserAvatar-Container-"]';
 const xLogin = 'a[data-testid="loginButton"], a[href="/i/flow/login"], a[href="/login"], [data-testid="LoginForm_Login_Button"]';
 const ttAvatar = '[data-e2e="profile-icon"] a[href^="/@"]', ttProfile = 'a[data-e2e="nav-profile"][href^="/@"]';
 const ttLogin = '[data-e2e="top-login-button"], [data-e2e="nav-login-button"], button[data-e2e="login-button"]';
 const signedX = () => ({ [xAccount]: [element({ text: 'Synthetic User\n@current_person' })], [xProfile]: [element({ href: '/current_person' })] });
-const signedTikTok = () => ({ [ttAvatar]: [element({ href: '/@current.person', children: [visible] })], [ttProfile]: [element({ href: '/@current.person' })] });
+const signedTikTok = () => ({ [ttAvatar]: [element({ href: '/@current.person', children: { img: [visible] } })], [ttProfile]: [element({ href: '/@current.person' })] });
 
 test('Douyin recognizes its own server-provided logged-in account state even when profile links are hidden', async () => {
   const verdict = await inspect('douyin', { renderData: { app: { user: { isLogin: true, info: { uid: 'synthetic-current-user' } } } } });
@@ -116,9 +117,30 @@ test('TikTok and X need matching current account controls, rather than a generic
   assert.equal((await inspect('x', { selectors: { [xAccount]: [element({ text: '@undefined' })], [xProfile]: [element({ href: '/undefined' })] } })).state, 'unknown');
   assert.equal((await inspect('x', { selectors: { [xAccount]: [element({ text: '@null' })], [xProfile]: [element()] } })).state, 'unknown');
   assert.equal((await inspect('tiktok', { selectors: { [ttProfile]: [element({ href: '/@creator' })] } })).state, 'unknown');
-  assert.equal((await inspect('tiktok', { selectors: { ...signedTikTok(), [ttAvatar]: [element({ href: '/@undefined', children: [visible] })], [ttProfile]: [element({ href: '/@undefined' })] } })).state, 'unknown');
+  assert.equal((await inspect('tiktok', { selectors: { ...signedTikTok(), [ttAvatar]: [element({ href: '/@undefined', children: { img: [visible] } })], [ttProfile]: [element({ href: '/@undefined' })] } })).state, 'unknown');
   assert.equal((await inspect('x', { selectors: { ...signedX(), [xProfile]: [element({ href: 'https://evil.example/current_person' })] } })).state, 'unknown');
   assert.equal(JSON.stringify(await inspect('x', { selectors: signedX() })).includes('current_person'), false);
+});
+test('X confirms an avatar-only account switcher when its visible avatar matches the current profile', async () => {
+  const avatar = element({ testId: 'UserAvatar-Container-Current_Person' });
+  const account = (text = '', icon = avatar) => element({ text, children: { [xAvatar]: [icon] } });
+  const selectors = { [xAccount]: [account()], [xProfile]: [element({ href: '/current_person' })] };
+  const verdict = await inspect('x', { selectors });
+  assert.equal(verdict.state, 'valid');
+  assert.doesNotMatch(JSON.stringify(verdict), /current_person/i);
+
+  const withAccount = changed => ({ ...selectors, [xAccount]: [changed] });
+  for (const unconfirmed of [
+    withAccount(account('@other_user')),
+    withAccount(account('', element({ testId: 'UserAvatar-Container-Current_Person', hidden: true }))),
+    { ...selectors, [xProfile]: [element({ href: '/other_user' })] },
+    { ...selectors, [xProfile]: [element({ href: 'https://other.example/current_person' })] },
+    { [xAccount]: [account('', element({ testId: 'UserAvatar-Container-undefined' }))], [xProfile]: [element({ href: '/undefined' })] },
+    { [xAccount]: [visible], [xProfile]: selectors[xProfile], [xAvatar]: [avatar] },
+  ]) {
+    assert.equal((await inspect('x', { selectors: unconfirmed })).state, 'unknown');
+  }
+  assert.equal((await inspect('x', { selectors: { ...selectors, [xLogin]: [visible] } })).state, 'missing');
 });
 test('transparent, hidden-parent and offscreen account controls cannot confirm a login', async () => {
   for (const options of [{ style: { opacity: '0' } }, { parent: element({ style: { display: 'none' } }) }, { rect: { left: -120, right: -88 } }, { hidden: true }]) {

@@ -25,7 +25,8 @@ class SpeechProvider {
     this.runtime = this.platform.normalizeRuntime(this.runtime || await this.discoverImpl(this.root, { platform: this.platform }));
     return this.runtime;
   }
-  async start() {
+  async start(signal) {
+    signal?.throwIfAborted();
     clearTimeout(this.idle);
     if (this.initializing) return this.initializing;
     if (this.child && this.checked) return;
@@ -33,6 +34,7 @@ class SpeechProvider {
     this.initializing = (async () => {
       await this.terminating;
       const runtime = await this.configure();
+      signal?.throwIfAborted();
       if (epoch !== this.epoch) throw Error('离线转写已停止。');
       this.stderrTail = '';
       const child = this.spawnImpl(runtime.pythonExecutable, [worker, '--root', this.root], {
@@ -51,12 +53,15 @@ class SpeechProvider {
           try { message = JSON.parse(line); } catch { this.fail(child, Error('离线转写进程返回无效结果。')); return; }
           const job = this.current;
           if (job?.child !== child || message.id !== job.id) continue;
-          message.ok ? job.finish(null, message.result) : job.finish(Error('本机离线转写失败，请在配置中重新检测。'));
+          if (message.ok) job.finish(null, message.result);
+          else if (message.error === 'SPEECH_GPU_CONTEXT_FAILED') {
+            job.finish(Object.assign(Error('本机 NVIDIA GPU 转写出现 CUDA 运行错误，请重试。'), { code: message.error }));
+          } else job.finish(Error('本机离线转写失败，请在配置中重新检测。'));
         }
       });
       const ended = (code, signal, spawnError) => { if (this.child === child) { this.child = null; this.checked = false; } if (this.current?.child === child) this.current.finish(this.exitError(code, signal, spawnError)); };
       child.on('error', error => ended(null, null, error)); child.on('exit', ended);
-      const configured = await this.exchange(child, 'configure', { protocolVersion: 1, runtime });
+      const configured = await this.exchange(child, 'configure', { protocolVersion: 1, runtime }, signal);
       if (configured?.protocolVersion !== 1 || ['provider', 'model', 'platform', 'architecture', 'device', 'computeType']
         .some(key => configured[key] !== this.platform.profile[key])) throw Error('本机语音进程版本或平台不匹配，请重新检测。');
       if (this.child !== child) throw Error('离线转写已停止。');
@@ -95,7 +100,12 @@ class SpeechProvider {
       let done = false;
       const finish = (error, result) => { if (done) return; done = true; clearTimeout(timer); signal?.removeEventListener('abort', abort); if (this.current?.id === id) this.current = null; error ? reject(error) : resolve(result); };
       const abort = () => this.fail(child, signal.reason || Error('离线转写已取消。'));
-      const timer = setTimeout(() => this.fail(child, Error('本机离线转写超时，请停止后重新开始。')), this.timeoutMs);
+      const timer = setTimeout(() => {
+        const error = type === 'configure' && this.platform.profile.device === 'cuda'
+          ? Object.assign(Error('本机 NVIDIA 语音模型加载超时，请重试。'), { code: 'SPEECH_MODEL_LOAD_TIMEOUT' })
+          : Error('本机离线转写超时，请停止后重新开始。');
+        this.fail(child, error);
+      }, this.timeoutMs);
       this.current = { id, child, finish }; signal?.addEventListener('abort', abort, { once: true });
       if (signal?.aborted) { abort(); return; }
       try { child.stdin.write(JSON.stringify({ id, type, ...fields }) + '\n', 'utf8', error => { if (error) this.fail(child, Error('无法向离线转写进程发送音频。')); }); }
@@ -107,7 +117,7 @@ class SpeechProvider {
     const run = async () => {
       signal?.throwIfAborted(); if (epoch !== this.epoch) throw Error('离线转写已停止。');
       try {
-        await this.start(); signal?.throwIfAborted();
+        await this.start(signal); signal?.throwIfAborted();
         const result = await this.exchange(this.child, type, fields, signal);
         if (type === 'transcribe' || type === 'transcribe_recording') {
           await onResult?.(result);

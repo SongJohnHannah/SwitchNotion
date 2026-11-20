@@ -124,5 +124,9 @@ while True:
         with (root / 'speech/worker-failures.jsonl').open('a', encoding='utf-8') as log:
             log.write(encoded_failure + '\n')
         print(encoded_failure, file=sys.stderr, flush=True)
-        send({'id': message.get('id') if isinstance(message, dict) else None,
-              'ok': False, 'error': 'LOCAL_ASR_FAILED'})
+        gpu_context_failed = (failure['kind'] == 'transcribe' and configured and configured.get('device') == 'cuda'
+                              and isinstance(error, RuntimeError)
+                              and ('CUBLAS_STATUS_INTERNAL_ERROR' in failure['detail']
+                                   or 'cudaErrorIllegalAddress' in failure['detail']))
+        send({'id': message.get('id') if isinstance(message, dict) else None, 'ok': False,
+              'error': 'SPEECH_GPU_CONTEXT_FAILED' if gpu_context_failed else 'LOCAL_ASR_FAILED'})

@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url), { GpuOperatorClient, defaultOperatorDirectory } = require('../src/speech/operator-client.cjs');
+const { SpeechProvider } = require('../src/speech/windows-operator/module/src/speech/provider.cjs');
+const { createSpeechPlatform } = require('../src/speech/windows-operator/module/src/speech/platform.cjs');
 
 function fixture(t) {
   const parent = fs.realpathSync(os.tmpdir()), root = fs.mkdtempSync(path.join(parent, 'operator-client-'));
@@ -93,6 +96,60 @@ test('GPU errors and cancellation are propagated, and invalid results never trig
     const invalid = new GpuOperatorClient({ root, directory: bundle, loader: () => ({ transcribeFile: async () => result }) });
     await assert.rejects(invalid.transcribeFile({ source }), /AI 总结已暂停/);
   }
+});
+
+test('the bundled GPU worker reports a model load timeout and supports cancellation during startup', async t => {
+  const { root } = fixture(t), controller = new AbortController();
+  const platform = createSpeechPlatform({ id: 'win32', arch: 'x64', model: 'large-v3-turbo' });
+  const runtime = { ...platform.profile, pythonExecutable: 'C:\\speech\\python.exe', modelDirectory: 'C:\\speech\\model' };
+  const killed = [];
+  const worker = new SpeechProvider({ root, platform, runtime, timeoutMs: 30, spawnImpl: () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter(); child.stdout.setEncoding = () => {};
+    child.stdin = { write: () => {} };
+    child.kill = () => killed.push(child);
+    return child;
+  } });
+  t.after(() => worker.close());
+  await assert.rejects(worker.probe(), { code: 'SPEECH_MODEL_LOAD_TIMEOUT' });
+  assert.equal(killed.length, 1);
+
+  worker.timeoutMs = 1000;
+  const waiting = worker.probe({ signal: controller.signal });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(worker.status().busy, true);
+  controller.abort();
+  await assert.rejects(waiting, { name: 'AbortError' });
+  assert.equal(killed.length, 2);
+});
+
+test('a model load timeout or failed CUDA context retries once in the same operator checkpoint directory', async t => {
+  const { root, source, bundle } = fixture(t);
+  for (const code of ['SPEECH_MODEL_LOAD_TIMEOUT', 'SPEECH_GPU_CONTEXT_FAILED']) {
+    const calls = [], progress = [], failure = Object.assign(Error(code), { code });
+    const client = new GpuOperatorClient({ root, directory: bundle, loader: () => ({ transcribeFile: async options => {
+      calls.push(options);
+      if (calls.length === 1) throw failure;
+      return { text: 'Resumed audio', complete: true, device: 'cuda' };
+    } }) });
+    const result = await client.transcribeFile({ source, language: 'zh', onProgress: event => progress.push(event.stage) });
+    assert.equal(result.text, 'Resumed audio');
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[1], calls[0]);
+    assert.equal(calls[1].outputDirectory, result.outputDirectory);
+    assert.deepEqual(progress, ['retrying']);
+  }
+});
+
+test('a repeatable CUDA failure needs a fresh request and a cancelled retry stops before restarting', async t => {
+  const { root, source, bundle } = fixture(t), controller = new AbortController();
+  const failure = Object.assign(Error('CUDA context failure'), { code: 'SPEECH_GPU_CONTEXT_FAILED' });
+  let calls = 0;
+  const client = new GpuOperatorClient({ root, directory: bundle, loader: () => ({ transcribeFile: async () => { calls++; throw failure; } }) });
+  await assert.rejects(client.transcribeFile({ source }), error => error === failure);
+  assert.equal(calls, 2);
+  await assert.rejects(client.transcribeFile({ source, signal: controller.signal, onProgress: () => controller.abort() }), { name: 'AbortError' });
+  assert.equal(calls, 3);
 });
 
 test('an abort received as an operator finishes cannot turn into successful collection content', async t => {

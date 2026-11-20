@@ -1,11 +1,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { NotionRouter } = require('../notion-routing.cjs');
+const { uuid } = require('../native-context.cjs');
 const { hash, destination, mediaKinds, recognitionResult, reportDetail, atomicJson } = require('./model.cjs');
 const { verificationTitle } = require('./report-markdown.cjs');
 const { matchesBlockContent } = require('../notion-blocks.cjs');
 const { canonical } = require('../notion-mutations.cjs');
 const analysisKeys = ['transcript', 'ocr', 'vision'];
+const sameAppend = (record, blocks, after) => (record.intended.after || undefined) === (after || undefined) &&
+  JSON.stringify(canonical(record.request?.body?.children)) === JSON.stringify(canonical(blocks));
 function analysisItemHashes(analyses) {
   return Object.fromEntries(Object.entries(analyses).flatMap(([id, item]) => analysisKeys.flatMap(key => {
     const result = recognitionResult(item, key);
@@ -124,7 +127,7 @@ function renderDocument(document, nodes, resources, analyses = {}, warnings = []
       for (const [key, title] of [['ocr', '关键帧文字'], ['vision', '画面识别'], ['transcript', '逐字稿']]) {
         const target = key === 'transcript' ? transcripts : recognition;
         const items = nodes.filter(node => recognitionResult(analyses[node.id], key));
-        if (items.length) target.push(...textBlocks({ kind: 'heading', text: title, level: 2 }));
+        if (items.length && key !== 'transcript') target.push(...textBlocks({ kind: 'heading', text: title, level: 2 }));
         for (const node of items) {
           const { text, note } = recognitionResult(analyses[node.id], key);
           target.push(...textBlocks({ kind: 'heading', text: `素材 ${nodes.indexOf(node) + 1}${node.caption ? ' · ' + node.caption : ''}`, level: 3 }),
@@ -132,7 +135,8 @@ function renderDocument(document, nodes, resources, analyses = {}, warnings = []
           if (text && note) target.push(paragraph(note));
         }
       }
-      result.push(...collapsedBlocks('识别附录', recognition), ...transcripts);
+      result.push(...collapsedBlocks('识别附录', recognition));
+      if (transcripts.length) result.push(...collapsedBlocks('语音逐字稿', transcripts));
     }
     return { blocks: result, positions, slots, anchors };
   }
@@ -143,8 +147,10 @@ function renderDocument(document, nodes, resources, analyses = {}, warnings = []
     for (const [key, title] of [['transcript', '语音逐字稿'], ['ocr', '关键帧文字（mediaocr）'], ['vision', item.vision?.engine === 'local' ? '本地千问画面分析' : 'DeepSeek 画面分析']]) {
       const evidence = recognitionResult(item, key);
       if (!evidence) continue;
-      result.push(...textBlocks({ kind: 'heading', text: title, level: 3 }), ...textBlocks({ kind: 'paragraph', text: evidence.text || evidence.note || '没有识别结果。' }));
-      if (evidence.text && evidence.note) result.push(paragraph(evidence.note));
+      const content = textBlocks({ kind: 'paragraph', text: evidence.text || evidence.note || '没有识别结果。' });
+      if (evidence.text && evidence.note) content.push(paragraph(evidence.note));
+      if (key === 'transcript') result.push(...collapsedBlocks(title, content));
+      else result.push(...textBlocks({ kind: 'heading', text: title, level: 3 }), ...content);
     }
     for (const error of item.errors || []) result.push(paragraph('识别待完成：' + error));
   }
@@ -189,15 +195,25 @@ const mimeFor = file => ({ '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 
 class CollectionNotion {
   constructor({ root, router = new NotionRouter({ root }), fetchImpl = fetch } = {}) { Object.assign(this, { root, router, fetchImpl }); }
   async workspaces(signal) { const { workspaces, unavailable } = await this.router.prepare(signal); return { workspaces: workspaces.map(w => ({ id: w.id, name: w.name, readOnly: w.cfg.readOnly })), unavailable }; }
+  async workspace(workspaceId, signal) {
+    const id = uuid(workspaceId);
+    if (!id) throw Error('请选择有效的 Notion 工作区。');
+    const { workspaces, unavailable = [] } = await this.router.prepare(signal, id);
+    const workspace = workspaces.find(w => w.id === id);
+    if (workspace) return workspace;
+    const failure = unavailable.find(item => uuid(item.workspace_id) === id) || unavailable.find(item => !item.workspace_id);
+    throw Error(failure?.error || '目标工作区未连接，请在 Switch Notion 配置中检查。');
+  }
   async connect(target, signal, scope = 'collection-search') {
-    const picked = destination(target), { workspaces } = await this.router.prepare(signal), workspace = workspaces.find(w => w.id === picked.workspaceId);
-    if (!workspace || workspace.cfg.readOnly) throw Error('目标工作区未连接或连接为只读，请在 Switch Notion 配置中检查。');
+    const picked = destination(target);
+    if (!picked) throw Error('请选择 Notion 保存位置。');
+    const workspace = await this.workspace(picked.workspaceId, signal);
+    if (workspace.cfg.readOnly) throw Error('目标工作区的连接已设为只读，请在 Switch Notion 配置中检查。');
     return { ...workspace, session: workspace.client.open({ operationScope: scope, signal, config: workspace.cfg }), target: picked, signal };
   }
   async search(workspaceId, query = '', cursors = {}, signal) {
     if (typeof query !== 'string' || query.length > 200) throw Error('搜索词过长。');
-    const { workspaces } = await this.router.prepare(signal), w = workspaces.find(w => w.id === workspaceId);
-    if (!w) throw Error('请先选择已连接的 Notion 工作区。');
+    const w = await this.workspace(workspaceId, signal);
     const session = w.client.open({ operationScope: 'collection-destination-search', signal, config: w.cfg });
     if (/^https?:\/\/(?:(?:www|app)\.)?notion\.(?:so|com|site)\//i.test(query) || /^[a-f\d-]{32,36}$/i.test(query)) {
       const { pageId } = require('../notion-tools.cjs'); const id = pageId(query);
@@ -419,16 +435,19 @@ class CollectionNotion {
     if (job.writeFingerprint !== fingerprint) return this.repair(job, nodes, plan, save, signal);
     return job.page;
   }
-  async appendRecoverably(c, job, blocks, after) {
+  appendRecords(job) {
     const directory = this.root && path.join(this.root, 'write-journal');
-    const records = directory && fs.existsSync(directory) ? fs.readdirSync(directory).filter(name => /^content-[a-f\d]{64}\.json$/.test(name)).flatMap(name => {
+    return directory && fs.existsSync(directory) ? fs.readdirSync(directory).filter(name => /^content-[a-f\d]{64}\.json$/.test(name)).flatMap(name => {
       try {
         const file = path.join(directory, name), record = JSON.parse(fs.readFileSync(file, 'utf8'));
         return record.workspace_id === job.options.destination.workspaceId && record.operation_scope === 'collection:' + job.id && record.name === 'append_blocks' && record.intended?.block_id === job.page.id &&
           !(record.status === 'rejected' && ['rejected', 'not_submitted'].includes(record.error?.write_outcome)) ? [{ file, record }] : [];
       } catch { return []; }
     }) : [];
-    const matching = records.filter(({ record }) => (record.intended.after || undefined) === (after || undefined) && JSON.stringify(canonical(record.request?.body?.children)) === JSON.stringify(canonical(blocks)));
+  }
+  async appendRecoverably(c, job, blocks, after) {
+    const records = this.appendRecords(job);
+    const matching = records.filter(({ record }) => sameAppend(record, blocks, after));
     if (!matching.length) {
       if (records.some(({ record }) => record.status !== 'verified')) throw Error('此前补全写入结果尚不确定，未追加不同版本。');
       return c.session.execute('append_blocks', { block_id: job.page.id, blocks, ...(after ? { after } : {}) });
@@ -604,19 +623,39 @@ class CollectionNotion {
           const evidence = recognitionResult(item, key);
           if (!(evidence?.text || evidence?.note) || job.savedAnalysisItems?.[node.id + ':' + key] === hash(JSON.stringify(evidence))) continue;
           const target = analysisAnchor && key === 'transcript' ? transcripts : supplementary;
-          target.push(...textBlocks({ kind: 'heading', level: 3, text: `素材 ${nodes.indexOf(node) + 1} · ${title}` }), ...textBlocks({ kind: 'paragraph', text: evidence.text || evidence.note }));
-          if (key === 'ocr' && evidence.text && evidence.note) target.push(paragraph(evidence.note));
+          target.push({ key, title, evidence, number: nodes.indexOf(node) + 1 });
         }
       }
       job.analysisBatches ||= {};
       job.analysisFormats ||= {};
-      for (const [key, blocks, anchor] of [[analysisFingerprint, supplementary, analysisAnchor], [analysisFingerprint + ':transcript', transcripts]]) {
-        if (!blocks.length) continue;
+      for (const [key, items, anchor] of [[analysisFingerprint, supplementary, analysisAnchor], [analysisFingerprint + ':transcript', transcripts]]) {
+        if (!items.length) continue;
         const title = analysisAnchor ? '补全的识别结果（此前未完成项以本次记录为准）' : '补全的逐字稿与识别结果（此前未完成项以本次记录为准）';
         const done = job.analysisBatches[key] ||= [];
-        const collapsed = job.analysisFormats[key] ??= !!anchor && !done.some(Boolean);
-        const content = [paragraph(title), ...blocks];
-        const groups = batches(collapsed ? collapsedBlocks('识别附录（补全）', content) : content);
+        const makeGroups = format => {
+          const foldTranscript = format === 'transcript-toggle' || format === 'inline-transcripts';
+          const content = [paragraph(title), ...items.flatMap(({ key, title, evidence, number }) => {
+            const body = textBlocks({ kind: 'paragraph', text: evidence.text || evidence.note });
+            if ((key === 'ocr' || foldTranscript && key === 'transcript') && evidence.text && evidence.note) body.push(paragraph(evidence.note));
+            if (format === 'inline-transcripts' && key === 'transcript') return collapsedBlocks(`语音逐字稿 · 素材 ${number}`, body);
+            return [...textBlocks({ kind: 'heading', level: 3, text: `素材 ${number} · ${title}` }), ...body];
+          })];
+          if (format === 'transcript-toggle') return batches(collapsedBlocks('语音逐字稿（补全）', content));
+          return batches(format === true ? collapsedBlocks('识别附录（补全）', content) : content);
+        };
+        if (job.analysisFormats[key] == null) {
+          const legacy = !!anchor && !done.some(Boolean);
+          let format = legacy;
+          if (!done.some(Boolean) && !anchor && items.some(item => item.key === 'transcript')) {
+            const [previous] = makeGroups(legacy);
+            if (!this.appendRecords(job).some(({ record }) => sameAppend(record, previous, anchor))) {
+              format = items === transcripts ? 'transcript-toggle' : 'inline-transcripts';
+            }
+          }
+          job.analysisFormats[key] = format;
+          save();
+        }
+        const groups = makeGroups(job.analysisFormats[key]);
         for (let i = 0; i < groups.length; i++) if (!done[i]) {
           const after = anchor && (done[i - 1]?.at(-1) || anchor);
           const response = await this.appendRecoverably(c, job, groups[i], after);

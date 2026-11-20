@@ -13,10 +13,22 @@
       "sha256": "3bf03cd9dba92aff8dfcf0cb20ce989929752e99f4d03e173002f25080fdeece"
     },
     {
+      "file": "module/src/speech/gpu-file.cjs",
+      "reason": "accept complete audio with no recognized speech",
+      "originalSha256": "a4aefa9e36c12714b69158aa4c3c0463a87f88a5e3ddc000a0bd516e7e094cbf",
+      "sha256": "d8e94fc531a1fddfda0feb7569051f46f5e02cfe98e46128688da51870a14cee"
+    },
+    {
+      "file": "module/src/speech/provider.cjs",
+      "reason": "report the GPU model load timeout and CUDA context failure; support startup cancellation",
+      "originalSha256": "b7cae66dc9906c55eb2d09d7024f7a9391b5591a11ea82246c8c0537b56439f1",
+      "sha256": "bcb006ffbcf2ba4f8e1a8886f6dc8ca934fe852be391ad64f2a199e8f0363b22"
+    },
+    {
       "file": "module/src/speech/worker.py",
-      "reason": "resolve imports from this worker directory",
+      "reason": "resolve imports from this worker directory and report recoverable CUDA context failures",
       "originalSha256": "befbe6dd727303bb82618c9f323c7e48344d281cf6798b8ade847f2711974dd2",
-      "sha256": "5f2b06d6738e2d50ccac4613defd18e088e6d1fdcd8d53c4507cb523f8db8b97"
+      "sha256": "3c1d41d2134c7453de096727375db26ad0b24a4853dc803aa344881880b2fcef"
     },
     {
       "root": "runtime",
@@ -51,7 +63,7 @@
   ],
   "defaultModuleManifest": {
     "originalSha256": "ac1a341ace05cf1791a02636bb062d47874969f1bf0487c46ea8423af97b051d",
-    "sha256": "e54c0b405033103c3a76bebe01dbed0153701c029e99bdc609ab9aa2daee0ff4"
+    "sha256": "af1146fbde75e765c9b36ae52687324d9bd098c507454cbfcbc2615f69beecd8"
   },
   "sourceMachineSha256": "5fd3d9fbf131ffc50f1f1fda4d90f8bcda4e92caadd3513a82132aee7e1549ef",
   "containsUserOutputs": false,
