@@ -1,4 +1,6 @@
 const { likelyTarget, knownAsset, scriptAsset } = require('./automatic.cjs');
+const { adaptThinkingClient, isThinkingCandidate } = require('./thinking-menu.cjs');
+const { adaptSelectionChatClient, isSelectionChatCandidate, storeAsset, popupAsset } = require('./selection-chat.cjs');
 const legacyKinds = { '95271': 'availability', '96975': 'models', '32453': 'provider', '58104': 'provider',
   '17521': 'audio', '89269': 'recording', '17048': 'connection', '57590': 'autofill', '51103': 'attachments' };
 const moduleKinds = { '811656': 'availability', '459724': 'models', '60217': 'provider', '328616': 'audio',
@@ -14,9 +16,11 @@ function scriptKinds(source, asset) {
   return [...result];
 }
 const limit = 2 * 1024 * 1024;
+const isCompatScriptAsset = asset => scriptAsset.test(asset) || storeAsset.test(asset) || popupAsset.test(asset);
 async function candidateScript(response, asset) {
-  if (!scriptAsset.test(asset) || !response.ok) return null;
-  if (Number(response.headers.get('content-length')) > limit) {
+  if (!isCompatScriptAsset(asset) || !response.ok) return null;
+  const assetLimit = storeAsset.test(asset) ? 6 * 1024 * 1024 : limit;
+  if (Number(response.headers.get('content-length')) > assetLimit) {
     if (knownAsset.test(asset)) throw Object.assign(Error('Native script exceeds limit'), kindForAsset(asset));
     return null;
   }
@@ -26,7 +30,7 @@ async function candidateScript(response, asset) {
     for (;;) {
       const part = await reader.read(); if (part.done) break;
       length += part.value.length;
-      if (length > limit) {
+      if (length > assetLimit) {
         void reader.cancel().catch(() => {});
         if (knownAsset.test(asset)) throw Object.assign(Error('Native script exceeds limit'), kindForAsset(asset));
         return null;
@@ -35,7 +39,7 @@ async function candidateScript(response, asset) {
     }
   } finally { reader.releaseLock(); }
   const source = Buffer.concat(chunks, length).toString('utf8');
-  return likelyTarget(source, asset) ? source : null;
+  return likelyTarget(source, asset) || isThinkingCandidate(source) || isSelectionChatCandidate(source) ? source : null;
 }
 async function adaptResponse(response, asset, options = {}) {
   const source = await candidateScript(response, asset); if (source === null) return null;
@@ -43,7 +47,11 @@ async function adaptResponse(response, asset, options = {}) {
   let patched;
   try {
     if (kinds.some(kind => ['audio', 'recording', 'connection'].includes(kind))) await options.prepare?.();
-    patched = await require('../client-compat.cjs').adaptClientAsync(source, asset, { ...options, onAdaptation: record => records.push(record) });
+    const nativeAdapter = scriptAsset.test(asset) && source.length <= limit && likelyTarget(source, asset);
+    patched = nativeAdapter ? await require('../client-compat.cjs').adaptClientAsync(source, asset, { ...options, onAdaptation: record => records.push(record) }) : source;
+    if (isThinkingCandidate(source)) patched = adaptThinkingClient(patched);
+    if (isSelectionChatCandidate(source)) patched = adaptSelectionChatClient(patched);
+    if (!nativeAdapter && patched === source) return null;
   } catch (error) {
     error.notionSwitchKinds = kinds;
     if (!error.notionSwitchKind && kinds.length === 1) error.notionSwitchKind = kinds[0];

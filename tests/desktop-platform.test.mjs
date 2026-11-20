@@ -72,6 +72,14 @@ test('Notion launch bypasses the system proxy for Notion domains only while the 
   assert.equal(launched[1].some(arg => arg.startsWith('--host-resolver-rules=')), false, '系统代理开启时不固定 IP');
   assert.equal(launched[1].some(arg => arg.startsWith('--proxy-bypass-list=')), false);
   assert.equal(launched[2].env.HTTP_PROXY, 'http://127.0.0.1:2080', '系统代理开启时保留代理变量');
+  fs.writeFileSync(path.join(root, 'notion-accelerator.local.json'), JSON.stringify({ smartDirect: true, bypassVpn: true, autoIp: true, bestIp: '208.103.161.16' }));
+  launch({ proxyEnabled: true, smartDirect: true, smartRunId: '11111111-1111-4111-8111-111111111111' });
+  assert.deepEqual(launched[1], ['--enable-logging=stderr'], 'media mode must leave page DNS, proxy and QUIC alone');
+  assert.equal(launched[2].env.NOTION_SWITCH_SMART_DIRECT, '1');
+  assert.equal(launched[2].env.NOTION_SWITCH_SMART_RUN_ID, '11111111-1111-4111-8111-111111111111');
+  assert.equal(launched[2].env.NO_PROXY, undefined);
+  launch({ proxyEnabled: true });
+  assert.deepEqual(launched[1], ['--enable-logging=stderr'], 'starting without Caddy must not reactivate legacy routing');
 });
 
 test('macOS discovery uses app bundles without Windows commands or Windows archive hashes', t => {

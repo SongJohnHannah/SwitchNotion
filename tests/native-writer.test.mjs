@@ -7,6 +7,7 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { inlineDocumentRoute, id, USER, SPACE, THREAD } from './helpers/inline-document-route.mjs';
 const { NativeWriter } = createRequire(import.meta.url)('../src/native-writer.cjs');
+const { promptId } = createRequire(import.meta.url)('../src/native-instruction-selection.cjs');
 const PAGE = id(4), ANCHOR = id(5), PREVIOUS = id(6), NEXT = id(7), VIEW = id(90);
 
 function fixture(t, options = {}) {
@@ -19,17 +20,21 @@ function fixture(t, options = {}) {
   ]);
   const reads = [], generations = [], writes = [];
   const store = { userId: USER, spaceId: SPACE, async records(ids) {
+    await options.beforeRead?.('selection', ids);
     reads.push(...ids); return new Map(ids.filter(value => blocks.has(value)).map(value => [value, { role: options.role || 'editor', value: structuredClone(blocks.get(value)) }]));
   }, async api(endpoint, payload) {
-    if (endpoint === 'getRecordValues') return { results: payload.requests.map(request => request.table === 'user_root' && request.id === USER
+    if (endpoint === 'getRecordValues') {
+      await options.beforeRead?.(payload.requests[0].table, payload.requests.map(request => request.id));
+      return { results: payload.requests.map(request => request.table === 'user_root' && request.id === USER
       ? { role: 'editor', value: { id: USER, alive: true, space_view_pointers: [{ table: 'space_view', id: VIEW, spaceId: SPACE }] } }
       : request.table === 'space_view' && request.id === VIEW
-        ? { role: 'editor', value: { id: VIEW, space_id: SPACE, parent_table: 'user_root', parent_id: USER, alive: true, settings: { ai_prompts: {} } } }
+        ? { role: 'editor', value: { id: VIEW, space_id: SPACE, parent_table: 'user_root', parent_id: USER, alive: true, settings: { ai_prompts: { rich_text_skills: options.skillIds || [] } } } }
         : request.table === 'space' && request.id === SPACE
           ? { role: 'editor', value: { id: SPACE, alive: true, settings: {} } }
           : blocks.has(request.id) ? {
             role: options.role || 'editor', value: structuredClone(blocks.get(request.id))
           } : { role: 'none' }) };
+    }
     assert.equal(endpoint, 'saveTransactionsFanout'); writes.push(payload);
     if (!options.dropWrite && !(options.dropUndoWrite && writes.length > 1)) for (const { operations } of payload.transactions) for (const operation of operations) {
       const { pointer, path: keys, command, args } = operation;
@@ -46,7 +51,7 @@ function fixture(t, options = {}) {
     if (options.loseResponse || options.loseUndoResponse && writes.length > 1) throw Error('response lost');
     return {};
   } };
-  const provider = { config: () => ({ mode: 'deepseek' }), async* generate(args) {
+  const provider = { config: () => ({ mode: 'deepseek', ...options.providerConfig }), async* generate(args) {
     generations.push(args); assert.equal(args.tools, undefined);
     if (options.generate) return yield* options.generate(args, blocks);
     if (args.messages[0].content.includes('只返回 JSON')) {
@@ -96,6 +101,63 @@ test('native Continue reads nearby context, calls the model, saves at the cursor
   assert.deepEqual(await (await f.route.call('getThreadSpaceId', { threadId: THREAD })).json(), { spaceId: SPACE });
   assert.equal((await f.route.call('getThreadSpaceId', { threadId: THREAD }, id(90))).status, 403);
   assert.deepEqual(f.route.forwarded, []);
+});
+
+test('Writer overlaps independent Notion reads before generation and verifies edited skills before any write', async t => {
+  const skills = [id(20), id(21)], bodies = [id(30), id(31)];
+  let phase = 'prepare';
+  const pending = new Set(), overlaps = new Set(), pageReads = [];
+  const f = fixture(t, {
+    skillIds: skills,
+    async beforeRead(table, ids) {
+      const stage = table === 'block' && ids.length === 1 && bodies.includes(ids[0]) ? 'body-' + bodies.indexOf(ids[0]) : table;
+      const label = phase + ':' + stage;
+      for (const other of pending) overlaps.add([label, other].sort().join('/'));
+      pending.add(label);
+      if (phase === 'prepare' && table === 'block') pageReads.push(...ids.filter(id => skills.includes(id)));
+      await new Promise(setImmediate);
+      pending.delete(label);
+    },
+    async* generate({ messages }, blocks) {
+      const guidance = messages.find(message => message.notionSwitchGuidance).content;
+      assert.match(guidance, /合成技能正文 0.*合成技能正文 1/);
+      phase = 'verify';
+      blocks.get(bodies[1]).properties.title = [['生成期间修改了技能']];
+      yield '合成续写。';
+    }
+  });
+  for (const [index, skill] of skills.entries()) {
+    const body = bodies[index];
+    f.blocks.set(skill, { id: skill, space_id: SPACE, type: 'page', properties: { title: [['合成技能 ' + index]] }, content: [body] });
+    f.blocks.set(promptId(skill), { id: promptId(skill), space_id: SPACE, prompt_type: 'skill', parent_table: 'block', parent_id: skill });
+    f.blocks.set(body, { id: body, space_id: SPACE, type: 'text', parent_id: skill, properties: { title: [['合成技能正文 ' + index]] } });
+  }
+  const result = await f.run();
+  assert.equal(f.generations.length, 1);
+  assert.match(result.value.acknowledgment, /技能或其权限已改变/);
+  assert.equal(f.writes.length, 0);
+  assert.ok(overlaps.has('prepare:selection/prepare:user_root'));
+  assert.ok(overlaps.has('prepare:space/prepare:user_root'));
+  assert.ok(overlaps.has('prepare:block/prepare:prompt'));
+  assert.ok(overlaps.has('prepare:body-0/prepare:body-1'));
+  assert.ok(overlaps.has('verify:selection/verify:user_root'));
+  assert.deepEqual(pageReads, skills);
+});
+
+test('one-click presets and custom Writer requests use the latest shared profile settings', async t => {
+  const providerConfig = { thinking: 'disabled', reasoningEffort: 'high' };
+  const preset = fixture(t, { providerConfig });
+  assert.equal((await preset.run({ ...preset.input(), reasoningEffort: 'max' })).value.status, 'edited');
+  assert.equal(preset.generations[0].config.thinking, 'disabled');
+
+  Object.assign(providerConfig, { thinking: 'enabled', reasoningEffort: 'low' });
+  const custom = fixture(t, { providerConfig });
+  const request = custom.input();
+  delete request.prebuiltPromptType;
+  request.content[0].text = [['按会议纪要的格式补充这段文字。']];
+  assert.equal((await custom.run(request)).value.status, 'edited');
+  assert.equal(custom.generations[0].config.thinking, 'enabled');
+  assert.equal(custom.generations[0].config.reasoningEffort, 'low');
 });
 
 test('cursor indices use graphemes and preserve existing rich-text annotations and suffix', async t => {

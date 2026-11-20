@@ -24,6 +24,7 @@ async function createContext({ store, userId, spaceId, signal }) {
     const result = new Map();
     for (let at = 0; at < ids.length; at += 64) {
       const batch = ids.slice(at, at + 64), response = await store.api('getRecordValues', { requests: batch.map(id => ({ table, id, ...(main ? {} : { spaceId }) })) }, { signal, spaceId, main });
+      signal?.throwIfAborted();
       batch.forEach((id, index) => {
         const item = entry(response.results?.[index] || response.recordMap?.[table]?.[id]);
         if (item && uuid(item.value.id) !== id || table !== 'space_view' && item?.value.space_id && uuid(item.value.space_id) !== spaceId) throw Error('Notion 指令返回了其他工作区的记录。');
@@ -33,33 +34,39 @@ async function createContext({ store, userId, spaceId, signal }) {
     }
     return result;
   }
-  const root = (await read('user_root', [userId], true)).get(userId);
+  const [roots, workspaces] = await Promise.all([read('user_root', [userId], true), read('space', [spaceId])]);
+  const root = roots.get(userId), workspace = workspaces.get(spaceId);
   if (!root) throw Error('Notion 指令无法读取当前账号的个人设置。');
   const pointers = root.value.space_view_pointers || (root.value.space_views || []).map(id => ({ table: 'space_view', id }));
   if (!Array.isArray(pointers) || pointers.length > 1000) throw Error('Notion 指令工作区目录无效。');
   const ids = pointers.filter(pointer => pointer?.table === 'space_view' && uuid(pointer.id) && (!pointer.spaceId || uuid(pointer.spaceId) === spaceId)).map(pointer => uuid(pointer.id));
-  const views = await read('space_view', ids), matches = [...views.values()].filter(item => uuid(item.value.space_id) === spaceId && uuid(item.value.parent_id) === userId);
+  const readGroups = () => store.api('getSpacePermissionGroupIdsContainingMembers', { spaceId, userIds: [userId] }, { signal, spaceId });
+  const hasGroupSkills = workspace?.value?.settings?.group_default_skills?.length > 0;
+  const [views, groups] = await Promise.all([read('space_view', ids), hasGroupSkills ? readGroups() : {}]);
+  const matches = [...views.values()].filter(item => uuid(item.value.space_id) === spaceId && uuid(item.value.parent_id) === userId);
   if (matches.length !== 1) throw Error('Notion 指令当前工作区个人设置缺失或重复。');
-  const workspace = (await read('space', [spaceId])).get(spaceId);
-  const groups = workspace?.value?.settings?.group_default_skills?.length ? await store.api('getSpacePermissionGroupIdsContainingMembers', { spaceId, userIds: [userId] }, { signal, spaceId }) : {};
   const settings = selectInstructionSettings({ userId, spaceId, root, view: matches[0], workspace, groupIds: groups.userToGroupMap?.[userId] || [] });
   const verify = async () => {
     const batches = new Map();
     for (const item of observed.values()) { const key = item.table + ':' + item.main; if (!batches.has(key)) batches.set(key, []); batches.get(key).push(item); }
-    for (const batch of batches.values()) {
-      const values = await read(batch[0].table, batch.map(item => item.id), batch[0].main, false);
-      if (batch.some(item => fingerprint(values.get(item.id), item.table) !== item.value)) throw Error('Notion 指令、技能或其权限已改变，请重新发送问题。');
-    }
-    if (workspace?.value?.settings?.group_default_skills?.length) { const latest = await store.api('getSpacePermissionGroupIdsContainingMembers', { spaceId, userIds: [userId] }, { signal, spaceId }); if (hash([...(latest.userToGroupMap?.[userId] || [])].sort()) !== hash([...(groups.userToGroupMap?.[userId] || [])].sort())) throw Error('Notion 指令所属分组已改变，请重新发送问题。'); }
+    const [, latestGroups] = await Promise.all([
+      Promise.all([...batches.values()].map(async batch => {
+        const values = await read(batch[0].table, batch.map(item => item.id), batch[0].main, false);
+        if (batch.some(item => fingerprint(values.get(item.id), item.table) !== item.value)) throw Error('Notion 指令、技能或其权限已改变，请重新发送问题。');
+      })),
+      hasGroupSkills ? readGroups() : groups
+    ]);
+    if (hash([...(latestGroups.userToGroupMap?.[userId] || [])].sort()) !== hash([...(groups.userToGroupMap?.[userId] || [])].sort())) throw Error('Notion 指令所属分组已改变，请重新发送问题。');
   };
   return { userId, spaceId, read, workspace, settings, groups, verify };
 }
 
-async function skillBody(read, pageId) {
+async function skillBody(read, pageId, page) {
   const pending = [{ id: pageId, parent: null }], seen = new Set(), lines = [];
   while (pending.length) {
     if (seen.size + pending.length > 128) throw Error('Notion 指令页面内容过多，请精简指令或技能。');
-    const batch = pending.splice(0, 64), values = await read('block', batch.map(item => item.id));
+    const batch = pending.splice(0, 64);
+    const values = page && !seen.size ? new Map([[pageId, page]]) : await read('block', batch.map(item => item.id));
     for (const pointer of batch) {
       const item = values.get(pointer.id), block = item?.value;
       if (!block || pointer.parent && uuid(block.parent_id) !== pointer.parent || seen.has(pointer.id) || !pointer.parent && !['page', 'meeting_note_page'].includes(block.type)) throw Error('Notion 指令正文缺失或结构已变化。');
@@ -99,6 +106,7 @@ async function resolveNativeInstructions({ store, userId, spaceId, content, sign
 }
 
 const surfaceNames = Object.freeze({ editor: '编辑器', during_meeting: '会议中', after_meeting: '会议后' });
+const skillReadConcurrency = 4;
 async function resolveSurfaceSkills({ store, userId, spaceId, surface, signal }) {
   if (!Object.hasOwn(surfaceNames, surface)) throw Error('Notion 技能表面无效。');
   if (!store || typeof store.api !== 'function') return null;
@@ -106,12 +114,19 @@ async function resolveSurfaceSkills({ store, userId, spaceId, surface, signal })
   const ids = surface === 'editor' ? settings.editorSkillIds : surface === 'during_meeting' ? settings.duringMeetingSkillIds : settings.afterMeetingSkillIds;
   if (!ids.length) return null;
   if (ids.length > 50) throw Error('Notion 技能目录过多，请减少启用技能。');
-  const pages = await read('block', ids), prompts = await read('prompt', ids.map(promptId)), skills = [];
-  for (const pageId of ids) {
+  const [pages, prompts] = await Promise.all([read('block', ids), read('prompt', ids.map(promptId))]);
+  const selected = ids.map(pageId => {
     const page = pages.get(pageId); if (!page) throw Error('Notion 技能不可访问，请检查权限或关闭该技能。');
     const classified = classifyReference({ pageId, spaceId: space, page, prompt: prompts.get(promptId(pageId)), skillsDisabled: settings.skillsDisabled });
     if (classified.kind !== 'skill_candidate') throw Error('Notion 技能引用无效或已停用。');
-    skills.push({ page_id: pageId, name: (page.value.properties?.title || []).map(part => part[0] || '').join('').slice(0, 200), instructions: await skillBody(read, pageId) });
+    return { page_id: pageId, name: (page.value.properties?.title || []).map(part => part[0] || '').join('').slice(0, 200) };
+  });
+  const skills = [];
+  for (let start = 0; start < selected.length; start += skillReadConcurrency) {
+    const batch = selected.slice(start, start + skillReadConcurrency);
+    skills.push(...await Promise.all(batch.map(async skill => ({
+      ...skill, instructions: await skillBody(read, skill.page_id, pages.get(skill.page_id))
+    }))));
   }
   const content = JSON.stringify(skills);
   if (content.length > 60000) throw Error('Notion 技能正文合计过长，请减少启用的技能。');

@@ -77,7 +77,7 @@ test('legacy Mac connections without a configured ID still require online discov
 
 test('the production selector leaves pending Mac choices explicit while preserving Windows automatic selection', async () => {
   const source = fs.readFileSync(new URL('../src/collection/ui/collection.js', import.meta.url), 'utf8');
-  const functionText = source.slice(source.indexOf('async function loadWorkspaces()'), source.indexOf('async function searchDestinations('));
+  const functionText = source.slice(source.indexOf('async function populateWorkspaces()'), source.indexOf('async function searchDestinations('));
   const id = randomUUID();
   for (const mac of [false, true]) {
     let searches = 0;
@@ -85,7 +85,8 @@ test('the production selector leaves pending Mac choices explicit while preservi
     const hints = { replaceChildren(node) { this.node = node; } };
     const data = { workspaces: [{ id, name: '合成连接', readOnly: false }], ...(mac ? { autoSelectWorkspaceId: '', selectionHint: '选择后核验' } : {}) };
     const run = vm.runInNewContext('(' + functionText + ')', { chosen: null, $: id => id === 'workspace' ? select : hints,
-      element: (tag, cls, text) => ({ tag, cls, text }), request: async () => data, searchDestinations: async () => { searches++; } });
+      element: (tag, cls, text) => ({ tag, cls, text }), ensureState: async () => {}, request: async () => data,
+      searchDestinations: async () => { searches++; }, updateDestinationSelection: () => {} });
     await run();
     assert.equal(select.options.length, 2); assert.equal(select.options[1].value, id); assert.equal(select.options[1].disabled, false);
     assert.equal(select.value, mac ? '' : id); assert.equal(searches, mac ? 0 : 1);

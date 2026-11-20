@@ -42,7 +42,7 @@
           <label for="deepseek-key">API Key</label><div class="password-field"><input id="deepseek-key" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 DeepSeek API Key"><button type="button" data-toggle="deepseek-key" class="show-key">显示</button></div><p id="deepseek-key-help" class="field-help">密钥仅保存在本机。</p>
           <label for="deepseek-model">默认模型</label><select id="deepseek-model"></select><p class="field-help">新对话默认使用此模型，也可在 Notion 的模型菜单中切换。</p>
           <p class="field-help">Flash 支持图片理解：在原生 AI 输入框上传图片后提问，可识别截图、文字和图表。Pro 暂不支持图片输入。</p>
-          <label class="check-label"><input id="deepseek-thinking" type="checkbox"> 开启思考模式</label><p class="field-help">复杂编辑前先推理，通常需要更长时间。Flash 和 Pro 均可使用。</p>
+          <label class="check-label"><input id="deepseek-thinking" type="checkbox"> 开启思考模式</label><p class="field-help">与 AI 对话菜单共用，后续对话和页面 AI 编辑均使用此设置。Flash 和 Pro 均可使用。</p>
           <label for="deepseek-effort">思考强度</label><select id="deepseek-effort"><option value="low">快速</option><option value="high">标准（推荐）</option><option value="max">深入</option></select>
           <label class="check-label"><input id="multi-agent" type="checkbox" checked> 多 Agent 协同</label><p class="field-help">默认开启。复杂任务可并行搜索、读取和分析，页面修改由主 Agent 统一执行与核验。</p>
           <p class="field-help">长任务自动整理上下文并保存已完成进度，无需手动压缩。</p>
@@ -103,7 +103,7 @@
         </div>
       </section>
       <section id="login-view" hidden>
-        <div class="page-heading"><div><span class="eyebrow">LOCAL LOGIN</span><h1>登录与网络</h1><p>登录信息保存在本机；这里也可以让 Notion 域名直连或自动选择最快 IP。</p></div></div>
+        <div class="page-heading"><div><span class="eyebrow">LOCAL LOGIN</span><h1>登录与网络</h1><p>登录信息保存在本机；可为 Notion 开启直连加速。</p></div></div>
         <div id="login-card" class="provider-card">
           <h2 id="login-title">正在检查本机登录信息…</h2><p id="login-description" class="dialog-description"></p>
           <p id="login-sync-help">首次使用或登录失效时，可以从这台电脑已登录的原版 Notion 同步。只复制 Notion 的登录信息；工作区 API Key 用于页面授权，需要单独添加。</p>
@@ -111,12 +111,10 @@
           <p id="login-mac-help" hidden>退出原版 Notion 后，可以同步本机登录。启动时如出现钥匙串访问提示，请按系统提示确认。工作区 API Key 需单独添加。</p>
           <div class="form-actions"><button id="check-login" class="button secondary">检查登录状态</button><button id="sync-login" class="button primary">从本机 Notion 同步登录</button><button id="open-login-notion" class="button primary" hidden>打开 Notion 登录</button></div>
           <div id="login-result" class="inline-result" role="status" hidden></div>
-          <label class="check-label"><input id="notion-bypass-vpn" type="checkbox"> 跳过 VPN：Notion 域名直连</label>
-          <p class="field-help">开启后启动 Notion 时只对 notion.so、notion.com、notion.site 绕过系统代理，其他网站仍走 VPN；需要重新启动 Notion 生效。如果 VPN 使用 TUN 或全局路由接管，还需要在 VPN 客户端里把这些域名设为直连。</p>
-          <label class="check-label"><input id="notion-auto-ip" type="checkbox"> 智能加速：自动测速选择最快的 Notion IP</label>
-          <p class="field-help">启用和每次启动时解析 Notion 官方 IP，逐个测试 TLS 与 API 往返并固定最快的一个；仅在没有系统代理时固定并直连，系统代理开启时自动交给代理，实时同步等子域名不固定，不修改系统 hosts，IP 失效会自动重新选择。</p>
-          <p id="notion-auto-ip-state" class="field-help"></p>
-          <div class="form-actions"><button id="save-accelerator" class="button secondary">保存网络设置</button></div>
+          <label class="check-label"><input id="notion-smart-direct" type="checkbox"> 图片和视频直连加速</label>
+          <p class="field-help">Notion 的图片和视频优先直连，线路不可用时回到系统网络。更改后需重新打开 Switch Notion。</p>
+          <p id="notion-smart-status" class="field-help"></p>
+          <div class="form-actions"><button id="save-accelerator" class="button secondary">保存网络设置</button><button id="refresh-accelerator" class="button secondary">重新测速</button></div>
           <div id="accelerator-result" class="inline-result" role="status" hidden></div>
         </div>
       </section>

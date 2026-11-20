@@ -1,7 +1,8 @@
 'use strict';
 const api = window.notionSwitch;
 const $ = id => document.getElementById(id);
-let state, editing, removing, toastTimer, clientUpdatePoll, busy = false, speechRecorder, speechPoll, speechDirty = false, memoryScopes = [], transcriptPending = false, ocrPending = false;
+let state, editing, removing, toastTimer, clientUpdatePoll, busy = false, speechRecorder, speechPoll, networkPoll, speechDirty = false, memoryScopes = [], transcriptPending = false, ocrPending = false;
+let thinkingDirty = false;
 const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4500); }
 function result(id, text, error = false) { const node = $(id); node.textContent = text; node.classList.toggle('error', error); node.hidden = !text; }
@@ -19,13 +20,40 @@ async function load() {
   if (api.memoryScopes) { const memories = await api.memoryScopes(); if (memories.ok) memoryScopes = memories.result.scopes; }
   result('load-error', ''); render();
 }
+function renderThinking({ thinking, reasoningEffort }) {
+  $('deepseek-thinking').checked = thinking;
+  $('deepseek-effort').value = reasoningEffort;
+  $('deepseek-effort').disabled = !thinking;
+}
+async function refreshThinking() {
+  if (!state || busy || thinkingDirty || $('deepseek-view').hidden) return;
+  const response = await api.thinkingState();
+  if (response.ok && !busy && !thinkingDirty) renderThinking(response.result);
+}
+function renderNetworkStatus(accelerator) {
+  const network = accelerator.runtime || { state: 'stopped' };
+  $('notion-smart-status').textContent = accelerator.supported === false ? '当前版本的直连加速已预留 Mac 接口，Windows 端可用。' :
+    network.state === 'ready' ? (network.usedFallback ? '近期有媒体请求切回系统网络。其他可用地址仍优先直连。' :
+      network.refreshing ? '正在检测媒体直连地址…' : '媒体直连服务运行中' + (network.checkedDomains ? ` · 已检测 ${network.checkedDomains} 个域名，${network.reachableDomains} 个有可用地址` : ' · 正在检测媒体地址')) :
+      network.message || (accelerator.smartDirect ? '已开启，重新打开 Switch Notion 后生效。' : '直连加速未开启。');
+  $('refresh-accelerator').disabled = network.state !== 'ready' || network.refreshing === true;
+  $('refresh-accelerator').dataset.unavailable = $('refresh-accelerator').disabled ? 'true' : 'false';
+}
+async function refreshNetworkStatus() {
+  if (!state || busy || $('login-view').hidden) return;
+  const response = await api.state();
+  if (response.ok && !busy && !$('login-view').hidden) {
+    state.accelerator = response.result.accelerator;
+    renderNetworkStatus(state.accelerator);
+  }
+}
 function render() {
-  const accelerator = state.accelerator || { bypassVpn: false, autoIp: false, bestIp: '', checkedAt: '' };
-  $('notion-bypass-vpn').checked = accelerator.bypassVpn === true;
-  $('notion-auto-ip').checked = accelerator.autoIp === true;
-  $('notion-auto-ip-state').textContent = accelerator.bestIp
-    ? '当前使用 ' + accelerator.bestIp + (accelerator.checkedAt ? ' · ' + new Date(accelerator.checkedAt).toLocaleString() : '')
-    : accelerator.autoIp === true ? '尚未测速，下次启动时自动检测' : '';
+  const accelerator = state.accelerator || { smartDirect: false, runtime: { state: 'stopped' } };
+  $('notion-smart-direct').checked = accelerator.smartDirect === true;
+  $('notion-smart-direct').disabled = accelerator.supported === false;
+  $('save-accelerator').disabled = accelerator.supported === false;
+  $('save-accelerator').dataset.unavailable = accelerator.supported === false ? 'true' : 'false';
+  renderNetworkStatus(accelerator);
   $('workspace-count').textContent = state.workspaces.length; $('nav-count').textContent = state.workspaces.length;
   const list = $('workspace-list'); list.replaceChildren();
   if (!state.workspaces.length) { const empty = element('div', 'empty'); empty.append(element('h2', '', '添加你的第一个工作区'), element('p', '', '准备好 Notion API Key，点击右上角“添加工作区”即可。')); list.append(empty); }
@@ -51,8 +79,8 @@ function render() {
   $('deepseek-status').textContent = state.deepseek.keyConfigured ? '已配置' : '尚未配置'; $('deepseek-status').classList.toggle('connected', state.deepseek.keyConfigured);
   $('deepseek-key').placeholder = state.deepseek.keyConfigured ? '已保存，留空保留现有 API Key' : '粘贴 DeepSeek API Key';
   $('deepseek-key-help').textContent = state.deepseek.keyConfigured ? '已保存的密钥不会回显。需要更换时，在这里粘贴新密钥。' : '密钥仅保存在本机。';
-  $('deepseek-thinking').checked = state.deepseek.thinking; $('deepseek-effort').value = state.deepseek.reasoningEffort;
-  $('deepseek-effort').disabled = !state.deepseek.thinking; $('multi-agent').checked = state.deepseek.multiAgent;
+  if (!thinkingDirty) renderThinking(state.deepseek);
+  $('multi-agent').checked = state.deepseek.multiAgent;
   const web = state.webSources || { enabled: false, searchEnabled: false, keyConfigured: false };
   $('web-sources-enabled').checked = web.enabled; $('web-search-enabled').checked = web.searchEnabled === true;
   $('web-sources-help').textContent = web.message || (web.keyConfigured ? '已检测到 DeepSeek 密钥，可以开启联网搜索。' : '尚未配置 DeepSeek 密钥；搜索不可用，读取公开网址不受影响。');
@@ -206,11 +234,14 @@ document.querySelectorAll('[data-view]').forEach(button => button.addEventListen
   $('speech-view').hidden = button.dataset.view !== 'speech';
   $('collection-view').hidden = button.dataset.view !== 'collection';
   if (button.dataset.view === 'collection') void checkCollection();
+  if (button.dataset.view === 'deepseek') void refreshThinking();
   clearKey('deepseek-key'); result('provider-result', '');
   if (button.dataset.view === 'login') checkLogin();
   if (button.dataset.view === 'updates') checkUpdates();
   clearInterval(speechPoll);
   if (button.dataset.view === 'speech') { checkSpeech(); speechPoll = setInterval(() => void checkSpeech().catch(() => {}), 750); }
+  clearInterval(networkPoll);
+  if (button.dataset.view === 'login') { void refreshNetworkStatus().catch(() => {}); networkPoll = setInterval(() => void refreshNetworkStatus().catch(() => {}), 5000); }
   else if (speechRecorder?.state !== 'idle') void speechRecorder?.cancel();
 }));
 document.querySelectorAll('[data-toggle]').forEach(button => button.addEventListener('click', () => { const input = $(button.dataset.toggle); input.type = input.type === 'password' ? 'text' : 'password'; button.textContent = input.type === 'password' ? '显示' : '隐藏'; }));
@@ -233,7 +264,9 @@ $('cancel-remove').addEventListener('click', () => $('remove-dialog').close());
 $('remove-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });
 $('confirm-remove').addEventListener('click', () => operation($('remove-dialog'), async () => { const r = await api.removeWorkspace({ id: removing.id }); if (r.ok) { $('remove-dialog').close(); removing = null; await load(); } toast(r.ok ? r.result.message : r.error); }));
 $('test-deepseek').addEventListener('click', () => operation($('deepseek-form'), async () => { result('provider-result', '正在检测 DeepSeek…'); const r = await api.testDeepseek({ apiKey: $('deepseek-key').value }); result('provider-result', r.ok ? r.result.message : r.error, !r.ok); }));
-$('deepseek-thinking').addEventListener('change', () => { $('deepseek-effort').disabled = !$('deepseek-thinking').checked; });
+window.addEventListener('focus', () => { void refreshThinking(); });
+$('deepseek-thinking').addEventListener('change', () => { thinkingDirty = true; $('deepseek-effort').disabled = !$('deepseek-thinking').checked; });
+$('deepseek-effort').addEventListener('change', () => { thinkingDirty = true; });
 $('test-web-sources').addEventListener('click', () => operation($('web-sources-form'), async () => {
   result('web-sources-result', '正在用固定检测词检查 DeepSeek 搜索连接…'); const response = await api.testWebSources({});
   result('web-sources-result', response.ok ? response.result.message : response.error, !response.ok);
@@ -290,9 +323,13 @@ async function checkLogin() {
 }
 $('check-login').addEventListener('click', () => operation($('login-card'), checkLogin));
 $('save-accelerator').addEventListener('click', () => operation($('login-card'), async () => {
-  const response = await api.saveAccelerator({ bypassVpn: $('notion-bypass-vpn').checked ? 'enabled' : 'disabled', autoIp: $('notion-auto-ip').checked ? 'enabled' : 'disabled' });
+  const response = await api.saveAccelerator({ smartDirect: $('notion-smart-direct').checked ? 'enabled' : 'disabled' });
   result('accelerator-result', response.ok ? response.result.message : response.error, !response.ok);
   if (response.ok) await load();
+}));
+$('refresh-accelerator').addEventListener('click', () => operation($('login-card'), async () => {
+  const response = await api.refreshAccelerator(); result('accelerator-result', response.ok ? response.result.message : response.error, !response.ok);
+  if (response.ok) setTimeout(() => void refreshNetworkStatus(), 4000);
 }));
 $('open-login-notion').addEventListener('click', async () => { const r = await api.openNotion(); if (!r.ok) toast(r.error); });
 $('sync-login').addEventListener('click', () => $('login-dialog').showModal());
@@ -302,7 +339,17 @@ $('confirm-login').addEventListener('click', () => operation($('login-dialog'), 
   result('login-result', '正在准备本机登录同步…'); const r = await api.syncLogin(); $('login-dialog').close();
   result('login-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) toast('登录信息已准备好，NotionSwitch 即将自动重启。');
 }));
-$('deepseek-form').addEventListener('submit', event => { event.preventDefault(); operation($('deepseek-form'), async () => { result('provider-result', '正在检测并保存…'); const r = await api.saveDeepseek({ apiKey: $('deepseek-key').value, model: $('deepseek-model').value, thinking: $('deepseek-thinking').checked ? 'enabled' : 'disabled', reasoningEffort: $('deepseek-effort').value, multiAgent: $('multi-agent').checked ? 'enabled' : 'disabled' }); result('provider-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) { clearKey('deepseek-key'); await load(); toast(r.result.message); } }); });
+$('deepseek-form').addEventListener('submit', event => {
+  event.preventDefault();
+  operation($('deepseek-form'), async () => {
+    result('provider-result', '正在检测并保存…');
+    const thinking = thinkingDirty ? { thinking: $('deepseek-thinking').checked ? 'enabled' : 'disabled', reasoningEffort: $('deepseek-effort').value } : {};
+    const r = await api.saveDeepseek({ apiKey: $('deepseek-key').value, model: $('deepseek-model').value,
+      multiAgent: $('multi-agent').checked ? 'enabled' : 'disabled', ...thinking });
+    result('provider-result', r.ok ? r.result.message : r.error, !r.ok);
+    if (r.ok) { thinkingDirty = false; clearKey('deepseek-key'); await load(); toast(r.result.message); }
+  });
+});
 async function checkUpdates() {
   clearTimeout(clientUpdatePoll);
   const r = await api.updateStatus(); if (!r.ok) { result('updates-result', r.error, true); return; }
@@ -389,7 +436,7 @@ speechRecorder = new window.SpeechRecorder(api, value => {
   }
 });
 $('test-speech').addEventListener('click', () => { if (speechRecorder.state === 'recording') speechRecorder.stop(); else if (speechRecorder.state === 'idle' && !busy) void speechRecorder.start(); });
-window.addEventListener('pagehide', () => { clearInterval(speechPoll); speechRecorder.clearPlayback(); void speechRecorder.cancel(); });
+window.addEventListener('pagehide', () => { clearInterval(speechPoll); clearInterval(networkPoll); speechRecorder.clearPlayback(); void speechRecorder.cancel(); });
 $('release-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.releaseSpeech(); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); await checkSpeech(); }));
 for (const id of ['speech-model', 'speech-enabled', 'speech-summary', 'speech-input-mode', 'speech-attach-audio']) $(id).addEventListener('change', () => { speechDirty = true; });
 $('save-speech').addEventListener('click', () => operation($('speech-card'), async () => { const r = await api.saveSpeech({ enabled: $('speech-enabled').checked, model: $('speech-model').value, autoSummary: $('speech-summary').checked, autoAttachAudio: $('speech-attach-audio').checked, inputMode: $('speech-input-mode').value }); result('speech-result', r.ok ? r.result.message : r.error, !r.ok); if (r.ok) speechDirty = false; await checkSpeech(); }));

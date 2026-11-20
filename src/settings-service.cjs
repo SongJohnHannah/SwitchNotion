@@ -4,6 +4,7 @@ const { createHash } = require('node:crypto');
 const { NotionRouter, registryName, consolidateConnections, saveConnections } = require('./notion-routing.cjs');
 const accelerator = require('./notion-accelerator.cjs');
 const ipProbe = require('./notion-ip-probe.cjs');
+const smartLaunch = require('./notion-smart-launch.cjs');
 const { ProviderRouter } = require('./provider.cjs');
 const { models } = require('./native-models.cjs');
 const { WebSources } = require('./web-sources.cjs');
@@ -19,8 +20,8 @@ const label = value => {
   return value.trim();
 };
 class SettingsService {
-  constructor({ root, fetchImpl = fetch, intervalMs = 350, webSources, memory, extensions, backgroundAgents, transfer }) {
-    this.root = root; this.fetchImpl = fetchImpl;
+  constructor({ root, fetchImpl = fetch, intervalMs = 350, webSources, memory, extensions, backgroundAgents, transfer, mediaFallback = () => false }) {
+    this.root = root; this.fetchImpl = fetchImpl; this.mediaFallback = mediaFallback;
     this.router = new NotionRouter({ root, fetchImpl, intervalMs });
     this.provider = new ProviderRouter({ root, fetchImpl });
     this.webSources = webSources || new WebSources({ root });
@@ -45,7 +46,18 @@ class SettingsService {
   }
   async state() {
     const profiles = await this.profiles(), status = this.provider.status();
-    return { workspaces: profiles.map(p => this.publicProfile(p)), accelerator: accelerator.read(this.root), webSources: this.webSources.state(), deepseek: { keyConfigured: status.keyConfigured === true, model: models.some(m => m.apiId === status.model) ? status.model : 'deepseek-flash', thinking: status.thinking === true, reasoningEffort: status.reasoningEffort || 'high', multiAgent: status.multiAgent !== false, models: models.map(m => ({ id: m.apiId, name: m.label })) } };
+    const network = accelerator.read(this.root), recorded = smartLaunch.readState(this.root), activeId = process.env.NOTION_SWITCH_SMART_RUN_ID;
+    const launchedWithMedia = process.env.NOTION_SWITCH_SMART_DIRECT === '1';
+    const runtime = launchedWithMedia && activeId && recorded?.runId === activeId && recorded.scope === 'media' ? {
+      state: recorded.state, checkedDomains: recorded.checkedDomains || 0, reachableDomains: recorded.reachableDomains || 0,
+      lastCheck: recorded.lastCheck || '', refreshing: recorded.refreshing === true, message: recorded.message || '', usedFallback: this.mediaFallback()
+    } : launchedWithMedia ? (activeId ? { state: 'starting', message: '正在启动图片和视频直连…' } :
+      { state: 'error', message: '图片和视频直连未能启动。请重新打开 Switch Notion。' }) :
+      { state: 'stopped', message: network.smartDirect ? '保存后需重新打开 Switch Notion。' : '' };
+    const project = process.env.NOTION_SWITCH_PROJECT || path.dirname(this.root);
+    return { workspaces: profiles.map(p => this.publicProfile(p)), accelerator: { ...network, runtime,
+      supported: process.platform === 'win32' && process.arch === 'x64', componentReady: !!smartLaunch.executable(this.root, project) },
+      webSources: this.webSources.state(), deepseek: { keyConfigured: status.keyConfigured === true, model: models.some(m => m.apiId === status.model) ? status.model : 'deepseek-flash', thinking: status.thinking === true, reasoningEffort: status.reasoningEffort || 'high', multiAgent: status.multiAgent !== false, models: models.map(m => ({ id: m.apiId, name: m.label })) } };
   }
   async identity(apiKey) {
     const profile = { apiKey }, client = this.router.client(profile);
@@ -121,7 +133,29 @@ class SettingsService {
     fs.writeFileSync(path.join(this.root, 'provider.local.json'), JSON.stringify({ ...config, mode: 'deepseek', model: input.model, keySource: 'local', thinking: input.thinking || config.thinking || 'disabled', reasoningEffort: input.reasoningEffort || config.reasoningEffort || 'high', multiAgent: input.multiAgent === undefined ? config.multiAgent !== false : input.multiAgent === 'enabled' }, null, 2) + '\n', { mode: 0o600, flush: true });
     return { message: 'DeepSeek 已保存，下一轮 AI 对话生效' };
   }
+  thinkingState() {
+    const config = this.provider.config();
+    const reasoningEffort = ['low', 'high', 'max'].includes(config.reasoningEffort) ? config.reasoningEffort : 'high';
+    return { thinking: config.thinking === 'enabled', reasoningEffort };
+  }
+  saveThinking({ effort }) {
+    if (!['none', 'low', 'high', 'max'].includes(effort)) throw Error('请选择有效的思考模式。');
+    const config = this.provider.config();
+    if (config.mode !== 'deepseek') throw Error('请先在配置中心启用 DeepSeek。');
+    config.thinking = effort === 'none' ? 'disabled' : 'enabled';
+    if (effort !== 'none') config.reasoningEffort = effort;
+    fs.writeFileSync(path.join(this.root, 'provider.local.json'), JSON.stringify(config, null, 2) + '\n', { mode: 0o600, flush: true });
+    return this.thinkingState();
+  }
   async saveAccelerator(input) {
+    if (input.smartDirect !== undefined) {
+      if (!['enabled', 'disabled'].includes(input.smartDirect)) throw Error('请选择有效的 Notion 直连设置。');
+      const enabled = input.smartDirect === 'enabled', project = process.env.NOTION_SWITCH_PROJECT || path.dirname(this.root);
+      if (enabled && (process.platform !== 'win32' || process.arch !== 'x64')) throw Error('当前平台尚未接入 Notion 直连加速。');
+      if (enabled && !smartLaunch.executable(this.root, project)) throw Error('当前缺少 Notion 直连组件，请先准备 Caddy。');
+      accelerator.save(this.root, { smartDirect: enabled, bypassVpn: false, autoIp: false });
+      return { message: (enabled ? '图片和视频直连加速已开启' : '图片和视频直连加速已关闭') + '，重新打开 Switch Notion 后生效。', ...accelerator.read(this.root) };
+    }
     const autoIp = input.autoIp === 'enabled';
     accelerator.save(this.root, { bypassVpn: input.bypassVpn === 'enabled', autoIp });
     const message = [input.bypassVpn === 'enabled' ? 'Notion 域名直连已开启，重启 Notion 后生效' : ''];
@@ -131,6 +165,12 @@ class SettingsService {
     }
     return { message: message.filter(Boolean).join('；') || '网络设置已保存', ...accelerator.read(this.root) };
   }
+  async refreshAccelerator() {
+    const runId = process.env.NOTION_SWITCH_SMART_RUN_ID, state = smartLaunch.readState(this.root);
+    if (process.env.NOTION_SWITCH_SMART_DIRECT !== '1' || !runId || state?.runId !== runId || state.state !== 'ready') throw Error('当前直连服务未运行，请重新打开 Switch Notion。');
+    smartLaunch.request(this.root, 'refresh', runId);
+    return { message: '已开始重新检测各域名的直连地址。' };
+  }
   request(action, input = {}) {
     if (typeof action === 'string' && action.startsWith('ocr.')) return this.mediaTranscripts?.ocr.request(action, input) || Promise.resolve({ ok: false, error: '本机 OCR 服务尚未就绪。' });
     if (typeof action === 'string' && action.startsWith('transcript.')) return this.mediaTranscripts?.request(action, input) || Promise.resolve({ ok: false, error: '本机逐字稿服务尚未就绪。' });
@@ -138,8 +178,8 @@ class SettingsService {
     if (typeof action === 'string' && action.startsWith('transfer.')) return this.transfer?.request(action, input) || Promise.resolve({ ok: false, error: '对话同步尚未就绪。' });
     if (typeof action === 'string' && /^(mcp|browser|approval)\./.test(action)) return this.extensions?.request(action, input) || Promise.resolve({ ok: false, error: 'Notion MCP 服务尚未就绪。' });
     if (typeof action === 'string' && /^(memory|skill)\./.test(action)) return this.memoryRequest(action, input);
-    const methods = { state: 'state', 'workspace.save': 'saveWorkspace', 'workspace.test': 'testWorkspace', 'workspace.remove': 'removeWorkspace', 'accelerator.save': 'saveAccelerator', 'deepseek.save': 'saveDeepseek', 'deepseek.test': 'testDeepseek', 'web.save': 'saveWebSources', 'web.test': 'testWebSources' };
-    const allowed = { state: [], 'workspace.save': ['id', 'name', 'apiKey'], 'workspace.test': ['id', 'apiKey'], 'workspace.remove': ['id'], 'accelerator.save': ['bypassVpn', 'autoIp'], 'deepseek.save': ['apiKey', 'model', 'thinking', 'reasoningEffort', 'multiAgent'], 'deepseek.test': ['apiKey'], 'web.save': ['enabled', 'searchEnabled'], 'web.test': ['apiKey'] };
+    const methods = { state: 'state', 'workspace.save': 'saveWorkspace', 'workspace.test': 'testWorkspace', 'workspace.remove': 'removeWorkspace', 'accelerator.save': 'saveAccelerator', 'accelerator.refresh': 'refreshAccelerator', 'deepseek.save': 'saveDeepseek', 'deepseek.test': 'testDeepseek', 'deepseek.thinking': 'thinkingState', 'deepseek.thinking.save': 'saveThinking', 'web.save': 'saveWebSources', 'web.test': 'testWebSources' };
+    const allowed = { state: [], 'workspace.save': ['id', 'name', 'apiKey'], 'workspace.test': ['id', 'apiKey'], 'workspace.remove': ['id'], 'accelerator.save': ['bypassVpn', 'autoIp', 'smartDirect'], 'accelerator.refresh': [], 'deepseek.save': ['apiKey', 'model', 'thinking', 'reasoningEffort', 'multiAgent'], 'deepseek.test': ['apiKey'], 'deepseek.thinking': [], 'deepseek.thinking.save': ['effort'], 'web.save': ['enabled', 'searchEnabled'], 'web.test': ['apiKey'] };
     const job = async () => {
       if (!Object.hasOwn(methods, action) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !allowed[action].includes(k)) || Object.values(input).some(v => typeof v !== 'string' || v.length > 1024)) return { ok: false, error: '无法识别这项操作，请刷新后重试。' };
       try { return { ok: true, result: await this[methods[action]](input) }; }

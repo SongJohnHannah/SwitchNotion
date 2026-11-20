@@ -9,7 +9,7 @@ import { zipDirectory } from './portable-zip.mjs';
 const project = path.resolve(import.meta.dirname, '..');
 const scripts = ['asar.mjs', 'native-fs.mjs', 'desktop-compat.mjs', 'runtime-update.mjs', 'runtime-health.mjs',
   'source-discovery.mjs', 'find-notion.mjs', 'launch-lock.mjs', 'prepare-desktop.mjs', 'start-desktop.mjs',
-  'open-notion.mjs', 'open-settings.mjs', 'open-collection.mjs', 'open-update.mjs', 'update-helper.mjs', 'client-update-helper.mjs', 'client-tests.mjs', 'login-helper.cjs', 'launch-macos.sh', 'launch-macos.mjs', 'check-meeting-summary.mjs'];
+  'open-notion.mjs', 'open-settings.mjs', 'open-collection.mjs', 'open-update.mjs', 'update-helper.mjs', 'client-update-helper.mjs', 'client-tests.mjs', 'login-helper.cjs', 'launch-macos.sh', 'launch-macos.mjs', 'check-meeting-summary.mjs', 'build-notion-caddy.mjs'];
 function descendants(root) {
   const files = [];
   function visit(dir) { for (const item of fs.readdirSync(dir, { withFileTypes: true })) {

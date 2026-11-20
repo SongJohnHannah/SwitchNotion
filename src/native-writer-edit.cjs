@@ -96,8 +96,10 @@ async function snapshot(info, store, signal) {
   if (start < 0 || end < start || end - start >= 100) fail('选区不是连续段落或过长。');
   const ids = children.slice(start, end + 1);
   if (info.blockIds && hash(ids) !== hash(info.blockIds)) fail('内容块选区已变化或不连续，请重新选择。');
-  const selected = await read(ids), ranges = ids.map((id, at) => {
-    const entry = selected.get(id), block = entry.value, rich = block.properties?.title || [];
+  const previousIds = children.slice(Math.max(0, start - 8), start);
+  const paragraphs = await read([...ids, ...previousIds]);
+  const ranges = ids.map((id, at) => {
+    const entry = paragraphs.get(id), block = entry.value, rich = block.properties?.title || [];
     if (!editable(entry) || !textTypes.has(block.type) || block.parent_id !== parent.id ||
         (block.content != null && !Array.isArray(block.content)) ||
         !Array.isArray(rich) || rich.some(span => !Array.isArray(span) || typeof span[0] !== 'string')) fail('选区含有不支持的容器，请选择普通文字段落。');
@@ -114,9 +116,8 @@ async function snapshot(info, store, signal) {
   const previewText = text => text.replace(/\r\n/g, '\n').replace(/\n{2,}/g, '\n');
   if (info.preview && previewText(selectedText) !== previewText(info.preview)) fail('选区文字已变化，请重新选择后编辑。');
   if (info.mode !== 'continue' && !selectedText.trim() && info.prompt !== undefined) fail('请先选中需要编辑的文字。');
-  const previousIds = children.slice(Math.max(0, start - 8), start), previous = previousIds.length ? await read(previousIds) : new Map();
   const source = { nearby_paragraphs: previousIds.map(id => {
-    const block = previous.get(id).value; if (block.parent_id !== parent.id) fail('附近段落已移动。');
+    const block = paragraphs.get(id).value; if (block.parent_id !== parent.id) fail('附近段落已移动。');
     return { type: block.type, text: plain(block.properties?.title || []), children_read: false };
   }), selected: ranges.map(range => ({ id: range.id, type: range.block.type, runs: range.selected.map((span, source) => ({ source, text: span[0], ...(atomic(span) ? { immutable: true } : {}) })) })),
   paragraph_before_cursor: plain(ranges[0].rich).slice(0, ranges[0].from), paragraph_after_cursor: plain(ranges.at(-1).rich).slice(ranges.at(-1).to) };

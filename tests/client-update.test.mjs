@@ -72,9 +72,19 @@ test('changes made after downloading prevent apply and changes made after applyi
 });
 test('failed startup restores the previous code and restarts it; success records that new code was actually loaded', async t => {
   const f = fixture(t); f.publish(); const plan = await f.client.prepare(), attempts = [];
-  assert.equal(await applyClientUpdate({ project: f.project, root: f.root, plan, client: f.client, runTests: async () => ({ ok: true }), start: async checking => { attempts.push(checking); if (checking) throw Error('fixture startup failure'); } }), false);
+  const collectionDirectory = path.join(f.root, 'collection'); fs.mkdirSync(collectionDirectory);
+  const collectionSettings = path.join(collectionDirectory, 'settings.local.json');
+  const target = { workspaceId: '11111111-1111-4111-8111-111111111111', id: '22222222-2222-4222-8222-222222222222', kind: 'page' };
+  const saved = JSON.stringify({ version: 2, settings: { destination: target, favorites: [target] } });
+  fs.writeFileSync(collectionSettings, saved);
+  const checkCollection = () => assert.equal(fs.readFileSync(collectionSettings, 'utf8'), saved);
+  assert.equal(await applyClientUpdate({ project: f.project, root: f.root, plan, client: f.client, runTests: async () => ({ ok: true }), start: async checking => {
+    attempts.push(checking); checkCollection(); if (checking) throw Error('fixture startup failure');
+  } }), false);
   assert.deepEqual(attempts, [true, false]); assert.equal(f.git(f.project, ['rev-parse', 'HEAD']), f.before); assert.equal(f.client.last().status, 'restored');
-  assert.equal(await applyClientUpdate({ project: f.project, root: f.root, plan, client: f.client, runTests: async () => ({ ok: true }), start: async checking => { assert.equal(checking, true); assert.equal(f.git(f.project, ['rev-parse', 'HEAD']), plan.after); } }), true);
+  assert.equal(await applyClientUpdate({ project: f.project, root: f.root, plan, client: f.client, runTests: async () => ({ ok: true }), start: async checking => {
+    assert.equal(checking, true); assert.equal(f.git(f.project, ['rev-parse', 'HEAD']), plan.after); checkCollection();
+  } }), true);
   assert.equal(f.client.last().status, 'applied');
 });
 test('updates run the project test suite after merging and report progress', async t => {

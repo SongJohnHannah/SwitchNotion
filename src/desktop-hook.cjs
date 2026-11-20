@@ -7,6 +7,10 @@ const platform = require('./platform/index.cjs').createDesktopPlatform();
 const { initializeRuntime, disableBuiltinUpdates } = require('./runtime-bootstrap.cjs');
 const root = initializeRuntime({ app, dialog, platform });
 if (!root) return;
+const smartRunId = process.env.NOTION_SWITCH_SMART_RUN_ID;
+if (/^[a-f\d-]{36}$/i.test(smartRunId || '')) app.on('will-quit', () => {
+  try { require('./notion-smart-launch.cjs').request(root, 'stop', smartRunId); } catch {}
+});
 disableBuiltinUpdates(root);
 require('./app-branding.cjs').installAppBranding(require('electron'));
 const { NativeMock, json } = require('./native-mock.cjs');
@@ -33,8 +37,11 @@ const { GeneratedFiles: SharedGeneratedFiles, xml: escapeFileText } = require('.
 const macFileDownloads = platform.id === 'darwin' ? require('./compat/macos-generated-files.cjs') : null;
 const GeneratedFiles = macFileDownloads?.MacGeneratedFiles || SharedGeneratedFiles;
 const { NotionRouter } = require('./notion-routing.cjs');
+const { createNotionMedia } = require('./notion-media-transfer.cjs');
 const { nativeModelCatalog } = require('./native-models.cjs');
 const { setupSettings, isSettings, createAuxiliaryWindow } = require('./settings-window.cjs');
+const { registerSelectionChatMenu, setupSelectionChat } = require('./selection-chat.cjs');
+const { registerThinkingMenuPreload, setupThinkingMenu } = require('./compat/thinking-menu.cjs');
 const { createNativeImageAdapter, describeUploadResponse } = require('./native-images.cjs');
 const { LocalImageUploads, prefix: localUploadPrefix } = require('./local-image-uploads.cjs');
 const { LocalDocumentUploads, prefix: localDocumentUploadPrefix, previewPrefix: localDocumentPreviewPrefix } = require('./local-document-uploads.cjs');
@@ -54,6 +61,21 @@ const { MeetingRecordings } = require('./meeting-recordings.cjs');
 const { uuid } = require('./native-context.cjs');
 const logFile = path.join(root, 'events.jsonl');
 const log = event => fs.appendFileSync(logFile, JSON.stringify({ time: new Date().toISOString(), ...event }) + '\n');
+let mediaFallbackAt = 0;
+const mediaEvents = new Map();
+const media = createNotionMedia({
+  enabled: platform.id === 'win32' && process.env.NOTION_SWITCH_SMART_DIRECT === '1',
+  root,
+  onResult: event => {
+    if (event.route === 'system') mediaFallbackAt = Date.now();
+    const key = [event.kind, event.host, event.status, event.route].join('/');
+    if (Date.now() - (mediaEvents.get(key) || 0) < 1500) return;
+    if (mediaEvents.size >= 64) mediaEvents.delete(mediaEvents.keys().next().value);
+    mediaEvents.set(key, Date.now());
+    try { log({ type: 'notion-media-route', ...event }); } catch {}
+  }
+});
+app.on('will-quit', () => media.close());
 for (const [name, dir] of [['userData', 'profile'], ['sessionData', 'profile'], ['crashDumps', 'crashDumps']]) {
   const location = path.join(root, dir); fs.mkdirSync(location, { recursive: true }); app.setPath(name, location);
 }
@@ -115,6 +137,7 @@ const transfer = new AiTransfer({ memory, agent: mock.agent, native: mock, appro
 const databaseBuild = createNativeBuildService({ root, provider, log,
   storeFactory: (info, meta) => new NativeBuildStore({ native: meetingBridge.forRequest(meta.request, meta.session, info.spaceId) }) });
 const databaseWizard = setupDatabaseWizard({ root, provider, bridge: meetingBridge, createWindow: createAuxiliaryWindow, app, ipcMain, Menu, MenuItem, shell });
+const selectionChat = setupSelectionChat({ ipcMain, provider, isWorkspaceContents: contents => !isSettings(contents) });
 mock.agent.onDatabaseBuild = ({ prompt, pageId }) => databaseWizard.open({ pageId: uuid(pageId) || undefined, prompt });
 const nativeWriter = new NativeWriter({ root, provider, log,
   hasRecord: id => mock.hasRecord(id) || databaseBuild.owns({ threadId: id }),
@@ -131,7 +154,10 @@ const localInlineDocuments = new LocalInlineDocuments({ root, store: localDocume
   mock.reserveInlineUpload(scope);
 } });
 let recordings;
-const settings = setupSettings({ root, platform, webSources, memory, extensions, backgroundAgents, transfer, isBusy: () => nativeWriter.active > 0 || calendarWrites.active > 0 || databaseWizard.service.active > 0 || backgroundAgents.active > 0 || mock.status().activeTurns > 0 || databaseBuild.active > 0 || autofill.active > 0 || meetingSummaries.active > 0 || recordings?.active > 0, getCompatibility: () => compatibility });
+const settings = setupSettings({ root, platform, webSources, memory, extensions, backgroundAgents, transfer, mediaUpload: media.upload,
+  mediaFallback: () => mediaFallbackAt > 0 && Date.now() - mediaFallbackAt < 2 * 60 * 1000,
+  isBusy: () => selectionChat.active || nativeWriter.active > 0 || calendarWrites.active > 0 || databaseWizard.service.active > 0 || backgroundAgents.active > 0 || mock.status().activeTurns > 0 || databaseBuild.active > 0 || autofill.active > 0 || meetingSummaries.active > 0 || recordings?.active > 0, getCompatibility: () => compatibility });
+setupThinkingMenu({ ipcMain, isWorkspaceContents: contents => !isSettings(contents), request: settings.deepseekThinking });
 const mediaTranscripts = settings.mediaTranscripts;
 recordings = new MeetingRecordings({ root, provider: settings.speech.provider, enabled: () => settings.speech.autoAttachAudio,
   storeFactory: (info, signal) => meetingBridge.forRecording(info, signal), log });
@@ -295,8 +321,8 @@ async function route(request, passthrough, ses) {
     if (record) return json(endpoint === 'getThreadSpaceId' ? { spaceId: record.space_id } : {});
     if (mock.hasRecord(input.threadId, 'thread')) return json({ message: '本地 AI 对话不属于当前账号或工作区。' }, 403);
   }
-  if (url.hostname === 'app.notion.com' && /^\/_assets\/\d+-[a-f\d]{16}\.js$/.test(url.pathname)) {
-    const compatAsset = url.pathname.split('/').pop();
+  const compatAsset = /^\/_assets\/([\w-]+-[a-f\d]{16}\.js)$/.exec(url.pathname)?.[1];
+  if (url.hostname === 'app.notion.com' && compatAsset) {
     const response = await passthrough(request);
     if (!response.ok) return response;
     let adapted;
@@ -379,6 +405,8 @@ async function route(request, passthrough, ses) {
 function install(ses) {
   if (installed.has(ses)) return;
   installed.add(ses);
+  registerSelectionChatMenu(ses);
+  registerThinkingMenuPreload(ses);
   // Service-worker responses can bypass custom protocol handlers entirely.
   // Clear derived assets before the first navigation, keeping cookies and
   // local/IndexedDB workspace data intact in this isolated profile.
@@ -388,9 +416,10 @@ function install(ses) {
     log({ type: 'prototype-asset-cache-cleared' });
   }));
   const handle = ses.protocol.handle.bind(ses.protocol);
+  const workspaceRoute = (request, normal) => route(request, req => media.handle(req, ses, normal), ses);
   // Wrap later protocol registrations too, preserving Notion's own handler as fallback.
-  ses.protocol.handle = (scheme, handler) => handle(scheme, scheme === 'https' ? request => route(request, handler, ses) : handler);
-  handle('https', request => route(request, req => ses.fetch(req, { bypassCustomProtocolHandlers: true }), ses));
+  ses.protocol.handle = (scheme, handler) => handle(scheme, scheme === 'https' ? request => workspaceRoute(request, handler) : handler);
+  handle('https', request => workspaceRoute(request, req => ses.fetch(req, { bypassCustomProtocolHandlers: true })));
   log({ type: 'session-hook-installed' });
 }
 app.on('session-created', install);

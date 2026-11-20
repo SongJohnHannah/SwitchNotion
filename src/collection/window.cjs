@@ -4,8 +4,8 @@ const { app, ipcMain, globalShortcut, screen, dialog, shell, Notification } = re
 const { ProviderRouter } = require('../provider.cjs');
 const { CollectionService } = require('./service.cjs');
 const { destination } = require('./model.cjs');
-function setupCollection({ root, speech, webSources, createWindow, openSettings, platform }) {
-  const service = new CollectionService({ root, downloadsDirectory: app.getPath('downloads'), speech, webSources, provider: new ProviderRouter({ root }) });
+function setupCollection({ root, speech, webSources, createWindow, openSettings, platform, mediaUpload }) {
+  const service = new CollectionService({ root, downloadsDirectory: app.getPath('downloads'), speech, webSources, mediaUpload, provider: new ProviderRouter({ root }) });
   const file = path.join(__dirname, 'ui/index.html'), url = pathToFileURL(file).href;
   let window, quitting = false, registered, shortcutError = '';
   function resize(expanded) {

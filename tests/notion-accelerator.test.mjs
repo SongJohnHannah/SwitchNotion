@@ -15,8 +15,8 @@ function root(t) {
 
 test('network settings default to direct with no pinned IP', t => {
   const directory = root(t);
-  assert.deepEqual(accelerator.read(directory), { bypassVpn: false, autoIp: false, bestIp: '', checkedAt: '' });
-  assert.deepEqual(accelerator.save(directory, { bypassVpn: true }), { bypassVpn: true, autoIp: false, bestIp: '', checkedAt: '' });
+  assert.deepEqual(accelerator.read(directory), { bypassVpn: false, autoIp: false, smartDirect: false, bestIp: '', checkedAt: '' });
+  assert.deepEqual(accelerator.save(directory, { bypassVpn: true }), { bypassVpn: true, autoIp: false, smartDirect: false, bestIp: '', checkedAt: '' });
   assert.equal(accelerator.read(directory).bypassVpn, true);
   assert.match(accelerator.bypassList, /notion\.so/);
   assert.equal(accelerator.bypassList.includes('*'), false);

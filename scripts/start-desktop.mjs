@@ -51,6 +51,10 @@ launchStatus('正在准备运行文件；首次启动或同步更新可能需要
 const prepared = prepare(directStart ? process.argv[2] : undefined, { force: process.env.NOTION_SWITCH_FORCE_UPDATE === '1' });
 console.log(JSON.stringify(prepared));
 if (process.env.NOTION_SWITCH_CLIENT_UPDATE === '1' && prepared.adapterHash !== adapterHash(project)) throw Error('最新代码尚未接入，已保留此前运行版本。');
+const accelerator = createRequire(import.meta.url)('../src/notion-accelerator.cjs');
+const smartLaunch = createRequire(import.meta.url)('../src/notion-smart-launch.cjs');
+const network = accelerator.read(stateRoot);
+const mediaEnabled = platform.id === 'win32' && process.arch === 'x64' && network.smartDirect;
 function launch() {
  launchStatus('正在打开 NotionSwitch 窗口…');
  if (macRuntime && process.env.NOTION_SWITCH_MAC_LAUNCHER) return macRuntime.launchMacApplication({
@@ -58,18 +62,27 @@ function launch() {
   env: { ...process.env, NOTION_SWITCH_PROJECT: path.resolve(import.meta.dirname, '..'),
    ...(['blocked', 'held'].includes(prepared.updateStatus) ? { NOTION_SWITCH_OPEN_SETTINGS: '1', NOTION_SWITCH_UPDATE_VIEW: '1' } : {}) }
  });
+ let smartInstance;
+ if (mediaEnabled) {
+  try { smartInstance = smartLaunch.start({ root: stateRoot, project }); }
+  catch (error) { console.log(JSON.stringify({ mediaDirectReady: false, message: String(error.message || '媒体直连加速启动失败').slice(0, 200) })); }
+ }
  const stdout = fs.openSync(path.join(stateRoot, 'desktop-stdout.log'), 'a');
  const stderr = fs.openSync(path.join(stateRoot, 'desktop-stderr.log'), 'a');
  const child = platform.launchRuntime({ container: runtime, stateRoot,
   env: { ...process.env, NOTION_SWITCH_PROJECT: path.resolve(import.meta.dirname, '..'), ...(['blocked', 'held'].includes(prepared.updateStatus) ? { NOTION_SWITCH_OPEN_SETTINGS: '1', NOTION_SWITCH_UPDATE_VIEW: '1' } : {}) },
   proxyEnabled: systemProxyEnabled(),
+  smartDirect: mediaEnabled, smartRunId: smartInstance?.runId,
   stdio: ['ignore', stdout, stderr],
  });
+ if (smartInstance?.supervisorPid && Number.isInteger(child.pid)) {
+  try { smartLaunch.bind(stateRoot, smartInstance, child.pid); }
+  catch { try { smartLaunch.request(stateRoot, 'stop', smartInstance.runId); } catch {} }
+ }
  fs.closeSync(stdout); fs.closeSync(stderr);
  child.on('error', () => {}); child.unref(); return child;
 }
-const accelerator = createRequire(import.meta.url)('../src/notion-accelerator.cjs');
-if (accelerator.read(stateRoot).autoIp) {
+if (!network.smartDirect && network.autoIp) {
   // 每次启动都重新测速，避免固定到已经失效的 IP。
   try { await createRequire(import.meta.url)('../src/notion-ip-probe.cjs').refresh(stateRoot); } catch {}
 }

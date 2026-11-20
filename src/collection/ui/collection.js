@@ -1,7 +1,7 @@
 'use strict';
 const api = window.collection, $ = id => document.getElementById(id);
 let state, chosen, expanded = false, activePanel = 'destination', selectedJob, destinationResults = [], cursors = {}, searchTimer, refreshTimer, searchVersion = 0, checkingAccounts = false;
-let redistillSource, queueAction;
+let redistillSource, queueAction, initialRefresh, workspaceLoad;
 const names = { paragraph: '正文', heading: '标题', quote: '引用', list: '列表', code: '代码', divider: '分隔', link: '链接', image: '图片', video: '视频', audio: '音频' };
 const statuses = { queued: '等待下载', reading: '识别中', downloading: '下载中', waiting_processing: '等待整理', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需检查原网页', completed: '已保存', partial: '处理未完成', failed: '失败', paused: '已暂停', cancelled: '已停止', interrupted: '可继续' };
 const active = ['queued', 'reading', 'downloading', 'waiting_processing', 'processing', 'uploading', 'saving'];
@@ -36,7 +36,16 @@ async function runQueueAction(action) {
 }
 const element = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
 function message(text, error = false) { $('message').textContent = text || ''; $('message').hidden = !text; $('message').classList.toggle('error', error); }
-async function request(action, input) { const response = await api.request(action, input); if (!response.ok) { message(response.error, true); throw Error(response.error); } return response.result; }
+async function request(action, input) {
+  const response = await api.request(action, input);
+  if (!response.ok) {
+    message(response.error, true);
+    const error = Error(response.error);
+    error.code = response.code;
+    throw error;
+  }
+  return response.result;
+}
 function button(label, callback, cls = 'text') { const b = element('button', cls, label); b.type = 'button'; b.addEventListener('click', () => Promise.resolve().then(callback).catch(() => {})); return b; }
 const reportLinks = job => (job?.pages || []).map(page => button(page.name + ' ↗', () => request('open-page', { id: job.id, report: page.key })));
 function setExpanded(value) { expanded = value; $('expanded').hidden = !value; $('expand').textContent = value ? '收起选项 ⌃' : '展开选项 ⌄'; $('expand').setAttribute('aria-expanded', String(value)); void api.request('expand', { expanded: value }); if (value && activePanel === 'destination') void loadWorkspaces().catch(() => {}); }
@@ -58,8 +67,8 @@ function showOptions(options) { $('vision').checked = options.vision && options.
   for (const id of ['transcribe', 'compress']) $(id).checked = options[id]; $('delete-local').checked = !options.keepLocal; $('quality').value = options.quality;
   for (const input of $('type-options').querySelectorAll('input')) input.checked = options.types.includes(input.value); }
 async function refresh() {
-  const first = !state; state = await request('state');
-  if (first) { chosen = state.settings.destination; showOptions(state.settings); $('shortcut-input').value = state.settings.shortcut; $('browser-port').value = state.settings.browserPort; $('browser-path').value = state.settings.browserExecutable; $('browser-profile').value = state.settings.browserProfile || ''; $('proxy').value = state.settings.proxy; }
+  const next = await request('state'), first = !state; state = next;
+  if (first) { chosen = state.defaultDestination ?? state.settings.destination; showOptions(state.settings); $('shortcut-input').value = state.settings.shortcut; $('browser-port').value = state.settings.browserPort; $('browser-path').value = state.settings.browserExecutable; $('browser-profile').value = state.settings.browserProfile || ''; $('proxy').value = state.settings.proxy; }
   $('shortcut').textContent = state.settings.shortcut.replace('CommandOrControl', navigator.platform.includes('Mac') ? '⌘' : 'Ctrl').replaceAll('+', ' ');
   $('destination-pill').textContent = chosen ? (chosen.workspaceName ? chosen.workspaceName + ' / ' : '') + chosen.label + ' ⌄' : '选择工作区、数据库或页面 ⌄';
   $('queue-state').textContent = state.active ? state.active + ' 个任务处理中' : '支持链接与本地路径，原始内容优先';
@@ -80,14 +89,23 @@ async function refresh() {
   renderFavorites(); renderTasks(cards);
   if (selectedJob) renderSelection(state.jobs.find(j => j.id === selectedJob));
 }
-async function loadWorkspaces() {
-  if ($('workspace').dataset.loaded) return;
+function ensureState() {
+  if (state) return Promise.resolve();
+  return initialRefresh ??= refresh().finally(() => { initialRefresh = undefined; });
+}
+function loadWorkspaces() {
+  if ($('workspace').dataset.loaded) return Promise.resolve();
+  return workspaceLoad ??= populateWorkspaces().finally(() => { workspaceLoad = undefined; });
+}
+async function populateWorkspaces() {
+  await ensureState();
   const data = await request('workspaces'), select = $('workspace'); select.replaceChildren(element('option', '', '选择工作区'));
   select.options[0].value = '';
   for (const item of data.workspaces) { const option = element('option', '', item.name + (item.readOnly ? '（只读）' : '')); option.value = item.id; option.disabled = item.readOnly; select.append(option); }
   select.value = chosen?.workspaceId || (Object.hasOwn(data, 'autoSelectWorkspaceId') ? data.autoSelectWorkspaceId : data.workspaces.find(w => !w.readOnly)?.id) || ''; select.dataset.loaded = '1';
   if (data.selectionHint) $('destinations').replaceChildren(element('p', 'hint', data.selectionHint));
   if (select.value) await searchDestinations();
+  else updateDestinationSelection();
 }
 async function searchDestinations(more = false) {
   const version = ++searchVersion;
@@ -136,7 +154,13 @@ async function submit({ preview, extraction, includeVision }) {
   const options = { ...readOptions(), extraction };
   const video = await request('video-hint', { input }).catch(() => false);
   options.vision = ['style', 'both'].includes(extraction.mode) || includeVision || !video && options.vision;
-  const result = await request('create', { input, options, preview });
+  if (!preview) message('正在核对 Notion 保存位置…');
+  let result;
+  try { result = await request('create', { input, options, preview }); }
+  catch (error) {
+    if (error.code === 'COLLECTION_DESTINATION') { setPanel('destination'); setExpanded(true); }
+    throw error;
+  }
   const pending = result.jobs.filter(job => job.status !== 'completed');
   const waiting = pending.find(job => ['awaiting_selection', 'needs_login'].includes(job.status));
   if ($('links').value === input) $('links').value = '';
@@ -282,7 +306,7 @@ $('wechat-yuanbao').addEventListener('click', () => void request('login', { site
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && !document.querySelector('dialog[open]')) api.request('hide'); });
 async function openPrompts() {
   if ($('collect').disabled || $('prompt-dialog').open) return;
-  if (!state) await refresh();
+  await ensureState();
   $('prompt-form').reset(); $('extraction-extra').open = false;
   updateExtractionChoices();
   await api.request('expand', { expanded: true });
@@ -290,7 +314,7 @@ async function openPrompts() {
 }
 async function openRedistill(source) {
   if ($('redistill-dialog').open) return;
-  if (!state) await refresh();
+  await ensureState();
   redistillSource = source; $('redistill-form').reset();
   $('redistill-source').textContent = source.title || source.directory;
   await api.request('expand', { expanded: true });
@@ -364,6 +388,6 @@ $('save-selected').addEventListener('click', () => {
 });
 $('reread').addEventListener('click', () => void request('reread', { id: selectedJob }).then(refresh).catch(() => {}));
 $('task-search').addEventListener('input', () => state && renderTasks()); $('status-filter').addEventListener('change', () => state && renderTasks());
-api.onChange(() => { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => void refresh().catch(() => {}), 150); });
+api.onChange(() => { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => void (state ? refresh() : ensureState()).catch(() => {}), 150); });
 api.onShow(({ expanded: showExpanded }) => { setExpanded(showExpanded); $('links').focus(); });
-void refresh().then(() => { $('links').focus(); return accounts(); }).catch(() => {});
+void ensureState().then(() => { $('links').focus(); return accounts(); }).catch(() => {});

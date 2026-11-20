@@ -45,16 +45,26 @@ try {
   ] };
   await page.addInitScript(data => {
     window._collectionCalls = []; window._collectionFixture = data;
+    const coldStart = location.search === '?cold-start', target = data.settings.destination;
+    const initialState = coldStart ? new Promise(resolve => { window._releaseInitialState = resolve; }) : Promise.resolve();
+    if (coldStart) { data.defaultDestination = data.settings.favorites[0]; data.settings.destination = null; }
     window.collection = { request: async (action, input = {}) => {
       window._collectionCalls.push({ action, input });
       let result = {};
-      if (action === 'state') result = window._collectionFixture;
-      if (action === 'workspaces') result = { workspaces: [{ id: data.settings.destination.workspaceId, name: 'openClaw' }], unavailable: [] };
-      if (action === 'destinations') result = { results: [data.settings.destination, { ...data.settings.destination, id: '44444444-4444-4444-8444-444444444444', label: '视频笔记', kind: 'page' }], cursors: {}, hasMore: false };
+      if (action === 'state') {
+        await initialState;
+        result = window._collectionFixture;
+      }
+      if (action === 'workspaces') result = { workspaces: [
+        ...(coldStart ? [{ id: '55555555-5555-4555-8555-555555555555', name: '其他工作区' }] : []),
+        { id: target.workspaceId, name: 'openClaw' }
+      ], unavailable: [] };
+      if (action === 'destinations') result = { results: [target, { ...target, id: '44444444-4444-4444-8444-444444444444', label: '视频笔记', kind: 'page' }], cursors: {}, hasMore: false };
       if (action === 'accounts') result = [{ id: 'douyin', name: '抖音', state: 'valid' }, { id: 'xiaohongshu', name: '小红书', state: 'valid' }, { id: 'bilibili', name: 'B站', state: 'missing' }, { id: 'youtube', name: 'YouTube', state: 'deferred' }, { id: 'tiktok', name: 'TikTok', state: 'unknown', message: '网络暂时不可用，可在收集时继续检查。' }, { id: 'x', name: 'X', state: 'deferred' }, { id: 'wechat', name: '微信视频号', state: 'link' }];
       if (action === 'video-hint') result = /\.(?:mp4|mov|mkv|webm|avi|flv)\b|bilibili\.com\/video|b23\.tv|youtube\.com|youtu\.be|douyin|xiaohongshu\.com\/explore/i.test(String(input.input || ''));
       if (action === 'create') {
-        const page = { id: data.settings.destination.id };
+        if (window._destinationFailure) return { ok: false, code: 'COLLECTION_DESTINATION', error: '无法访问所选保存位置。Notion API 返回 HTTP 404。' };
+        const page = { id: input.options.destination.id };
         result = data.duplicate ? { jobs: [{ id: 'completed-fixture', status: 'completed', existing: true, page }] } : { jobs: [{ id: 'created-fixture' }] };
         if (data.duplicate) data.latestCompletion = { id: 'completed-fixture', page };
       }
@@ -268,6 +278,33 @@ try {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, name + ' must fit the window at ' + width + 'px');
     }
   }
+  const reopened = page;
+  await reopened.goto(pathToFileURL(path.join(project, 'src/collection/ui/index.html')).href + '?cold-start');
+  await reopened.waitForFunction(() => typeof window._releaseInitialState === 'function');
+  await reopened.evaluate(() => window._showCollection({ expanded: true }));
+  await reopened.evaluate(async () => { await new Promise(resolve => setTimeout(resolve, 100)); window._releaseInitialState(); });
+  await reopened.locator('.favorite-chip[aria-pressed="true"]').waitFor({ timeout: 5000 });
+  await reopened.waitForFunction(() => document.getElementById('workspace').dataset.loaded);
+  assert.equal(await reopened.locator('#workspace').inputValue(), workspaceId, 'opening directly into expanded options must search the workspace of the restored favorite');
+  const initialSearches = (await reopened.evaluate(() => window._collectionCalls)).filter(call => call.action === 'destinations');
+  assert.deepEqual(initialSearches.map(call => call.input.workspaceId), [workspaceId]);
+  await reopened.locator('#settings-tab-options').click();
+  const retainedLink = 'https://example.com/retained-input';
+  await reopened.evaluate(() => { window._destinationFailure = true; });
+  await reopened.locator('#links').fill(retainedLink);
+  await reopened.locator('#collect').click();
+  await reopened.locator('#prompt-save').click();
+  await reopened.getByText('无法访问所选保存位置。Notion API 返回 HTTP 404。', { exact: true }).waitFor();
+  assert.equal(await reopened.locator('#links').inputValue(), retainedLink);
+  assert.equal(await reopened.locator('#settings-tab-destination').getAttribute('aria-selected'), 'true');
+  assert.equal(await reopened.locator('.favorite-chip[aria-pressed="true"]').count(), 1);
+  await reopened.evaluate(() => { window._destinationFailure = false; });
+  await reopened.locator('#collect').click();
+  await reopened.locator('#prompt-save').click();
+  await reopened.getByText('已加入后台队列，可以收起窗口继续工作。', { exact: true }).waitFor();
+  assert.equal(await reopened.locator('#links').inputValue(), '');
+  const submissions = (await reopened.evaluate(() => window._collectionCalls)).filter(call => call.action === 'create');
+  assert.deepEqual(submissions.map(call => call.input.options.destination), [destination, destination]);
   fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ extractor: { nodes: doc.nodes.length, fullTextCharacters: doc.nodes.at(-1).text.length, orderVerified: true }, renderer: { errors, droppedWindowsAndMacPaths: true, duplicateDropsIgnored: true, unavailablePathsPreserveInput: true, fileDropsDoNotSubmitOrNavigate: true, perTaskVisionOverride: true, editableTemplates: true, mixedLocalInput: true, emptyHistoryHidden: true, destinationAndFavoriteSelection: true, keyboardTabs: true, fullCardCheckboxes: true, localFolderAndTaskRedistillation: true, redistillationDoesNotRecollect: true, downloadedWaitingState: true, responsiveWidths: [480, 580, 620, 820] }, screenshots: ['compact.png', 'file-dragover.png', 'file-paths.png', 'prompts.png', 'expanded.png', 'options.png', 'accounts.png', 'advanced.png', 'redistill.png', 'waiting-processing.png'] }, null, 2));
   console.log('Collection browser extraction and UI checks passed. Screenshots: ' + output);
 } finally { await browser.close(); }

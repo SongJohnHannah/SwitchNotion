@@ -9,7 +9,8 @@ const require = createRequire(import.meta.url);
 const { CollectionService } = require('../src/collection/service.cjs');
 const { CollectionMedia } = require('../src/collection/media.cjs');
 const { normalizeDocument, preferences } = require('../src/collection/model.cjs');
-const { renderDocument } = require('../src/collection/notion.cjs');
+const { CollectionNotion, renderDocument } = require('../src/collection/notion.cjs');
+const { MacCollectionNotion } = require('../src/compat/macos-collection-notion.cjs');
 const { ProviderRouter } = require('../src/provider.cjs');
 const { transcribeGpuFile } = require('../src/speech/windows-operator/module/src/speech/gpu-file.cjs');
 const parent = path.resolve(import.meta.dirname, '../.notion-switch');
@@ -35,6 +36,72 @@ async function idle(service) { for (let n = 0; n < 400; n++) { if (!service.acti
 async function until(check) { for (let n = 0; n < 600; n++) { if (check()) return; await sleep(5); } throw Error('collection stage did not start'); }
 function gate() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 const sourceDocument = url => normalizeDocument({ title: '队列样片', url, nodes: [{ kind: 'video', url: url + '/video.mp4' }] });
+
+test('direct collection checks the saved target after restart on Windows and Mac', async t => {
+  for (const [platform, Notion] of [['Windows', CollectionNotion], ['Mac', MacCollectionNotion]]) await t.test(platform, async t => {
+    const f = fixture(t), target = f.destination;
+    await f.service.configure({ destination: target, favorites: [target] });
+    await f.service.close();
+    const reads = [];
+    let outcome = 404;
+    const router = { prepare: async (_signal, workspaceId) => {
+      assert.equal(workspaceId, target.workspaceId);
+      if (outcome === 'missing') return { workspaces: [], unavailable: [] };
+      return { workspaces: [{ id: workspaceId, cfg: { readOnly: false }, client: {
+        open: () => ({ execute: async (name, args) => {
+          reads.push([name, args.page_id]);
+          if (outcome) throw Object.assign(Error('Notion API 返回 HTTP ' + outcome + '。'), { status: outcome });
+          return { title: '资料收集' };
+        } }), request: async () => ({ bot: {} })
+      } }], unavailable: [] };
+    } };
+    let inspections = 0;
+    const reopened = new CollectionService({ root: f.root, binaries: { status: () => ({}) }, media: {},
+      notion: new Notion({ root: f.root, router }), browser: { inspect: async () => { inspections++; throw Error('合成测试不读取原网页'); } } });
+    try {
+      assert.equal(reopened.status().settings.destination.id, target.id);
+      const submit = () => reopened.request('create', { input: 'https://example.com/retained-input' });
+      const inaccessible = await submit();
+      assert.equal(inaccessible.ok, false, 'do not accept collection to an inaccessible saved target');
+      assert.equal(inaccessible.code, 'COLLECTION_DESTINATION');
+      assert.match(inaccessible.error, /HTTP 404/);
+      assert.deepEqual(reads, [['read_page_info', target.id]]);
+      assert.equal(reopened.jobs.size, 0);
+      assert.equal(inspections, 0);
+      assert.deepEqual(reopened.status().settings.favorites.map(item => item.id), [target.id]);
+
+      outcome = 'missing';
+      const disconnected = await submit();
+      assert.equal(disconnected.code, 'COLLECTION_DESTINATION');
+      assert.match(disconnected.error, /目标工作区未连接/);
+      assert.equal(reopened.jobs.size, 0);
+
+      outcome = undefined;
+      assert.equal((await submit()).ok, true, 'the same verified destination can be used after access is restored');
+      await idle(reopened);
+    } finally { await reopened.close(); }
+  });
+});
+
+test('a single existing favorite is restored and remembered for both update and rollback builds', async t => {
+  const f = fixture(t);
+  await f.service.configure({ destination: null, favorites: [f.destination] });
+  await f.service.close();
+  let checks = 0;
+  const reopened = new CollectionService({ root: f.root, binaries: { status: () => ({}) }, media: {},
+    browser: { inspect: async () => { throw Error('合成测试不读取原网页'); } }, notion: { verifyTarget: async target => {
+      assert.deepEqual(target, f.destination);
+      if (++checks === 1) throw Error('Notion API 连接失败；请检查网络后重试。');
+    } } });
+  try {
+    assert.deepEqual((await reopened.request('state')).result.defaultDestination, f.destination);
+    const result = await reopened.request('create', { input: 'https://example.com/restored-favorite' });
+    assert.equal(result.ok, true);
+    assert.equal(checks, 2, 'retry a transient Notion read once');
+    assert.deepEqual(JSON.parse(fs.readFileSync(reopened.settingsFile, 'utf8')).settings.destination, f.destination);
+    await idle(reopened);
+  } finally { await reopened.close(); }
+});
 
 test('retry refreshes legacy Douyin notes and reuses matching image assets while retaining a source-repair checkpoint', async t => {
   const url = 'https://www.douyin.com/note/1234567890123456789';

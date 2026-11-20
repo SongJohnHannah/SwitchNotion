@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { assertDistributionFiles, localDeepSeekKeys } from './package-safety.mjs';
 import { planWindowsGpuAssets, copyWindowsGpuAssets, hashAsset, assertNewWindowsStage } from './package-windows-gpu.mjs';
 const project = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const runtimeScripts = ['asar.mjs', 'native-fs.mjs', 'desktop-compat.mjs', 'runtime-update.mjs', 'runtime-health.mjs', 'source-discovery.mjs', 'find-notion.mjs', 'bootstrap-windows.ps1', 'launch.ps1', 'restart-windows-runtime.ps1', 'launch-lock.mjs', 'prepare-desktop.mjs', 'start-desktop.mjs', 'open-notion.mjs', 'open-settings.mjs', 'open-collection.mjs', 'open-update.mjs', 'update-helper.mjs', 'client-update-helper.mjs', 'client-tests.mjs', 'login-helper.cjs', 'check-windows.mjs', 'check-meeting-summary.mjs'];
+const runtimeScripts = ['asar.mjs', 'native-fs.mjs', 'desktop-compat.mjs', 'runtime-update.mjs', 'runtime-health.mjs', 'source-discovery.mjs', 'find-notion.mjs', 'bootstrap-windows.ps1', 'launch.ps1', 'restart-windows-runtime.ps1', 'launch-lock.mjs', 'prepare-desktop.mjs', 'start-desktop.mjs', 'open-notion.mjs', 'open-settings.mjs', 'open-collection.mjs', 'open-update.mjs', 'update-helper.mjs', 'client-update-helper.mjs', 'client-tests.mjs', 'login-helper.cjs', 'check-windows.mjs', 'check-meeting-summary.mjs', 'build-notion-caddy.mjs'];
 
 const publicFiles = ['LICENSE', 'THIRD-PARTY-NOTICES.md', 'WINDOWS-使用说明.md', 'MAC-USAGE.md', 'package.json', 'NotionSwitch 启动.vbs', 'NotionSwitch 配置.vbs', 'NotionSwitch 更新.vbs',
   ...documentation.map(name => 'docs/' + name)];

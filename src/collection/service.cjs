@@ -3,6 +3,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const { EventEmitter } = require('node:events');
+const { setTimeout: delay } = require('node:timers/promises');
 const { defaults, preferences, destination, extractUrls, selectedNodes, mediaKinds, atomicJson, hash, layoutNodes } = require('./model.cjs');
 const { CollectionBinaries } = require('./binaries.cjs');
 const { CollectionBrowser } = require('./browser.cjs');
@@ -28,7 +29,7 @@ const safeError = (error, prefix = '处理失败') => {
   return /^[\u3400-\u9fff]|^(Notion|DeepSeek|媒体|收集|资源|目标|此|本地|请选择|请先|无法|没有|下载)/.test(detail) ? detail : prefix + '：' + detail;
 };
 class CollectionService extends EventEmitter {
-  constructor({ root, downloadsDirectory = path.join(os.homedir(), 'Downloads'), speech, provider, webSources, binaries, browser, media, notion, extraction } = {}) {
+  constructor({ root, downloadsDirectory = path.join(os.homedir(), 'Downloads'), speech, provider, webSources, binaries, browser, media, notion, extraction, mediaUpload } = {}) {
     super(); this.root = root; this.downloadsDirectory = downloadsDirectory; this.directory = path.join(root, 'collection'); this.settingsFile = path.join(this.directory, 'settings.local.json');
     this.settings = preferences(); this.jobs = new Map(); this.queue = []; this.processingQueue = []; this.downloading = null; this.running = null;
     this.downloadTask = null; this.processingTask = null; this.mediaIdleTask = null; this.pauseTask = null; this.pausing = false; this.closed = false; this.lastError = ''; this.preparing = false;
@@ -45,7 +46,7 @@ class CollectionService extends EventEmitter {
       ollama: new OllamaService(), ocr: ['win32', 'darwin'].includes(process.platform) ? new MediaOcr({ root }) : undefined });
     this.notion = notion || (process.platform === 'darwin'
       ? new (require('../compat/macos-collection-notion.cjs').MacCollectionNotion)({ root })
-      : new CollectionNotion({ root }));
+      : new CollectionNotion({ root, mediaUpload }));
     this.extractor = extraction || new CollectionExtraction({ provider, webSources });
     const jobsDirectory = path.join(this.directory, 'jobs');
     if (fs.existsSync(jobsDirectory)) for (const name of fs.readdirSync(jobsDirectory)) {
@@ -75,6 +76,10 @@ class CollectionService extends EventEmitter {
     }
   }
   get active() { return new Set([...this.queue, ...this.processingQueue, ...[this.running?.id, this.downloading?.id].filter(Boolean)]).size + Number(this.preparing); }
+  get defaultDestination() {
+    const { destination, favorites } = this.settings;
+    return destination || (favorites.length === 1 ? favorites[0] : null);
+  }
   busy(id) { return this.running?.id === id || this.downloading?.id === id || this.queue.includes(id) || this.processingQueue.includes(id); }
   location(job) {
     if (!/^[a-f\d-]{36}$/i.test(job.id)) throw Error('收集任务标识无效。');
@@ -91,7 +96,8 @@ class CollectionService extends EventEmitter {
     atomicJson(path.join(this.location(job), 'job.json'), job); this.emit('change');
   }
   status() {
-    return { active: this.active, pausing: this.pausing, lastError: this.lastError, configError: this.configError || '', settings: structuredClone(this.settings), defaultDownloadDirectory: path.join(this.downloadsDirectory, 'NotionSwitch'),
+    return { active: this.active, pausing: this.pausing, lastError: this.lastError, configError: this.configError || '', settings: structuredClone(this.settings),
+      defaultDestination: structuredClone(this.defaultDestination), defaultDownloadDirectory: path.join(this.downloadsDirectory, 'NotionSwitch'),
       binaries: this.binaries.status(), preparing: this.preparing, latestCompletion: this.latestCompletion ? { ...this.latestCompletion, canRedistill: this.canRedistill(this.jobs.get(this.latestCompletion.id)) } : null,
       jobs: [...this.jobs.values()].filter(job => !job.historyCleared && (this.settings.keepHistory || job.status !== 'completed')).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(job => ({ id: job.id, url: job.url, local: !!job.localSource, title: job.document?.title || job.url,
         status: job.status, canDelete: deletableStates.has(job.status) && !this.busy(job.id), canRedistill: this.canRedistill(job), message: job.message, createdAt: job.createdAt, page: job.page, pages: job.pages, options: job.options, warnings: job.warnings || [],
@@ -99,20 +105,50 @@ class CollectionService extends EventEmitter {
         selectedIds: job.selectedIds, preview: job.document ? { incomplete: job.document.incomplete, requiresLogin: job.document.requiresLogin,
           nodes: job.document.nodes.map(n => ({ id: n.id, kind: n.kind, text: n.text.slice(0, 600), caption: n.caption.slice(0,600), level: n.level })) } : null })) };
   }
+  writeSettings(settings) {
+    atomicJson(this.settingsFile, { version: 2, platform: process.platform, settings });
+    this.settings = settings;
+  }
   async configure(input) {
     if (this.configError) throw Error(this.configError);
     const next = preferences(input, this.settings);
     if (Object.hasOwn(input, 'destination') && next.destination) await this.notion.verifyTarget(next.destination, AbortSignal.timeout(30000));
-    this.settings = next; atomicJson(this.settingsFile, { version: 2, platform: process.platform, settings: next });
+    this.writeSettings(next);
     if (!next.keepHistory) for (const job of this.jobs.values()) if (job.status === 'completed' && !job.historyCleared) this.forgetCompleted(job);
     this.emit('settings'); this.emit('change'); return { message: '内容收集设置已保存，新任务使用新设置。', settings: next };
   }
-  async create({ input, options = {}, preview = false, force = false }) {
+  async verifySubmissionTarget(target) {
+    const signal = AbortSignal.timeout(30000);
+    const verify = () => this.notion.verifyTarget(target, signal, { checkUploadLimit: false });
+    try { await verify(); }
+    catch (error) {
+      const transient = [502, 503, 504].includes(error?.status) || /^Notion API (?:连接失败|返回 HTTP 50[234]\b)/.test(error?.message);
+      if (signal.aborted || !transient) throw error;
+      await delay(400, undefined, { signal });
+      await verify();
+    }
+  }
+  async create({ input, options = {}, preview = false, force = false }, { verifyDestination = false } = {}) {
     if (this.configError) throw Error(this.configError);
-    const chosen = preferences(options, this.settings);
+    const chosen = preferences(options, verifyDestination ? { ...this.settings, destination: this.defaultDestination } : this.settings);
     if (!preview && !chosen.destination) throw Error('请先选择保存到哪个 Notion 数据库或父页面。');
     const results = [];
     const sources = parseInputs(input).map(source => source.kind === 'local' ? { source: describeLocal(source.path) } : source);
+    // The window clears the submitted input as soon as this request succeeds.
+    // Check the restored target first, and let the worker verify it again before saving.
+    if (verifyDestination && !preview) {
+      try { await this.verifySubmissionTarget(chosen.destination); }
+      catch (error) {
+        throw Object.assign(Error('无法访问所选保存位置。' + safeError(error)), { code: 'COLLECTION_DESTINATION' });
+      }
+    }
+    if (this.closed) throw Error('应用正在退出，请重新打开快捷收集后提交。');
+    const target = chosen.destination;
+    if (verifyDestination && !preview && !this.settings.destination && this.settings.favorites.some(item =>
+      item?.id === target.id && item.workspaceId === target.workspaceId && item.kind === target.kind && item.dataSourceId === target.dataSourceId)) {
+      // Older builds also read settings.destination after an update rollback.
+      this.writeSettings({ ...this.settings, destination: target });
+    }
     for (const entry of sources) {
       const url = entry.url || 'local-media:' + entry.source.signature;
       const key = dedupeKey(url, chosen);
@@ -574,7 +610,7 @@ class CollectionService extends EventEmitter {
       else if (action === 'configure') result = await this.configure(input.settings);
       else if (action === 'workspaces') result = await this.notion.workspaces(AbortSignal.timeout(45000));
       else if (action === 'destinations') result = await this.notion.search(input.workspaceId, input.query, input.cursors, AbortSignal.timeout(60000));
-      else if (action === 'create') result = await this.create(input);
+      else if (action === 'create') result = await this.create(input, { verifyDestination: true });
       else if (action === 'redistill') result = this.redistill(input);
       else if (action === 'select') result = this.select(input.id, input);
       else if (action === 'cancel') result = this.cancel(input.id);
@@ -589,7 +625,7 @@ class CollectionService extends EventEmitter {
       else if (action === 'create-library') result = await this.createLibrary(input.workspaceId, input.parentId);
       else if (action === 'video-hint') result = isLikelyVideoInput(input.input);
       return { ok: true, result };
-    } catch (error) { return { ok: false, error: safeError(error) }; }
+    } catch (error) { return { ok: false, error: safeError(error), ...(error?.code === 'COLLECTION_DESTINATION' ? { code: error.code } : {}) }; }
   }
   close() {
     if (this.closed) return this.closing;

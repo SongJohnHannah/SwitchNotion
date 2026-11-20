@@ -117,24 +117,37 @@ class NativeWriter {
     const controller = new AbortController(), active = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     const job = { threadId: info.threadId, userId: info.userId, spaceId: info.spaceId, clientMessageId: uuid(input.clientMessageId), requestHash: info.requestHash, turnId: randomUUID(), mode: info.mode, state: 'running' };
     this.jobs.set(job.threadId, job); this.controllers.set(job.threadId, controller);
+    const startedAt = performance.now();
     this.log({ type: 'native-writer-started', selectionType: input.threadContext.selection.type });
     const { t, assistant } = this.transcript(job, info.question);
     const work = async () => {
+      let modelStartedAt, firstTextAt;
       try {
-        this.save(); active.throwIfAborted(); const store = this.storeFactory(info, meta), snapshot = await this.snapshot(info, store, active);
-        const config = this.provider.config(info.modelSelection); if (config.mode !== 'deepseek') edit.fail('请先配置 DeepSeek。');
-        const skills = await resolveSurfaceSkills({ store, userId: info.userId, spaceId: info.spaceId, surface: 'editor', signal: active });
+        this.save(); active.throwIfAborted(); const store = this.storeFactory(info, meta);
+        const config = this.provider.config(info.modelSelection);
+        if (config.mode !== 'deepseek') edit.fail('请先配置 DeepSeek。');
+        const [snapshot, skills] = await Promise.all([
+          this.snapshot(info, store, active),
+          resolveSurfaceSkills({ store, userId: info.userId, spaceId: info.spaceId, surface: 'editor', signal: active })
+        ]);
+        active.throwIfAborted();
         let output = '';
+        modelStartedAt = performance.now();
         for await (const delta of this.provider.generate({ config, messages: edit.messages(info, snapshot, skills?.message), signal: active })) {
-          active.throwIfAborted(); output += delta; if (output.length > (info.mode === 'continue' ? 16000 : 64000)) edit.fail('生成内容过长，请缩小范围。');
+          active.throwIfAborted();
+          if (!output && delta) firstTextAt = performance.now();
+          output += delta; if (output.length > (info.mode === 'continue' ? 16000 : 64000)) edit.fail('生成内容过长，请缩小范围。');
           assistant.content[0].text = info.mode === 'continue' && !/^\s*(?:\{|```)/.test(output) ? output : '正在编辑所选文字…';
           this.events.emit(t, [{ op: 'put', entity: assistant }]);
         }
         active.throwIfAborted(); if (!output.trim()) edit.fail('模型没有返回内容，请检查配置后重试。');
         const parsed = edit.parseOutput(output, info, snapshot);
         if (parsed.clarification) { job.state = 'clarification'; job.message = parsed.clarification; this.finishEvents(job, job.message); this.save(); return; }
-        await skills?.verify?.(); active.throwIfAborted();
-        const latest = await store.records(snapshot.fingerprints.map(([id]) => id), active); active.throwIfAborted();
+        const [latest] = await Promise.all([
+          store.records(snapshot.fingerprints.map(([id]) => id), active),
+          skills?.verify()
+        ]);
+        active.throwIfAborted();
         if (snapshot.fingerprints.some(([id, fingerprint]) => hash(latest.get(id) || null) !== fingerprint)) edit.fail('正文、位置或权限在生成期间发生变化，请重新编辑。');
         const plan = edit.buildPlan(info, snapshot, parsed);
         plan.changes = plan.changes.filter(change => !change.before || change.fields.some(name => {
@@ -158,7 +171,10 @@ class NativeWriter {
         this.finishEvents(job, job.state === 'submitted' ? '编辑的提交结果尚未确定，请核对页面；不会重复提交。' : job.message || job.output, true);
         this.save();
       } finally {
-        this.controllers.delete(job.threadId); this.log({ type: 'native-writer-ended', state: job.state });
+        controller.abort(); this.controllers.delete(job.threadId);
+        this.log({ type: 'native-writer-ended', state: job.state,
+          prepareMs: modelStartedAt === undefined ? undefined : Math.round(modelStartedAt - startedAt),
+          firstTextMs: firstTextAt === undefined ? undefined : Math.round(firstTextAt - startedAt) });
       }
     };
     job.promise = work(); await job.promise; delete job.promise;

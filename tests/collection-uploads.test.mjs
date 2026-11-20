@@ -59,10 +59,15 @@ test('large official uploads use bounded multipart requests, resume confirmed pa
   const file = path.join(root, 'video.mp4'), handle = fs.openSync(file, 'w'); fs.ftruncateSync(handle, 21 * 1024 ** 2); fs.closeSync(handle);
   const id = randomUUID(), calls = [], parts = [];
   let uploaded = false;
-  const notion = new CollectionNotion({ root, fetchImpl: async (url, options) => {
+  const notion = new CollectionNotion({ root, mediaUpload: async (url, options) => {
+    assert.equal(url, 'https://api.notion.com/v1/file_uploads/' + id + '/send');
+    assert.equal(options.headers.authorization, 'Bearer synthetic-key');
+    parts.push({ number: Number(options.body.get('part_number')), bytes: options.body.get('file').size });
+    return Response.json({ status: 'pending' });
+  }, fetchImpl: async (url, options) => {
     assert.ok(url.startsWith('https://api.notion.com/v1/file_uploads'));
     assert.equal(options.headers.authorization, 'Bearer synthetic-key'); calls.push({ url, method: options.method });
-    if (url.endsWith('/send')) { parts.push({ number: Number(options.body.get('part_number')), bytes: options.body.get('file').size }); return Response.json({ status: 'pending' }); }
+    assert.ok(!url.endsWith('/send'), 'only the file bytes are sent over media direct');
     if (url.endsWith('/complete')) { uploaded = true; return Response.json({ id, status: 'uploaded' }); }
     if (options.method === 'POST') { const body = JSON.parse(options.body); assert.equal(body.mode, 'multi_part'); assert.equal(body.number_of_parts, 3); return Response.json({ id, status: 'pending' }); }
     return Response.json({ id, status: uploaded ? 'uploaded' : 'pending' });

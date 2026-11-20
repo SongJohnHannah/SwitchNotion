@@ -20,7 +20,7 @@ function timestamp(value) {
 }
 
 function empty() {
-  return { bypassVpn: false, autoIp: false, bestIp: '', checkedAt: '' };
+  return { bypassVpn: false, autoIp: false, smartDirect: false, bestIp: '', checkedAt: '' };
 }
 
 function read(root) {
@@ -28,13 +28,15 @@ function read(root) {
   if (!fs.existsSync(file)) return empty();
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return { bypassVpn: data?.bypassVpn === true, autoIp: data?.autoIp === true, bestIp: ipv4(data?.bestIp), checkedAt: timestamp(data?.checkedAt) };
+    return { bypassVpn: data?.bypassVpn === true, autoIp: data?.autoIp === true, smartDirect: data?.smartDirect === true,
+      bestIp: ipv4(data?.bestIp), checkedAt: timestamp(data?.checkedAt) };
   } catch { return empty(); }
 }
 
 function save(root, value = {}) {
   const previous = read(root);
   const settings = { bypassVpn: value.bypassVpn === true, autoIp: value.autoIp === true,
+    smartDirect: value.smartDirect === undefined ? previous.smartDirect : value.smartDirect === true,
     bestIp: value.bestIp === undefined ? previous.bestIp : ipv4(value.bestIp),
     checkedAt: value.checkedAt === undefined ? previous.checkedAt : timestamp(value.checkedAt) };
   fs.writeFileSync(path.join(root, fileName), JSON.stringify(settings, null, 2) + '\n', { mode: 0o600, flush: true });

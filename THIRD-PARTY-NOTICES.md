@@ -7,6 +7,7 @@ NotionSwitch 自写源代码采用根目录的 MIT 许可证。
 - `assets/notion.icns` 和 `assets/notion.ico` 来自官方 Notion 客户端，仅用于用户要求的本地 Switch Notion 启动图标；Notion 图标与品牌不适用本项目 MIT 许可，不代表 Notion 官方产品或认可。
 - 仓库研究目录中缓存的公开 Notion 前端脚本属于第三方材料，不纳入项目 MIT 授权，也不放入迁移包。
 - API Key、Notion 登录资料、本机聊天历史和运行日志属于本机用户数据，不放入干净的迁移包。
+- Notion 直连加速使用本机构建的 [Caddy 2.11.7](https://github.com/caddyserver/caddy/tree/v2.11.7) 和 [caddy-l4 0.1.3](https://github.com/mholt/caddy-l4/tree/v0.1.3)，两者均为 Apache-2.0；其 Go 依赖分别适用各自原始许可。组件按需在本机准备，不作为项目 MIT 代码重新授权，也不随当前迁移包附带。
 - Windows 离线语音使用项目内锁定的 faster-whisper/CTranslate2 路线；自定义 Native CT2 DLL/PYD、配套 Python 包与许可位于 `assets/windows-gpu-native/`。完整 Python、Whisper 模型、CUDA 用户态库及 FFmpeg/ffprobe 保存在本机 `.notion-switch/windows-gpu-operator/`，不进入 Git；Windows 分发可按资源锁携带已安装的这些文件及其原许可。Apple Silicon 继续原来的 CPU 引擎，不携带或加载 Windows GPU 资源。项目 MIT 许可证不替代各组件、模型及 NVIDIA 库的原有许可。
 - 网页自动兼容检查内置 Acorn 8.16.0（MIT）、eslint-scope 8.4.0、esrecurse 4.3.0 和 estraverse 5.3.0（BSD-2-Clause）；完整许可位于 `src/compat/VENDOR-LICENSES.txt`。构建依赖不随运行包分发。解析与作用域检查在本机执行，不执行待检查的脚本，不上传账号或页面内容。
 - 公开网页正文读取内置 parse5 7.2.1（MIT）与 entities 4.5.0（BSD-2-Clause）。完整许可位于 `src/vendor/parse5/LICENSE` 与 `src/vendor/entities/LICENSE`；来源、固定版本和文件校验值见 `src/vendor/web-parser.manifest.json`。仅调整 parse5 对 entities 的相对模块引用，不执行网页脚本。

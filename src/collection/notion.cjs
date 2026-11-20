@@ -193,7 +193,7 @@ async function matchesWrittenBlock(session, current, expected, submitted) {
 const mimeFor = file => ({ '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif', '.avif': 'image/avif',
   '.svg': 'image/svg+xml', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm', '.mkv': 'video/x-matroska', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.opus': 'audio/ogg', '.aac': 'audio/aac', '.aif': 'audio/aiff', '.aiff': 'audio/aiff', '.flac': 'audio/flac' }[path.extname(file).toLowerCase()] || 'application/octet-stream');
 class CollectionNotion {
-  constructor({ root, router = new NotionRouter({ root }), fetchImpl = fetch } = {}) { Object.assign(this, { root, router, fetchImpl }); }
+  constructor({ root, router, fetchImpl = fetch, mediaUpload } = {}) { Object.assign(this, { root, router: router || new NotionRouter({ root, fetchImpl }), fetchImpl, mediaUpload }); }
   async workspaces(signal) { const { workspaces, unavailable } = await this.router.prepare(signal); return { workspaces: workspaces.map(w => ({ id: w.id, name: w.name, readOnly: w.cfg.readOnly })), unavailable }; }
   async workspace(workspaceId, signal) {
     const id = uuid(workspaceId);
@@ -234,11 +234,12 @@ class CollectionNotion {
     }
     return { results, cursors: next, hasMore: Object.values(next).some(Boolean) };
   }
-  async verifyTarget(target, signal) {
+  async verifyTarget(target, signal, { checkUploadLimit = true } = {}) {
     const c = await this.connect(target, signal);
     if (target.kind === 'page') await c.session.execute('read_page_info', { page_id: target.id });
     else { const schema = await c.session.execute('read_database', target.dataSourceId ? { data_source_id: target.dataSourceId } : { database_id: target.id });
       if (!target.dataSourceId && schema.data_source_ids?.length !== 1) throw Error('此数据库包含多个数据源，请通过搜索结果选择具体的数据源。'); }
+    if (!checkUploadLimit) return;
     const me = await c.client.request(c.cfg, 'GET', 'users/me', null, signal);
     const limit = me.bot?.workspace_limits?.max_file_upload_size_in_bytes;
     return { limit: Number.isSafeInteger(limit) && limit > 0 ? limit : 5 * 1024 ** 2 };
@@ -321,11 +322,13 @@ class CollectionNotion {
   }
   async upload(file, job, state, save, signal) {
     const c = await this.connect(job.options.destination, signal, 'collection:' + job.id);
+    const mime = mimeFor(file.path);
     const request = async (method, endpoint, body) => {
       const form = body instanceof FormData;
-      const response = await this.fetchImpl('https://api.notion.com/v1/' + endpoint, { method, signal, redirect: 'error',
+      const send = form && this.mediaUpload && /^(?:image|video)\//.test(mime) ? this.mediaUpload : this.fetchImpl;
+      const response = await send('https://api.notion.com/v1/' + endpoint, { method, signal, redirect: 'error',
         headers: { authorization: 'Bearer ' + c.cfg.key, 'Notion-Version': '2026-03-11', ...(!form && body ? { 'content-type': 'application/json' } : {}) },
-        ...(body ? { body: form ? body : JSON.stringify(body) } : {}) });
+        ...(body ? { body: form ? body : JSON.stringify(body) } : {}) }, this.fetchImpl);
       if (!response.ok) { await response.body?.cancel(); throw Error(`Notion 附件上传返回 HTTP ${response.status}，本地文件已保留。`); }
       return response.json();
     };
@@ -339,7 +342,7 @@ class CollectionNotion {
     }
     const bytes = fs.statSync(file.path).size, partSize = 10 * 1024 ** 2, multipart = bytes > 20 * 1024 ** 2;
     if (!state.id) {
-      const created = await request('POST', 'file_uploads', { mode: multipart ? 'multi_part' : 'single_part', filename: path.basename(file.path), content_type: mimeFor(file.path), ...(multipart ? { number_of_parts: Math.ceil(bytes / partSize) } : {}) });
+      const created = await request('POST', 'file_uploads', { mode: multipart ? 'multi_part' : 'single_part', filename: path.basename(file.path), content_type: mime, ...(multipart ? { number_of_parts: Math.ceil(bytes / partSize) } : {}) });
       state.id = created.id; state.parts = []; state.uploaded = false; save();
     }
     const handle = fs.openSync(file.path, 'r');
@@ -347,7 +350,7 @@ class CollectionNotion {
       for (let offset = 0, part = 1; offset < bytes; offset += multipart ? partSize : bytes, part++) {
         if (state.parts?.includes(part)) continue;
         signal?.throwIfAborted(); const buffer = Buffer.alloc(Math.min(multipart ? partSize : bytes, bytes - offset)); fs.readSync(handle, buffer, 0, buffer.length, offset);
-        const form = new FormData(); form.set('file', new Blob([buffer], { type: mimeFor(file.path) }), path.basename(file.path));
+        const form = new FormData(); form.set('file', new Blob([buffer], { type: mime }), path.basename(file.path));
         if (multipart) form.set('part_number', String(part));
         await request('POST', 'file_uploads/' + state.id + '/send', form);
         state.parts ||= []; state.parts.push(part); save();

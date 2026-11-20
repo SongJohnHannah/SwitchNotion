@@ -19,8 +19,8 @@ function createAuxiliaryWindow(options) {
   try { const window = new BrowserWindow(options); settingsContents.add(window.webContents); return window; }
   finally { constructingSettings = false; }
 }
-function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () => false, getCompatibility = () => ({}), speech, webSources, memory, extensions, backgroundAgents, transfer }) {
-  const service = new SettingsService({ root, webSources, memory, extensions, backgroundAgents, transfer });
+function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () => false, getCompatibility = () => ({}), speech, webSources, memory, extensions, backgroundAgents, transfer, mediaUpload, mediaFallback }) {
+  const service = new SettingsService({ root, webSources, memory, extensions, backgroundAgents, transfer, mediaFallback });
   app.on('will-quit', () => service.webSources.close());
   speech ||= new SpeechSettings({ root, isBusy });
   const mediaTranscripts = new MediaTranscript({ root, speech: speech.provider, isBusy: () => speech.preparing,
@@ -30,7 +30,7 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
   service.mediaTranscripts = mediaTranscripts;
   app.on('will-quit', () => mediaTranscripts.job?.controller.abort());
   app.on('will-quit', () => mediaTranscripts.ocr.preparation?.controller.abort());
-  const collection = setupCollection({ root, speech: speech.provider, webSources: service.webSources, platform, openSettings: () => open(), createWindow: options => {
+  const collection = setupCollection({ root, speech: speech.provider, webSources: service.webSources, platform, mediaUpload, openSettings: () => open(), createWindow: options => {
     constructingSettings = true;
     try { const auxiliary = new BrowserWindow(options); settingsContents.add(auxiliary.webContents); return auxiliary; }
     finally { constructingSettings = false; }
@@ -140,7 +140,8 @@ function setupSettings({ root, platform = createDesktopPlatform(), isBusy = () =
       }
     }
   }).catch(() => {});
-  return { open, openNotion, speech, collection, mediaTranscripts, updateStatus: () => updates.request('update.status'), isLoginSyncing: () => login.syncing || updates.updating, status: () => {
+  return { open, openNotion, speech, collection, mediaTranscripts, updateStatus: () => updates.request('update.status'), isLoginSyncing: () => login.syncing || updates.updating,
+    deepseekThinking: input => service.request(Object.hasOwn(input, 'effort') ? 'deepseek.thinking.save' : 'deepseek.thinking', input), status: () => {
     const opened = !!window && !window.isDestroyed(), prefs = opened ? window.webContents.getLastWebPreferences() : null;
     return { available: true, open: opened, ...(prefs ? { contextIsolation: prefs.contextIsolation, sandbox: prefs.sandbox, nodeIntegration: prefs.nodeIntegration } : {}) };
   } };
