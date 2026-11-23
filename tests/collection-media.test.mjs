@@ -5,6 +5,20 @@ import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 const require = createRequire(import.meta.url), {CollectionMedia} = require('../src/collection/media.cjs'), {createSpeechPlatform} = require('../src/speech/platform.cjs');
+test('video production samples the opening every half second and still covers the remainder', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'collection-opening-frames-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const seeks = [];
+  const media = new CollectionMedia({ binaries: { find: () => 'ffmpeg' }, runImpl: async (_exe, args) => { seeks.push(Number(args[args.indexOf('-ss') + 1])); } });
+  const asset = { kind: 'video', path: path.join(directory, 'video.mp4'), duration: 164 };
+  const frames = await media.extractFrames(asset, { style: true });
+  assert.deepEqual(frames.slice(0, 40).map(frame => frame.time), Array.from({ length: 40 }, (_, index) => index / 2));
+  assert.deepEqual(seeks, frames.map(frame => frame.time));
+  assert.ok(frames.at(-1).time >= 160 && frames.at(-1).time < asset.duration);
+  assert.equal(frames.length, 58);
+  assert.deepEqual((await media.extractFrames({ ...asset, duration: .53 }, { style: true })).map(frame => frame.time), [0]);
+  assert.deepEqual((await media.extractFrames(asset)).map(frame => frame.time), Array.from({ length: 6 }, (_, index) => index * 164 / 6));
+});
 test('a local reference image is copied without audio or video probing', async t => {
   const { describeLocal } = require('../src/collection/local-media.cjs');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'collection-image-'));

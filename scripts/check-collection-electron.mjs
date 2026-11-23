@@ -35,6 +35,18 @@ app.whenReady().then(async()=>{
  await new Promise(r=>setTimeout(r,600));
  const state=await window.webContents.executeJavaScript("window.collection.request('state')");assert.equal(state.ok,true);assert.equal(state.result.settings.vision,true);assert.equal(state.result.defaultDownloadDirectory,path.join(app.getPath('downloads'),'NotionSwitch'));
  assert.ok(globalShortcut.isRegistered(collection.service.settings.shortcut));
+ const heldShortcut='CommandOrControl+Alt+Shift+F11';
+ assert.equal(globalShortcut.register(heldShortcut,()=>{}),true);
+ await collection.service.configure({shortcut:heldShortcut});
+ assert.match(collection.status().shortcutError,/全局快捷键注册失败/);
+ await new Promise(r=>setTimeout(r,300));
+ assert.match(await window.webContents.executeJavaScript("document.getElementById('message').textContent"),/全局快捷键注册失败/);
+ globalShortcut.unregister(heldShortcut);
+ await collection.open(false);
+ assert.equal(globalShortcut.isRegistered(heldShortcut),true);
+ assert.equal(collection.status().shortcutError,'');
+ await new Promise(r=>setTimeout(r,300));
+ assert.equal(await window.webContents.executeJavaScript("document.getElementById('message').hidden"),true);
  await window.webContents.executeJavaScript("window.collection.request('configure',{settings:{vision:false}})");
  const changed=await window.webContents.executeJavaScript("window.collection.request('state')");assert.equal(changed.result.settings.vision,false);
  const selectDirectory=dialog.showOpenDialog;let folderDialog;

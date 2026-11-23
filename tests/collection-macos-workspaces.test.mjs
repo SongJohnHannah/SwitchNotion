@@ -79,18 +79,48 @@ test('the production selector leaves pending Mac choices explicit while preservi
   const source = fs.readFileSync(new URL('../src/collection/ui/collection.js', import.meta.url), 'utf8');
   const functionText = source.slice(source.indexOf('async function populateWorkspaces()'), source.indexOf('async function searchDestinations('));
   const id = randomUUID();
-  for (const mac of [false, true]) {
+  for (const [mac, multiple] of [[false, false], [true, false], [false, true]]) {
     let searches = 0;
     const select = { options: [], dataset: {}, value: '', replaceChildren(option) { this.options = [option]; }, append(option) { this.options.push(option); } };
     const hints = { replaceChildren(node) { this.node = node; } };
-    const data = { workspaces: [{ id, name: '合成连接', readOnly: false }], ...(mac ? { autoSelectWorkspaceId: '', selectionHint: '选择后核验' } : {}) };
+    const workspaces = [{ id, name: '合成连接', readOnly: false }];
+    if (multiple) workspaces.push({ id: randomUUID(), name: '另一工作区', readOnly: false });
+    const data = { workspaces, ...(mac ? { autoSelectWorkspaceId: '', selectionHint: '选择后核验' } : {}) };
     const run = vm.runInNewContext('(' + functionText + ')', { chosen: null, $: id => id === 'workspace' ? select : hints,
       element: (tag, cls, text) => ({ tag, cls, text }), ensureState: async () => {}, request: async () => data,
       searchDestinations: async () => { searches++; }, updateDestinationSelection: () => {} });
     await run();
-    assert.equal(select.options.length, 2); assert.equal(select.options[1].value, id); assert.equal(select.options[1].disabled, false);
-    assert.equal(select.value, mac ? '' : id); assert.equal(searches, mac ? 0 : 1);
+    assert.equal(select.options.length, workspaces.length + 1); assert.equal(select.options[1].value, id); assert.equal(select.options[1].disabled, false);
+    assert.equal(select.value, mac || multiple ? '' : id); assert.equal(searches, mac || multiple ? 0 : 1);
     assert.equal(hints.node?.text, mac ? '选择后核验' : undefined);
+  }
+});
+
+test('the destination list reuses a unique or remembered database and leaves ambiguous results explicit', async () => {
+  const source = fs.readFileSync(new URL('../src/collection/ui/collection.js', import.meta.url), 'utf8');
+  const functionText = source.slice(source.indexOf('async function searchDestinations('), source.indexOf('function updateDestinationSelection('));
+  const workspaceId = randomUUID();
+  const database = { workspaceId, id: randomUUID(), dataSourceId: randomUUID(), kind: 'database', label: '现有资料库' };
+  const page = { workspaceId, id: randomUUID(), kind: 'page', label: '父页面' };
+  const otherSource = { ...database, dataSourceId: randomUUID() };
+  for (const [databases, nextCursor, expected, favorites = []] of [
+    [[database], null, [database]],
+    [[database, otherSource], null, []],
+    [[database], 'more-databases', []],
+    [[database, otherSource], 'more-databases', [otherSource], [otherSource]]
+  ]) {
+    const selected = [], calls = [], node = () => ({ dataset: {}, append() {}, replaceChildren() {}, setAttribute() {} });
+    const controls = { workspace: { value: workspaceId }, 'destination-search': { value: '' } };
+    const run = vm.runInNewContext(functionText + '\nsearchDestinations;', {
+      searchVersion: 0, cursors: {}, destinationResults: [], chosen: null, previousDestination: null,
+      state: { settings: { favorites } },
+      $: id => controls[id] ??= node(), element: node, button: node, updateDestinationSelection() {},
+      request: async (action, input) => { calls.push([action, input.workspaceId]); return { results: [page, ...databases], cursors: { page: 'more-pages', database: nextCursor }, hasMore: true }; },
+      choose: async item => selected.push(item), message() {}
+    });
+    await run();
+    assert.deepEqual(selected, expected);
+    assert.deepEqual(calls, [['destinations', workspaceId]]);
   }
 });
 

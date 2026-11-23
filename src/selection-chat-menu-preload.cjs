@@ -10,6 +10,7 @@ if (process.isMainFrame && process.contextIsolated && location.protocol === 'htt
   const pageSelector = '.notion-page-content, [data-block-id]';
   const request = 'notion-switch:selection-chat';
   const hostAttribute = 'data-notion-switch-selection-chat-host';
+  const transcriptSelector = '[data-notion-switch-selection-chat-transcript]';
   const handoff = 'notionSwitchSelectionChat';
   const containsTarget = (element, target) => target instanceof Node && element?.contains(target);
   let anchor, item, quote, frame, pending, chat;
@@ -31,6 +32,13 @@ if (process.isMainFrame && process.contextIsolated && location.protocol === 'htt
     if (!inPage(selection.anchorNode) || !inPage(selection.focusNode)) return '';
     const text = selection.toString();
     return text.trim() ? text : '';
+  }
+
+  function selectedTranscript() {
+    const transcript = chat?.host.querySelector(transcriptSelector);
+    const selection = transcript && window.getSelection();
+    return selection && !selection.isCollapsed && containsTarget(transcript, selection.anchorNode) &&
+      containsTarget(transcript, selection.focusNode) ? selection.toString() : '';
   }
 
   function writerItem() {
@@ -141,7 +149,7 @@ if (process.isMainFrame && process.contextIsolated && location.protocol === 'htt
   }
 
   function mountChat(host, token, text) {
-    const state = { token, host, ready: false, running: false, allowCommand: false };
+    const state = { token, host, ready: false, pendingReply: null, paused: false, transitioning: false, allowCommand: false };
     chat = state;
     host.title = text;
     state.update = (type, value) => {
@@ -154,15 +162,24 @@ if (process.isMainFrame && process.contextIsolated && location.protocol === 'htt
       if (chat !== state || !state.ready || !state.allowCommand || event.target !== host) return;
       let data;
       try { data = JSON.parse(event.detail); } catch { return; }
-      if (data?.token !== token) return;
-      if (data.action === 'stop' && state.running) {
+      if (data?.token !== token || state.transitioning) return;
+      if (data.action === 'pause' || data.action === 'resume') {
+        const reply = state.pendingReply;
+        if (!reply || state.paused === (data.action === 'pause')) return;
         state.allowCommand = false;
+        state.transitioning = true;
         event.preventDefault();
-        try { await ipcRenderer.invoke(request, 'stop', token); }
-        catch { state.update('status', { message: '无法停止，请重试。' }); }
+        try {
+          const result = await ipcRenderer.invoke(request, data.action, token);
+          if (result.ok && state.pendingReply === reply) {
+            state.paused = data.action === 'pause';
+            state.update('phase', { paused: state.paused });
+          }
+        } catch { state.update('status', { message: '无法切换回复状态，请重试。' }); }
+        finally { state.transitioning = false; }
         return;
       }
-      if (data.action !== 'send' || state.running || typeof data.question !== 'string' || !data.question.trim()) return;
+      if (data.action !== 'send' || (state.pendingReply && !state.paused) || typeof data.question !== 'string' || !data.question.trim()) return;
       const question = data.question.trim();
       state.allowCommand = false;
       if (question.length > state.maxQuestion) {
@@ -170,12 +187,25 @@ if (process.isMainFrame && process.contextIsolated && location.protocol === 'htt
         return;
       }
       event.preventDefault();
-      state.running = true;
+      if (state.pendingReply) {
+        state.transitioning = true;
+        try {
+          await ipcRenderer.invoke(request, 'stop', token);
+          await state.pendingReply;
+        } catch {
+          state.update('retry', { error: '无法发送追问，请重试。', question });
+          return;
+        } finally { state.transitioning = false; }
+        if (chat !== state) return;
+      }
+      state.paused = false;
       state.update('start', { question });
       let result;
-      try { result = await ipcRenderer.invoke(request, 'send', token, question); }
-      catch { result = { ok: false, error: '回复中断，请重试。' }; }
-      state.running = false;
+      state.pendingReply = ipcRenderer.invoke(request, 'send', token, question)
+        .catch(() => ({ ok: false, error: '回复中断，请重试。' }));
+      result = await state.pendingReply;
+      state.pendingReply = null;
+      state.paused = false;
       state.update('finish', { ...result, question });
     });
     void ipcRenderer.invoke(request, 'open', token, text).then(result => {
@@ -185,8 +215,10 @@ if (process.isMainFrame && process.contextIsolated && location.protocol === 'htt
     }, () => state.update('open', { ok: false, error: '无法开始聊天，请重新选择文字后重试。' }));
   }
 
-  ipcRenderer.on('notion-switch:selection-chat-delta', (_event, token, delta) => {
-    if (chat?.token === token && chat.running) chat.update('delta', { delta });
+  ipcRenderer.on('notion-switch:selection-chat-delta', (_event, token, payload) => {
+    if (chat?.token !== token || !chat.pendingReply) return;
+    if (typeof payload === 'string') chat.update('delta', { delta: payload });
+    else if (payload?.type === 'thinking') chat.update('thinking');
   });
 
   function allowChatCommand(event) {
@@ -207,18 +239,37 @@ if (process.isMainFrame && process.contextIsolated && location.protocol === 'htt
       openSelectionChat(event);
       return;
     }
+    // Let Chromium issue the real copy event without forwarding the shortcut to the editor.
+    if (event.isTrusted && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey &&
+        event.key.toLowerCase() === 'c' && selectedTranscript()) {
+      event.stopImmediatePropagation();
+      return;
+    }
     if ((event.key === 'Enter' || event.key === ' ') && !event.isComposing && event.keyCode !== 229) allowChatCommand(event);
   }, true);
 
   function preserveSelection(event) {
+    if (chat && event.isTrusted && event.type === 'pointerdown') chat.replyPointer = undefined;
     if ((pending && event.isTrusted) || containsTarget(item, event.target)) {
       event.preventDefault();
       event.stopImmediatePropagation();
+    } else if (event.isTrusted && event.button === 0 && containsTarget(chat?.host.querySelector(transcriptSelector), event.target)) {
+      // The native editor may suppress pointer events to retain composer focus.
+      // Keep the browser's default text-selection action for chat replies.
+      event.stopImmediatePropagation();
+      if (event.type === 'pointerdown') chat.replyPointer = [event.clientX, event.clientY];
     }
   }
   window.addEventListener('pointerdown', preserveSelection, true);
   window.addEventListener('mousedown', preserveSelection, true);
   window.addEventListener('pointerdown', allowChatCommand, true);
+  window.addEventListener('copy', event => {
+    const text = event.isTrusted && event.clipboardData && selectedTranscript();
+    if (!text) return;
+    event.clipboardData.setData('text/plain', text);
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
   function openSelectionChat(event) {
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -237,7 +288,11 @@ if (process.isMainFrame && process.contextIsolated && location.protocol === 'htt
       event.preventDefault();
       event.stopImmediatePropagation();
     } else if (containsTarget(item, event.target)) openSelectionChat(event);
-    else allowChatCommand(event);
+    else if (event.isTrusted && event.detail > 0 && chat?.replyPointer &&
+        containsTarget(chat.host.querySelector(transcriptSelector), event.target) &&
+        Math.hypot(event.clientX - chat.replyPointer[0], event.clientY - chat.replyPointer[1]) > 4) {
+      event.stopImmediatePropagation();
+    } else allowChatCommand(event);
   }, true);
 
   document.addEventListener('selectionchange', schedule);

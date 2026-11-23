@@ -1,7 +1,7 @@
 'use strict';
 const api = window.collection, $ = id => document.getElementById(id);
 let state, chosen, expanded = false, activePanel = 'destination', selectedJob, destinationResults = [], cursors = {}, searchTimer, refreshTimer, searchVersion = 0, checkingAccounts = false;
-let redistillSource, queueAction, initialRefresh, workspaceLoad;
+let redistillSource, queueAction, initialRefresh, workspaceLoad, previousDestination, destinationVersion = 0;
 const names = { paragraph: '正文', heading: '标题', quote: '引用', list: '列表', code: '代码', divider: '分隔', link: '链接', image: '图片', video: '视频', audio: '音频' };
 const statuses = { queued: '等待下载', reading: '识别中', downloading: '下载中', waiting_processing: '等待整理', processing: '转写／识别', uploading: '上传中', saving: '保存中', awaiting_selection: '待选择', needs_login: '需检查原网页', completed: '已保存', partial: '处理未完成', failed: '失败', paused: '已暂停', cancelled: '已停止', interrupted: '可继续' };
 const active = ['queued', 'reading', 'downloading', 'waiting_processing', 'processing', 'uploading', 'saving'];
@@ -36,10 +36,10 @@ async function runQueueAction(action) {
 }
 const element = (tag, cls, text) => { const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node; };
 function message(text, error = false) { $('message').textContent = text || ''; $('message').hidden = !text; $('message').classList.toggle('error', error); }
-async function request(action, input) {
+async function request(action, input, { reportError = true } = {}) {
   const response = await api.request(action, input);
   if (!response.ok) {
-    message(response.error, true);
+    if (reportError) message(response.error, true);
     const error = Error(response.error);
     error.code = response.code;
     throw error;
@@ -67,10 +67,10 @@ function showOptions(options) { $('vision').checked = options.vision && options.
   for (const id of ['transcribe', 'compress']) $(id).checked = options[id]; $('delete-local').checked = !options.keepLocal; $('quality').value = options.quality;
   for (const input of $('type-options').querySelectorAll('input')) input.checked = options.types.includes(input.value); }
 async function refresh() {
-  const next = await request('state'), first = !state; state = next;
+  const next = await request('state'), first = !state, previousError = state?.shortcutError || state?.configError; state = next;
   if (first) { chosen = state.defaultDestination ?? state.settings.destination; showOptions(state.settings); $('shortcut-input').value = state.settings.shortcut; $('browser-port').value = state.settings.browserPort; $('browser-path').value = state.settings.browserExecutable; $('browser-profile').value = state.settings.browserProfile || ''; $('proxy').value = state.settings.proxy; }
   $('shortcut').textContent = state.settings.shortcut.replace('CommandOrControl', navigator.platform.includes('Mac') ? '⌘' : 'Ctrl').replaceAll('+', ' ');
-  $('destination-pill').textContent = chosen ? (chosen.workspaceName ? chosen.workspaceName + ' / ' : '') + chosen.label + ' ⌄' : '选择工作区、数据库或页面 ⌄';
+  showDestination();
   $('queue-state').textContent = state.active ? state.active + ' 个任务处理中' : '支持链接与本地路径，原始内容优先';
   const cards = taskCards(), tasks = taskStatus(cards);
   $('task-status').hidden = !cards.length; $('queue-state').hidden = !!cards.length;
@@ -86,6 +86,7 @@ async function refresh() {
   $('prepare').disabled = state.preparing;
   $('local-directory').textContent = '本地资料保存到：' + (state.settings.outputDirectory || state.defaultDownloadDirectory || '系统下载目录 / NotionSwitch') + ' / 链接标题';
   if (state.shortcutError || state.configError) message(state.shortcutError || state.configError, true);
+  else if (previousError && $('message').textContent === previousError) message('');
   renderFavorites(); renderTasks(cards);
   if (selectedJob) renderSelection(state.jobs.find(j => j.id === selectedJob));
 }
@@ -94,73 +95,142 @@ function ensureState() {
   return initialRefresh ??= refresh().finally(() => { initialRefresh = undefined; });
 }
 function loadWorkspaces() {
+  if (workspaceLoad) return workspaceLoad;
   if ($('workspace').dataset.loaded) return Promise.resolve();
-  return workspaceLoad ??= populateWorkspaces().finally(() => { workspaceLoad = undefined; });
+  return workspaceLoad = populateWorkspaces().finally(() => { workspaceLoad = undefined; });
 }
 async function populateWorkspaces() {
   await ensureState();
-  const data = await request('workspaces'), select = $('workspace'); select.replaceChildren(element('option', '', '选择工作区'));
+  const data = await request('workspaces'), select = $('workspace'), current = select.value;
+  select.replaceChildren(element('option', '', '选择工作区'));
   select.options[0].value = '';
   for (const item of data.workspaces) { const option = element('option', '', item.name + (item.readOnly ? '（只读）' : '')); option.value = item.id; option.disabled = item.readOnly; select.append(option); }
-  select.value = chosen?.workspaceId || (Object.hasOwn(data, 'autoSelectWorkspaceId') ? data.autoSelectWorkspaceId : data.workspaces.find(w => !w.readOnly)?.id) || ''; select.dataset.loaded = '1';
+  const writable = data.workspaces.filter(w => !w.readOnly);
+  const automatic = writable.length === 1 ? (data.autoSelectWorkspaceId ?? writable[0].id) : '';
+  select.value = [current, chosen?.workspaceId, automatic].find(id => writable.some(w => w.id === id)) || ''; select.dataset.loaded = '1';
   if (data.selectionHint) $('destinations').replaceChildren(element('p', 'hint', data.selectionHint));
   if (select.value) await searchDestinations();
   else updateDestinationSelection();
 }
 async function searchDestinations(more = false) {
   const version = ++searchVersion;
-  const workspaceId = $('workspace').value; if (!workspaceId) return;
-  const result = await request('destinations', { workspaceId, query: $('destination-search').value.trim(), cursors: more ? cursors : {} });
+  const workspaceId = $('workspace').value, query = $('destination-search').value.trim(), list = $('destinations');
+  if (!more) {
+    cursors = {}; destinationResults = [];
+    list.replaceChildren(); $('more-destinations').hidden = true;
+  }
+  if (!workspaceId) return;
+  let result;
+  try { result = await request('destinations', { workspaceId, query, cursors }, { reportError: false }); }
+  catch (error) { if (version === searchVersion) message(error.message, true); return; }
   if (version !== searchVersion) return;
   cursors = result.cursors; destinationResults = more ? [...destinationResults, ...result.results] : result.results;
-  const list = $('destinations'); list.replaceChildren();
+  list.replaceChildren();
   if (!destinationResults.length) list.append(element('p', 'hint', '没有找到已授权位置。请在 Notion 目标页面中添加对应连接。'));
-  for (const item of destinationResults) {
+  const databases = destinationResults.filter(item => item.kind === 'database');
+  for (const item of [...databases, ...destinationResults.filter(item => item.kind === 'page')]) {
     const b = button('', () => choose(item), 'destination-item');
     b.dataset.id = item.id; b.dataset.workspaceId = item.workspaceId;
+    if (item.dataSourceId) b.dataset.dataSourceId = item.dataSourceId;
     const indicator = element('span', 'destination-selected', '✓ 已选中'); indicator.setAttribute('aria-hidden', 'true');
     b.append(element('span', 'destination-label', (item.kind === 'database' ? '▦  ' : '▤  ') + item.label), element('small', '', item.kind === 'database' ? '数据库' : '父页面'), indicator); list.append(b);
   }
-  updateDestinationSelection();
   $('more-destinations').hidden = !result.hasMore;
+  if (!chosen && !query) {
+    const favorites = state.settings.favorites.filter(item => item.kind === 'database' && item.workspaceId === workspaceId);
+    const remembered = state.settings.destination?.workspaceId === workspaceId ? state.settings.destination : favorites.length === 1 ? favorites[0] : null;
+    const target = databases.find(item => sameDestination(item, remembered)) || (databases.length === 1 && cursors.database === null ? databases[0] : null);
+    if (target) { await choose(target, previousDestination !== undefined); return; }
+  }
+  updateDestinationSelection();
 }
+const sameDestination = (left, right) => left?.id === right?.id && left?.workspaceId === right?.workspaceId && left?.dataSourceId === right?.dataSourceId;
 function updateDestinationSelection() {
   for (const node of document.querySelectorAll('.destination-item, .favorite-chip')) {
-    const selected = node.dataset.id === chosen?.id && node.dataset.workspaceId === chosen?.workspaceId;
+    const selected = sameDestination(node.dataset, chosen);
     node.classList.toggle('selected', selected); node.setAttribute('aria-pressed', String(selected));
     const indicator = node.querySelector('.destination-selected'); if (indicator) indicator.hidden = !selected;
     const check = node.querySelector('.favorite-check'); if (check) check.hidden = !selected;
   }
   for (const id of ['favorite', 'default-destination', 'open-destination']) $(id).disabled = !chosen;
   $('create-library').disabled = !chosen || chosen.kind !== 'page' || chosen.workspaceId !== $('workspace').value;
-  const favorite = state?.settings.favorites.some(item => item.id === chosen?.id && item.workspaceId === chosen?.workspaceId);
+  const favorite = state?.settings.favorites.some(item => sameDestination(item, chosen));
   $('favorite').textContent = favorite ? '★ 已收藏 · 点击取消' : '☆ 收藏当前位置';
 }
-function choose(item) { chosen = item; $('destination-pill').textContent = item.workspaceName + ' / ' + item.label + ' ⌄'; updateDestinationSelection(); void refresh().catch(() => {}); }
+function showDestination() {
+  $('destination-pill').textContent = chosen ? [chosen.workspaceName, chosen.label].filter(Boolean).join(' / ') + ' ⌄' : '选择工作区、数据库或页面 ⌄';
+  $('cancel-destination-change').hidden = previousDestination === undefined;
+}
+async function choose(item, updateTasks = true) {
+  const version = ++destinationVersion;
+  const workspace = $('workspace'), anotherWorkspace = workspace.dataset.loaded && workspace.value !== item.workspaceId;
+  const result = updateTasks ? await request('change-destination', { target: item }) : null;
+  if (version !== destinationVersion) return;
+  chosen = result?.destination || item; previousDestination = undefined;
+  showDestination(); updateDestinationSelection();
+  if (result) {
+    const notes = [result.destination && `已选中已有数据库「${chosen.label}」。`, result.updated && `已更新 ${result.updated} 个未开始上传的任务。`,
+      result.locked && `${result.locked} 个任务已开始上传、写入或关联原页面，继续使用原位置。`,
+      result.duplicates && `${result.duplicates} 个任务在新位置已有相同任务，继续使用原位置。`].filter(Boolean);
+    message(notes.join(' '));
+  }
+  if (anotherWorkspace) {
+    workspace.value = item.workspaceId; $('destination-search').value = '';
+    await searchDestinations();
+  }
+}
+async function changeWorkspace() {
+  clearTimeout(searchTimer);
+  ++destinationVersion;
+  const version = ++searchVersion;
+  if (previousDestination === undefined) previousDestination = chosen ?? null;
+  chosen = null; $('destination-search').value = '';
+  $('destinations').replaceChildren(); $('more-destinations').hidden = true;
+  showDestination(); updateDestinationSelection();
+  message('请选择新工作区的保存位置。尚未开始上传的任务会等待选择。');
+  await request('change-destination', { pending: true });
+  if (version === searchVersion) await searchDestinations();
+}
+async function cancelDestinationChange() {
+  const previous = previousDestination;
+  if (previous === undefined) return;
+  clearTimeout(searchTimer); ++searchVersion;
+  const version = ++destinationVersion;
+  await request('change-destination', { target: null });
+  if (version !== destinationVersion) return;
+  chosen = previous; previousDestination = undefined;
+  $('workspace').value = chosen?.workspaceId || ''; $('destination-search').value = '';
+  showDestination(); updateDestinationSelection(); message('已取消切换，任务将继续处理。');
+  await searchDestinations();
+}
 function renderFavorites() {
   const root = $('favorites'); root.replaceChildren();
   if (!state.settings.favorites.length) root.append(element('div', 'favorites-empty', '收藏常用位置，下次点击卡片即可切换。'));
   for (const item of state.settings.favorites) {
     const b = button('', () => choose(item), 'favorite-chip'), copy = element('span', 'favorite-copy'), check = element('span', 'favorite-check', '✓');
     b.dataset.id = item.id; b.dataset.workspaceId = item.workspaceId; check.setAttribute('aria-hidden', 'true');
+    if (item.dataSourceId) b.dataset.dataSourceId = item.dataSourceId;
     const star = element('span', 'favorite-star', '★'); star.setAttribute('aria-hidden', 'true');
     copy.append(element('strong', '', item.label), element('small', '', item.workspaceName)); b.append(star, copy, check); root.append(b);
   }
   updateDestinationSelection();
 }
 async function submit({ preview, extraction, includeVision }) {
-  if (!preview && !chosen) { setPanel('destination'); setExpanded(true); message('请先搜索并选择保存位置。', true); return; }
+  if (!preview && !chosen && previousDestination === undefined) await loadWorkspaces().catch(() => {});
   const input = $('links').value;
-  const options = { ...readOptions(), extraction };
   const video = await request('video-hint', { input }).catch(() => false);
+  if (!preview && !chosen) { setPanel('destination'); setExpanded(true); message('请先搜索并选择保存位置。', true); return; }
+  const options = { ...readOptions(), extraction };
   options.vision = ['style', 'both'].includes(extraction.mode) || includeVision || !video && options.vision;
   if (!preview) message('正在核对 Notion 保存位置…');
+  const version = destinationVersion;
   let result;
   try { result = await request('create', { input, options, preview }); }
   catch (error) {
     if (error.code === 'COLLECTION_DESTINATION') { setPanel('destination'); setExpanded(true); }
     throw error;
   }
+  if (result.destination && version === destinationVersion) chosen = result.destination;
   const pending = result.jobs.filter(job => job.status !== 'completed');
   const waiting = pending.find(job => ['awaiting_selection', 'needs_login'].includes(job.status));
   if ($('links').value === input) $('links').value = '';
@@ -179,12 +249,16 @@ function renderSelection(job) {
 function renderTasks(cards = taskCards()) {
   const filter = $('status-filter').value, query = $('task-search').value.trim().toLowerCase();
   const jobs = cards.filter(j => (filter === 'all' || filter === 'active' && active.includes(j.status) || filter === 'completed' && j.status === 'completed' || filter === 'attention' && !active.includes(j.status) && j.status !== 'completed') &&
-    [j.title, j.url, j.options?.destination?.label].join(' ').toLowerCase().includes(query));
+    [j.title, j.url, j.options?.destination?.workspaceName, j.options?.destination?.label].join(' ').toLowerCase().includes(query));
   $('tasks-section').hidden = !cards.length;
   const root = $('tasks'); root.replaceChildren(); if (!jobs.length) root.append(element('div', 'empty', '当前筛选下没有内容'));
   for (const job of jobs.slice(0, 100)) { const card = element('article', 'task ' + job.status), title = element('div', 'task-title', job.title); title.append(element('span', 'badge', statuses[job.status] || job.status));
     card.append(title);
-    if (job.options) card.append(element('div', 'task-meta', (job.local ? '本地文件' : new URL(job.url).hostname) + ' · ' + (job.options.destination?.label || '尚未选择位置')));
+    if (job.options) {
+      const target = job.options.destination;
+      const location = target ? [target.workspaceName, target.label].filter(Boolean).join(' / ') : '尚未选择位置';
+      card.append(element('div', 'task-meta', (job.local ? '本地文件' : new URL(job.url).hostname) + ' · ' + location));
+    }
     card.append(element('div', 'task-message', job.message));
     if (['partial', 'needs_login'].includes(job.status) && job.warnings.length) {
       const reasons = element('ul', 'task-warnings');
@@ -287,7 +361,6 @@ linksInput.addEventListener('drop', event => {
     message(additions.length ? '已添加 ' + additions.length + ' 个文件路径，点击「提取」选择方向。' : '这些文件路径已在输入框中。');
   } catch (error) { message(error.message || '无法读取文件路径，请直接粘贴完整路径。', true); }
 });
-$('links').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('capture-form').requestSubmit(); } });
 $('expand').addEventListener('click', () => setExpanded(!expanded)); $('destination-pill').addEventListener('click', () => { setPanel('destination'); setExpanded(true); }); $('hide').addEventListener('click', () => api.request('hide'));
 $('task-status').addEventListener('click', () => { $('tasks-section').open = true; setExpanded(true); $('tasks-section').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
 $('pause-all').addEventListener('click', () => void runQueueAction('pause-all'));
@@ -359,16 +432,21 @@ for (const [id, other] of [['vision', 'vision-local'], ['vision-local', 'vision'
 $('last-result').addEventListener('click', () => state.latestCompletion && void request('open-page', { id: state.latestCompletion.id }).catch(() => {}));
 $('connections').addEventListener('click', () => api.request('settings'));
 $('refresh-workspaces').addEventListener('click', () => { delete $('workspace').dataset.loaded; void loadWorkspaces().catch(() => {}); });
-$('workspace').addEventListener('change', () => void searchDestinations().catch(() => {})); $('search').addEventListener('click', () => void searchDestinations().catch(() => {}));
-$('destination-search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => void searchDestinations().catch(() => {}), 450); });
+$('workspace').addEventListener('change', () => void changeWorkspace().catch(() => {})); $('search').addEventListener('click', () => void searchDestinations().catch(() => {}));
+$('cancel-destination-change').addEventListener('click', () => void cancelDestinationChange().catch(() => {}));
+$('destination-search').addEventListener('input', () => { clearTimeout(searchTimer); ++searchVersion; $('more-destinations').hidden = true; searchTimer = setTimeout(() => void searchDestinations().catch(() => {}), 450); });
 $('more-destinations').addEventListener('click', () => void searchDestinations(true).catch(() => {}));
 $('default-destination').addEventListener('click', () => void request('configure', { settings: { destination: chosen } }).then(() => { message('已设为默认保存位置。'); return refresh(); }).catch(() => {}));
 $('open-destination').addEventListener('click', () => chosen && void request('open-destination', { target: chosen }).catch(() => {}));
 $('create-library').addEventListener('click', () => {
   if (!chosen || chosen.kind !== 'page' || chosen.workspaceId !== $('workspace').value) { message('请先在上方搜索并选择当前工作区中的一个父页面。', true); return; }
-  void request('create-library', { workspaceId: chosen.workspaceId, parentId: chosen.id }).then(result => { chosen = result.destination; message(result.message); return refresh(); }).catch(() => {});
+  const parent = chosen;
+  void request('create-library', { workspaceId: parent.workspaceId, parentId: parent.id }).then(async result => {
+    if (chosen === parent) { await choose(result.destination); message(result.message); }
+    await refresh();
+  }).catch(() => {});
 });
-$('favorite').addEventListener('click', () => { if (!chosen) return; const favorites = state.settings.favorites.filter(d => d.id !== chosen.id || d.workspaceId !== chosen.workspaceId); if (favorites.length === state.settings.favorites.length) favorites.push(chosen); void request('configure', { settings: { favorites } }).then(refresh).catch(() => {}); });
+$('favorite').addEventListener('click', () => { if (!chosen) return; const favorites = state.settings.favorites.filter(d => !sameDestination(d, chosen)); if (favorites.length === state.settings.favorites.length) favorites.push(chosen); void request('configure', { settings: { favorites } }).then(refresh).catch(() => {}); });
 $('save-defaults').addEventListener('click', () => void request('configure', { settings: readOptions() }).then(() => { message('已保存默认收集选项。'); return refresh(); }).catch(() => {}));
 $('choose-directory').addEventListener('click', () => void request('directory').then(result => result.path && request('configure', { settings: { outputDirectory: result.path } })).then(refresh).catch(() => {}));
 $('open-downloads').addEventListener('click', () => void request('open-downloads').catch(() => {}));
@@ -384,7 +462,11 @@ $('save-selected').addEventListener('click', () => {
   if (!job) return;
   const { extraction, vision, visionEngine, denseOcr } = job.options;
   const options = { ...readOptions(), extraction, vision, visionEngine, denseOcr };
-  void request('select', { id: selectedJob, ids: [...$('selection-list').querySelectorAll('input:checked')].map(i => i.value), options, allowPartial: true }).then(refresh).catch(() => {});
+  const version = destinationVersion;
+  void request('select', { id: selectedJob, ids: [...$('selection-list').querySelectorAll('input:checked')].map(i => i.value), options, allowPartial: true }).then(result => {
+    if (result.destination && version === destinationVersion) chosen = result.destination;
+    return refresh();
+  }).catch(() => {});
 });
 $('reread').addEventListener('click', () => void request('reread', { id: selectedJob }).then(refresh).catch(() => {}));
 $('task-search').addEventListener('input', () => state && renderTasks()); $('status-filter').addEventListener('change', () => state && renderTasks());

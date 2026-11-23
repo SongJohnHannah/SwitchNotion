@@ -35,6 +35,7 @@ test('format retry locates an unverified item and keeps it with original evidenc
   } };
   const report = await new CollectionExtraction({ provider, webSources }).run({ document, options: preferences(), analyses: {} }, document.nodes);
   assert.equal(finalCalls, 2);
-  assert.match(report.text, /证据链与底层原理[\s\S]*工具安装方式仍待核实/);
-  assert.doesNotMatch(report.text.split('### 详情｜补充核验')[1], /工具安装方式/);
+  assert.match(report.text, /查看依据[\s\S]*工具安装方式仍待核实/);
+  const verification = report.text.split('### 详情｜补充核验')[1].split('### 详情｜查看依据')[0];
+  assert.doesNotMatch(verification, /工具安装方式/);
 });

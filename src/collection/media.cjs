@@ -20,6 +20,8 @@ const describeVisual = [
   '多帧只能对照各已见状态。连续动作、切点、缓动和听觉特征需要对应证据。看不清的关键细节写「待核实」。',
   '每张图都可描述字幕排版。标为已有本机 OCR 文字的帧只写位置、字形与层级，不抄文字，也不写「OCR 已确认」。其他帧可另列「画面文字」并原样短摘可辨内容。'
 ].join('\n');
+const describeProductionFrames = describeVisual + '\n' +
+  '逐帧记录可用于制作对照的细节：主体的画面锚点与占比、姿势和接触地面的位置、前后景关系、亮光和模糊的位置、字幕原句及同一时间的可读数值。相邻帧分别描述姿态和布局，再指出可以确认的状态差异。平台弹幕、水印与播放器控件若可辨认，勿当作原片字幕。';
 const visionMarker = (frame, index, video, ocrPaths) =>
   `${video ? `关键帧 ${index} · 视频时间 ${frame.time.toFixed(1)} 秒` : `原始图片 ${index}`} · ${ocrPaths.has(frame.frame) ? '已有本机 OCR 文字' : '无本机 OCR 文字'}`;
 class CollectionMedia {
@@ -229,14 +231,23 @@ class CollectionMedia {
   async extractFrames(asset, { signal, maxSide = 1024, style = false, directory = path.join(path.dirname(asset.path), style ? 'style-frames' : 'frames'), times } = {}) {
     fs.mkdirSync(directory, { recursive: true });
     const duration = asset.duration || 0;
-    const count = Math.min(60, Math.max(1, Math.ceil(duration / (style ? 8 : 30)), style ? Math.min(4, Math.ceil(duration)) : 1));
-    times ||= asset.kind === 'video' ? Array.from({ length: count }, (_, i) => Math.max(0, Math.min(duration - .05, (i + (style ? .5 : 0)) * duration / count))) : [0];
+    if (!times && asset.kind === 'video' && style && duration > 0) {
+      const opening = Math.min(duration, 20);
+      const openingTimes = Array.from({ length: Math.ceil(opening * 2) }, (_, index) => index / 2)
+        .filter(time => time === 0 || time <= duration - .05);
+      const remaining = duration - opening;
+      const count = Math.min(60, Math.ceil(remaining / 8));
+      times = [...openingTimes, ...Array.from({ length: count }, (_, index) =>
+        Math.min(duration - .05, opening + (index + .5) * remaining / count)).filter(time => time >= opening)];
+    }
+    const count = Math.min(60, Math.max(1, Math.ceil(duration / 30)));
+    times ||= asset.kind === 'video' ? Array.from({ length: count }, (_, i) => Math.max(0, Math.min(duration - .05, i * duration / count))) : [0];
     const frames = [];
     for (let j = 0; j < times.length; j++) {
       const frame = path.join(directory, 'frame-' + j + '.jpg');
       if (asset.kind === 'image' && /\.svg$/i.test(asset.path) && this.browser?.imageFrame) await this.browser.imageFrame(asset.path, frame, signal);
       else {
-        try { await run(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', ...(asset.kind === 'video' ? ['-ss', String(Math.max(0, times[j]))] : []), ...inputArgs(asset.path),
+        try { await this.runMedia(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', ...(asset.kind === 'video' ? ['-ss', String(Math.max(0, times[j]))] : []), ...inputArgs(asset.path),
           '-frames:v', '1', '-vf', `scale=w='min(iw,${maxSide})':h='min(ih,${maxSide})':force_original_aspect_ratio=decrease`, '-q:v', '3', '-y', frame], { signal, timeout: 60000 }); }
         catch (error) { signal?.throwIfAborted(); if (asset.kind !== 'image' || !this.browser?.imageFrame) throw error; await this.browser.imageFrame(asset.path, frame, signal); }
       }
@@ -350,16 +361,17 @@ class CollectionMedia {
       for (let i = 0; i < frames.length; i += batchSize) {
         const batch = frames.slice(i, i + batchSize);
         progress(`${engine === 'local' ? '本地千问' : 'DeepSeek'} 正在识别${asset.kind === 'video' ? '视频关键帧' : '图片'}：${i + 1} / ${frames.length}`);
-        const options = { ocrPaths, offset: i };
+        const options = { ocrPaths, offset: i, production: style && asset.kind === 'video' };
         descriptions.push(engine === 'local' ? await this.localVision(batch, signal, progress, options) : await this.deepseekVision(config, asset, batch, signal, options));
       }
     }
     const description = descriptions.join('\n\n').trim();
     const note = description && asset.kind === 'video' ? `基于 ${frames.length} 张采样帧描述可见画面。` : !description && ocrText ? '画面描述未生成，已保留本机 OCR 结果。' : '';
-    return { text: description || ocrText || '', note, engine, ...(ocrText ? { ocrText } : {}) };
+    return { text: description || ocrText || '', note, engine, ...(ocrText ? { ocrText } : {}),
+      ...(style && asset.kind === 'video' && describe ? { frameTimes: frames.map(frame => frame.time) } : {}) };
   }
-  async deepseekVision(config, asset, frames, signal, { ocrPaths = new Set(), offset = 0 } = {}) {
-    const content = [{ type: 'text', text: describeVisual }];
+  async deepseekVision(config, asset, frames, signal, { ocrPaths = new Set(), offset = 0, production = false } = {}) {
+    const content = [{ type: 'text', text: production ? describeProductionFrames : describeVisual }];
     for (const [index, frame] of frames.entries()) content.push({ type: 'text', text: visionMarker(frame, offset + index + 1, asset.kind === 'video', ocrPaths) },
       { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + fs.readFileSync(frame.frame).toString('base64') } });
     let text = ''; for await (const delta of this.provider.generate({ config: { ...config, model: 'deepseek-flash', thinking: 'disabled', maxTokens: MAX_OUTPUT_TOKENS }, messages: [
@@ -392,7 +404,7 @@ class CollectionMedia {
   async unloadLocalModel() {
     if (this.ollama) await this.ollama.unload(localVisionProfile.model);
   }
-  async localVision(frames, signal, progress = () => {}, { ocrPaths = new Set(), offset = 0 } = {}) {
+  async localVision(frames, signal, progress = () => {}, { ocrPaths = new Set(), offset = 0, production = false } = {}) {
     let target = localVisionProfile.endpoint;
     if (this.ollama) {
       if (!(await this.ollama.available(signal))) progress('正在启动本机 Ollama 服务…');
@@ -404,7 +416,7 @@ class CollectionMedia {
     try {
       response = await this.fetchImpl(target, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: combined,
         body: JSON.stringify({ model: localVisionProfile.model, stream: false, think: false, options: { temperature: .2, num_predict: 4096, num_ctx: 8192 },
-          messages: [{ role: 'user', content: `${visionSystem}\n\n${describeVisual}\n\n以下标记与图片按顺序一一对应。\n${markers}`,
+          messages: [{ role: 'user', content: `${visionSystem}\n\n${production ? describeProductionFrames : describeVisual}\n\n以下标记与图片按顺序一一对应。\n${markers}`,
             images: frames.map(item => fs.readFileSync(item.frame).toString('base64')) }] }) });
     } catch (error) {
       signal?.throwIfAborted();

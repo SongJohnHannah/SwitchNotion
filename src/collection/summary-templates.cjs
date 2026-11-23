@@ -6,9 +6,10 @@ const evidenceNotes = readTemplate('evidence-notes.md');
 const evidenceLedger = readTemplate('final-evidence-ledger.md');
 const evidenceReview = readTemplate('final-evidence-review.md');
 const styleTutorial = readTemplate('distilled-prompt-tutorial.md');
+const videoGuide = readTemplate('video-remake-guide.md');
 const templates = Object.freeze({
   article: { type: '文章精读', prompt: content },
   content: { type: '内容理解', prompt: content },
   style: { type: '画面与视频制作拆解', prompt: readTemplate('visual-analysis.md') }
 });
-module.exports = { templates, evidenceNotes, evidenceLedger, evidenceReview, styleTutorial };
+module.exports = { templates, evidenceNotes, evidenceLedger, evidenceReview, styleTutorial, videoGuide };

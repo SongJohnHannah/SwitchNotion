@@ -59,7 +59,7 @@ function setupSelectionChat({ ipcMain, isWorkspaceContents, provider }) {
       chat = { token, frame: senderFrame, quote: question, history: [], generation: null };
       const navigation = details => { if (details.isMainFrame && !details.isSameDocument) chat.close(); };
       chat.close = () => {
-        chat.generation?.abort();
+        chat.generation?.controller.abort();
         sender.removeListener('did-start-navigation', navigation);
         sender.removeListener('destroyed', chat.close);
         sender.removeListener('render-process-gone', chat.close);
@@ -73,38 +73,71 @@ function setupSelectionChat({ ipcMain, isWorkspaceContents, provider }) {
     }
     if (!chat || chat.token !== token || chat.frame !== senderFrame) return denied;
     if (action === 'close') { chat.close(); return { ok: true }; }
-    if (action === 'stop') { chat.generation?.abort(); return { ok: true }; }
+    if (action === 'stop') { chat.generation?.controller.abort(); return { ok: true }; }
+    if (action === 'pause' || action === 'resume') {
+      const active = chat.generation;
+      if (!active || active.controller.signal.aborted) return { ok: false };
+      active.paused = action === 'pause';
+      if (!active.paused) {
+        const buffered = active.buffered;
+        active.buffered = '';
+        try { if (buffered) active.emit(buffered); }
+        finally { active.wake?.(); }
+      }
+      return { ok: true };
+    }
     if (action !== 'send' || typeof question !== 'string' || question.length > maxQuestion || !question.trim()) {
       return { ok: false, error: '请输入有效的问题。' };
     }
-    if (chat.generation) return { ok: false, error: '请等当前回复完成，或点击停止。' };
+    if (chat.generation) return { ok: false, error: '请等当前回复完成，或暂停后发送追问。' };
 
     question = question.trim();
-    const generation = new AbortController();
-    chat.generation = generation;
+    const controller = new AbortController(), { signal } = controller;
     let answer = '';
+    const generation = { controller, paused: false, buffered: '', emit(delta) {
+      answer += delta;
+      senderFrame.send(deltaChannel, token, delta);
+    } };
+    chat.generation = generation;
+    const waitForResume = async () => {
+      if (!generation.paused || signal.aborted) return;
+      try {
+        await new Promise(resolve => {
+          generation.wake = resolve;
+          signal.addEventListener('abort', resolve, { once: true });
+        });
+      } finally { signal.removeEventListener('abort', generation.wake); }
+    };
     const remember = () => {
       if (answer.trim()) chat.history = trimHistory([...chat.history, { question, answer }], historyBudget);
     };
     try {
       const config = provider.config();
       if (config.mode !== 'deepseek') return { ok: false, error: '请先在 SwitchNotion 配置中设置 DeepSeek API Key。' };
+      let reportedThinking = false;
       // Only the text provider is wired into this window. No tool definitions,
       // write handlers, Notion credentials, or workspace objects are passed in.
       for await (const delta of provider.generate({
-        config: { ...config, thinking: 'disabled', maxTokens: Math.min(Number(config.maxTokens) || 8192, 8192), allowOutputExpansion: false },
-        messages: messagesFor(chat.quote, chat.history, question), signal: generation.signal
+        config: { ...config, maxTokens: Math.min(Number(config.maxTokens) || 8192, 8192), allowOutputExpansion: false },
+        messages: messagesFor(chat.quote, chat.history, question), signal,
+        onReasoning: chunk => {
+          if (reportedThinking || config.thinking !== 'enabled' || !chunk || signal.aborted) return;
+          reportedThinking = true;
+          senderFrame.send(deltaChannel, token, { type: 'thinking' });
+        }
       })) {
-        generation.signal.throwIfAborted();
-        answer += delta;
-        senderFrame.send(deltaChannel, token, delta);
+        signal.throwIfAborted();
+        if (generation.paused) generation.buffered += delta;
+        else generation.emit(delta);
       }
-      generation.signal.throwIfAborted();
+      await waitForResume();
+      signal.throwIfAborted();
       if (!answer.trim()) return { ok: false, error: 'DeepSeek 没有返回文字，请重试。' };
       remember();
       return { ok: true };
     } catch (error) {
-      if (generation.signal.aborted) { remember(); return { ok: true, stopped: true }; }
+      await waitForResume();
+      if (signal.aborted) { remember(); return { ok: true, stopped: true }; }
       const message = error?.message || '';
       return { ok: false, error: /^DeepSeek |^请先在本地 deepseek-api-key\.txt/.test(message) ? message : 'AI 回复中断，请检查模型配置或网络后重试。' };
     } finally { chat.generation = null; }

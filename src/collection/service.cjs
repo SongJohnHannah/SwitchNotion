@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
-const { EventEmitter } = require('node:events');
+const { EventEmitter, once } = require('node:events');
 const { setTimeout: delay } = require('node:timers/promises');
 const { defaults, preferences, destination, extractUrls, selectedNodes, mediaKinds, atomicJson, hash, layoutNodes } = require('./model.cjs');
 const { CollectionBinaries } = require('./binaries.cjs');
@@ -14,13 +14,14 @@ const { CollectionNotion } = require('./notion.cjs');
 const { CollectionExtraction } = require('./extraction.cjs');
 const { extractionReadiness } = require('./extraction-readiness.cjs');
 const { parseInputs, describeLocal, checkLocal, localDocument, isLikelyVideoInput } = require('./local-media.cjs');
-const { clearCompleted, ownedExport } = require('./history.cjs');
+const { clearCompleted, ownedExport, collectionJournal } = require('./history.cjs');
 const { prepareLocalOutput, writeLocalOutput } = require('./local-output.cjs');
 const { loadLocalCollection, checkRetainedAsset, inside } = require('./reprocessing.cjs');
 const { downloadDetail } = require('./download-error.cjs');
 const activeStates = new Set(['queued', 'reading', 'downloading', 'waiting_processing', 'processing', 'uploading', 'saving']);
 const resumableStates = new Set(['failed', 'partial', 'cancelled', 'interrupted', 'paused', 'needs_login']);
 const deletableStates = new Set([...resumableStates, 'awaiting_selection']);
+const sameDestination = (left, right) => left?.workspaceId === right?.workspaceId && left?.id === right?.id && left?.kind === right?.kind && left?.dataSourceId === right?.dataSourceId;
 const dedupeKey = (url, options) => hash(JSON.stringify([url, options.destination, options.types, options.transcribe, options.vision, options.visionEngine, options.compress, options.quality, options.keepLocal, options.extraction, ...(options.extraction.mode !== 'off' ? ['separate-reports-v1', ...(options.denseOcr ? ['dense-ocr'] : [])] : [])]));
 const safeError = (error, prefix = '处理失败') => {
   const text = [String(error?.message || '操作未完成，请检查连接后重试。'), typeof error?.stderr === 'string' ? error.stderr.trim().slice(-1500) : ''].filter(Boolean).join('；');
@@ -32,6 +33,7 @@ class CollectionService extends EventEmitter {
   constructor({ root, downloadsDirectory = path.join(os.homedir(), 'Downloads'), speech, provider, webSources, binaries, browser, media, notion, extraction, mediaUpload } = {}) {
     super(); this.root = root; this.downloadsDirectory = downloadsDirectory; this.directory = path.join(root, 'collection'); this.settingsFile = path.join(this.directory, 'settings.local.json');
     this.settings = preferences(); this.jobs = new Map(); this.queue = []; this.processingQueue = []; this.downloading = null; this.running = null;
+    this.destinationRevision = 0;
     this.downloadTask = null; this.processingTask = null; this.mediaIdleTask = null; this.pauseTask = null; this.pausing = false; this.closed = false; this.lastError = ''; this.preparing = false;
     if (fs.existsSync(this.settingsFile)) try {
       const saved = JSON.parse(fs.readFileSync(this.settingsFile, 'utf8')), value = saved.settings || saved;
@@ -57,6 +59,8 @@ class CollectionService extends EventEmitter {
         const job = JSON.parse(fs.readFileSync(file, 'utf8'));
         if (job.id !== name || job.version !== 1 || !job.options) continue;
         job.options = preferences({ denseOcr: false, ...job.options, ...(!job.options.extraction ? { extraction: { mode: 'off' } } : {}) });
+        if (job.notionWriteStarted === undefined && (job.page || job.reportWrites || ['uploading', 'saving'].includes(job.status) ||
+          Object.values(job.resources || {}).some(resource => resource.uploads?.some(upload => upload?.id)))) job.notionWriteStarted = true;
         if (job.localSource) { if (!path.isAbsolute(job.localSource.path) || !/^[a-f\d]{64}$/.test(job.localSource.signature)) continue; }
         else extractUrls(job.url);
         if (activeStates.has(job.status)) { job.status = 'interrupted'; job.message = '上次运行已中断，已保留文件和写入进度，可继续。'; }
@@ -74,12 +78,20 @@ class CollectionService extends EventEmitter {
         if (job.status === 'completed' && !this.settings.keepHistory) this.forgetCompleted(job);
       } catch { this.lastError = '部分任务记录无法读取，原文件已保留。'; }
     }
+    const legacy = [...this.jobs.values()].filter(job => job.notionWriteStarted === undefined && job.status !== 'completed');
+    if (legacy.length) {
+      // Older jobs could have submitted a page creation before saving its ID locally.
+      let writes;
+      try { writes = new Set(Array.from(collectionJournal(this.root), entry => entry.jobId)); } catch {}
+      for (const job of legacy) job.notionWriteStarted = !writes || writes.has(job.id);
+    }
   }
   get active() { return new Set([...this.queue, ...this.processingQueue, ...[this.running?.id, this.downloading?.id].filter(Boolean)]).size + Number(this.preparing); }
   get defaultDestination() {
     const { destination, favorites } = this.settings;
     return destination || (favorites.length === 1 ? favorites[0] : null);
   }
+  get destinationChangePending() { return this.workspaceChangePending || this.resolvingDestination !== undefined; }
   busy(id) { return this.running?.id === id || this.downloading?.id === id || this.queue.includes(id) || this.processingQueue.includes(id); }
   location(job) {
     if (!/^[a-f\d-]{36}$/i.test(job.id)) throw Error('收集任务标识无效。');
@@ -117,33 +129,85 @@ class CollectionService extends EventEmitter {
     if (!next.keepHistory) for (const job of this.jobs.values()) if (job.status === 'completed' && !job.historyCleared) this.forgetCompleted(job);
     this.emit('settings'); this.emit('change'); return { message: '内容收集设置已保存，新任务使用新设置。', settings: next };
   }
+  async changeDestination({ pending, target }) {
+    if (pending === true && target === undefined) {
+      this.workspaceChangePending = true;
+      this.resolvingDestination = undefined;
+      this.destinationRevision++;
+      return {};
+    }
+    if (pending !== undefined || target === undefined) throw Error('请选择有效的保存位置。');
+    const requested = destination(target), revision = ++this.destinationRevision;
+    let picked = requested;
+    this.resolvingDestination = requested?.kind === 'page' ? revision : undefined;
+    if (requested?.kind === 'page') {
+      try { picked = await this.verifySubmissionTarget(requested); }
+      catch (error) {
+        if (this.resolvingDestination === revision) {
+          this.resolvingDestination = undefined;
+          if (!this.destinationChangePending) this.emit('destination-selected');
+        }
+        throw error;
+      }
+      if (revision !== this.destinationRevision) throw Error('保存位置已再次切换。');
+      this.rememberResolvedDestination(requested, picked);
+    }
+    let updated = 0, locked = 0, duplicates = 0;
+    if (picked) for (const job of this.jobs.values()) {
+      if (job.previewOnly || !(activeStates.has(job.status) || resumableStates.has(job.status)) || sameDestination(job.options.destination, picked)) continue;
+      if (job.notionWriteStarted || job.reprocessing) { locked++; continue; }
+      const options = { ...job.options, destination: picked }, key = dedupeKey(job.url, options);
+      if ([...this.jobs.values()].some(other => other !== job && other.dedupe === key)) { duplicates++; continue; }
+      if (job.options.destination?.workspaceId !== picked.workspaceId) {
+        for (const resource of Object.values(job.resources)) delete resource.parts;
+      }
+      job.options = options; job.dedupe = key; this.save(job); updated++;
+    }
+    this.workspaceChangePending = false;
+    this.resolvingDestination = undefined;
+    this.emit('destination-selected');
+    return { updated, locked, duplicates, ...(!sameDestination(picked, requested) ? { destination: picked } : {}) };
+  }
   async verifySubmissionTarget(target) {
     const signal = AbortSignal.timeout(30000);
-    const verify = () => this.notion.verifyTarget(target, signal, { checkUploadLimit: false });
-    try { await verify(); }
+    const verify = async () => (await this.notion.verifyTarget(target, signal, { checkUploadLimit: false, resolveLibrary: true }))?.target || target;
+    try { return await verify(); }
     catch (error) {
       const transient = [502, 503, 504].includes(error?.status) || /^Notion API (?:连接失败|返回 HTTP 50[234]\b)/.test(error?.message);
       if (signal.aborted || !transient) throw error;
       await delay(400, undefined, { signal });
-      await verify();
+      return verify();
     }
+  }
+  rememberResolvedDestination(original, resolved) {
+    if (sameDestination(original, resolved) || !sameDestination(original, this.defaultDestination)) return;
+    const hasResolved = this.settings.favorites.some(item => sameDestination(item, resolved));
+    const favorites = this.settings.favorites.flatMap(item => sameDestination(item, original) ? hasResolved ? [] : [resolved] : [item]);
+    this.writeSettings({ ...this.settings, destination: resolved, favorites });
+    this.emit('change');
   }
   async create({ input, options = {}, preview = false, force = false }, { verifyDestination = false } = {}) {
     if (this.configError) throw Error(this.configError);
     const chosen = preferences(options, verifyDestination ? { ...this.settings, destination: this.defaultDestination } : this.settings);
+    const originalTarget = chosen.destination;
     if (!preview && !chosen.destination) throw Error('请先选择保存到哪个 Notion 数据库或父页面。');
     const results = [];
     const sources = parseInputs(input).map(source => source.kind === 'local' ? { source: describeLocal(source.path) } : source);
     // The window clears the submitted input as soon as this request succeeds.
     // Check the restored target first, and let the worker verify it again before saving.
     if (verifyDestination && !preview) {
-      try { await this.verifySubmissionTarget(chosen.destination); }
+      const revision = this.destinationRevision;
+      const changed = () => Object.assign(Error('保存位置正在切换，请确认新的位置后再提交。'), { code: 'COLLECTION_DESTINATION' });
+      if (this.destinationChangePending) throw changed();
+      try { chosen.destination = await this.verifySubmissionTarget(originalTarget); }
       catch (error) {
         throw Object.assign(Error('无法访问所选保存位置。' + safeError(error)), { code: 'COLLECTION_DESTINATION' });
       }
+      if (revision !== this.destinationRevision) throw changed();
     }
     if (this.closed) throw Error('应用正在退出，请重新打开快捷收集后提交。');
     const target = chosen.destination;
+    this.rememberResolvedDestination(originalTarget, target);
     if (verifyDestination && !preview && !this.settings.destination && this.settings.favorites.some(item =>
       item?.id === target.id && item.workspaceId === target.workspaceId && item.kind === target.kind && item.dataSourceId === target.dataSourceId)) {
       // Older builds also read settings.destination after an update rollback.
@@ -159,11 +223,11 @@ class CollectionService extends EventEmitter {
         results.push({ id: existing.id, existing: true, status: existing.status, page: existing.page, pages: existing.pages }); continue;
       }
       const job = { version: 1, id: randomUUID(), url, dedupe: key, createdAt: new Date().toISOString(), status: 'queued', message: '等待读取内容…',
-        options: structuredClone(chosen), previewOnly: preview, resources: {}, analyses: {}, warnings: [], layout: 'result-first',
+        options: structuredClone(chosen), previewOnly: preview, notionWriteStarted: false, resources: {}, analyses: {}, warnings: [], layout: 'result-first',
         ...(entry.source ? { localSource: entry.source, document: localDocument(entry.source) } : {}), ...(entry.shareTitle ? { shareTitle: entry.shareTitle } : {}) };
       this.jobs.set(job.id, job); this.save(job); this.enqueue(job); results.push({ id: job.id });
     }
-    return { jobs: results };
+    return { jobs: results, ...(!sameDestination(originalTarget, target) ? { destination: target } : {}) };
   }
   canRedistill(job) { return !!(job?.status === 'completed' && job.options.keepLocal && job.exportDirectory && (job.hasVideo || job.document && selectedNodes(job.document, job.options, job.selectedIds).some(node => node.kind === 'video'))); }
   redistill({ id, directory, preference = '', destination: target, visionEngine = this.settings.visionEngine } = {}) {
@@ -180,7 +244,7 @@ class CollectionService extends EventEmitter {
     const chosen = preferences({ destination: original?.options.destination || source.destination || target || this.settings.destination,
       keepLocal: true, types: ['text', 'video'], vision: true, visionEngine, transcribe: false, denseOcr: false, extraction: { mode: 'style', preference } }, this.settings);
     if (!chosen.destination) throw Error('旧资料未记录保存位置，请先选择原 Notion 工作区中的数据库或父页面。');
-    const key = hash(JSON.stringify(['local-style-v1', source.referencePage.id, Object.values(source.resources).map(resource => resource.asset), chosen.destination, chosen.visionEngine, chosen.extraction]));
+    const key = hash(JSON.stringify(['local-style-v2', source.referencePage.id, Object.values(source.resources).map(resource => resource.asset), chosen.destination, chosen.visionEngine, chosen.extraction]));
     const existing = [...this.jobs.values()].find(job => job.dedupe === key);
     if (existing) {
       if (['failed', 'partial', 'cancelled', 'interrupted', 'paused'].includes(existing.status)) this.retry(existing.id);
@@ -322,8 +386,41 @@ class CollectionService extends EventEmitter {
   async process(job, signal) {
     const save = () => this.save(job), progress = message => { job.message = message; save(); };
     const selected = layoutNodes(selectedNodes(job.document, job.options, job.selectedIds), job.layout);
-    const { limit } = await this.notion.verifyTarget(job.options.destination, signal);
-    await this.processMedia(job, selected, limit, save, progress, signal);
+    let verifiedTarget, verification, pendingChoice;
+    const waitingForDestination = () => this.destinationChangePending && !job.notionWriteStarted && !job.reprocessing;
+    const withDestination = async (prepare, write) => {
+      for (;;) {
+        signal.throwIfAborted();
+        if (waitingForDestination()) {
+          if (!pendingChoice) {
+            pendingChoice = once(this, 'destination-selected', { signal }).finally(() => { pendingChoice = undefined; });
+            progress('等待选择新的 Notion 保存位置…');
+          }
+          await pendingChoice;
+          continue;
+        }
+        const target = job.options.destination;
+        let prepared;
+        try {
+          if (verifiedTarget !== target) {
+            verifiedTarget = target;
+            verification = this.notion.verifyTarget(target, signal);
+          }
+          const { limit } = await verification;
+          if (target !== job.options.destination || waitingForDestination()) continue;
+          if (prepare) prepared = await prepare(limit);
+        } catch (error) {
+          if (target !== job.options.destination || waitingForDestination()) continue;
+          throw error;
+        }
+        // A switch during verification or preparation invalidates those results.
+        if (target !== job.options.destination || waitingForDestination()) continue;
+        signal.throwIfAborted();
+        return write?.(prepared);
+      }
+    };
+    await withDestination();
+    await this.processMedia(job, selected, withDestination, save, progress, signal);
     if (job.options.extraction.mode !== 'off') {
       job.status = 'processing'; save();
       const pending = extractionReadiness(job, selected);
@@ -339,11 +436,11 @@ class CollectionService extends EventEmitter {
     const both = job.options.extraction.mode === 'both' && selected.some(node => ['video', 'image'].includes(node.kind));
     const waitingForReports = (both || job.reprocessing) && !job.page && job.extraction?.error;
     const separate = job.extraction?.reports?.length && (!job.page || job.reportWrites);
-    if (!waitingForReports) {
+    if (!waitingForReports) await withDestination(undefined, () => {
+      job.notionWriteStarted = true;
       job.status = 'saving'; progress(separate ? '正在分别保存两份 Notion 文档…' : '正在按原文顺序保存到 Notion，并核验内容…');
-      if (separate) await this.writeReports(job, selected, save, signal);
-      else await this.notion.write(job, selected, save, signal);
-    }
+      return separate ? this.writeReports(job, selected, save, signal) : this.notion.write(job, selected, save, signal);
+    });
     if (job.options.keepLocal) this.exportLocal(job, selected);
     job.status = failures.length || job.document.incomplete || job.extraction?.error ? 'partial' : 'completed';
     job.message = job.status === 'completed' ? (job.reprocessing ? '已复用本地资料生成制作拆解，并关联原 Notion 页面。' : separate ? '两份 Notion 文档已分别保存并核验。' : '已保存到 Notion，正文和媒体顺序已核验。') :
@@ -402,7 +499,7 @@ class CollectionService extends EventEmitter {
       }
     }
   }
-  async processMedia(job, nodes, limit, save, progress, signal) {
+  async processMedia(job, nodes, withDestination, save, progress, signal) {
     const entries = nodes.flatMap((node, index) => mediaKinds.has(node.kind) ? [{ node, index }] : []);
     const work = [];
     let processing = false;
@@ -463,13 +560,21 @@ class CollectionService extends EventEmitter {
             }
           }
           if (job.reprocessing) return;
-          if (!resource.parts) { markProcessing(); resource.parts = await this.media.prepareUpload(current, job.options, limit, { signal, progress: nodeProgress }); save(); }
-          resource.uploads ||= [];
-          for (let i = 0; i < resource.parts.length; i++) {
-            job.status = 'uploading'; nodeProgress(`正在上传${node.kind === 'image' ? '图片' : node.kind === 'video' ? '视频' : '音频'} ${i + 1}/${resource.parts.length}…`);
-            resource.uploads[i] ||= {};
-            if (!resource.uploads[i].uploaded) await this.notion.upload(resource.parts[i], job, resource.uploads[i], save, signal);
-          }
+          await withDestination(limit => {
+            if (resource.parts) return resource.parts;
+            markProcessing();
+            return this.media.prepareUpload(current, job.options, limit, { signal, progress: nodeProgress });
+          }, async parts => {
+            resource.parts = parts;
+            resource.uploads ||= [];
+            for (const [i, part] of parts.entries()) {
+              signal.throwIfAborted();
+              resource.uploads[i] ||= {};
+              job.notionWriteStarted = true;
+              job.status = 'uploading'; nodeProgress(`正在上传${node.kind === 'image' ? '图片' : node.kind === 'video' ? '视频' : '音频'} ${i + 1}/${parts.length}…`);
+              if (!resource.uploads[i].uploaded) await this.notion.upload(part, job, resource.uploads[i], save, signal);
+            }
+          });
           if (processing) { job.status = 'processing'; save(); }
         } catch (error) { signal.throwIfAborted(); resource.error = safeError(error, '媒体处理失败'); save(); }
       })());
@@ -518,6 +623,19 @@ class CollectionService extends EventEmitter {
     if ([...this.jobs.values()].some(other => other.id !== job.id && other.dedupe === key)) throw Error('同一来源与保存位置已有收集任务，请在任务列表中继续或打开原记录。');
     job.options = chosen; job.dedupe = key;
     job.selectedIds = ids; job.allowPartial = allowPartial === true; job.previewOnly = false; this.save(job); this.enqueue(job); return { id };
+  }
+  async selectVerified(input) {
+    const job = this.jobs.get(input.id);
+    if (!job || !['awaiting_selection', 'needs_login'].includes(job.status)) return this.select(input.id, input);
+    const original = preferences(input.options || {}, job.options).destination;
+    if (original?.kind !== 'page') return this.select(input.id, input);
+    const revision = this.destinationRevision;
+    if (this.destinationChangePending) throw Error('保存位置正在切换，请确认新的位置后再保存。');
+    const target = await this.verifySubmissionTarget(original);
+    if (revision !== this.destinationRevision) throw Error('保存位置正在切换，请确认新的位置后再保存。');
+    const result = this.select(input.id, { ...input, options: { ...input.options, destination: target } });
+    this.rememberResolvedDestination(original, target);
+    return { ...result, ...(!sameDestination(original, target) ? { destination: target } : {}) };
   }
   cancel(id, { pause = false } = {}) {
     const job = this.jobs.get(id); if (!job) throw Error('任务不存在。');
@@ -600,7 +718,7 @@ class CollectionService extends EventEmitter {
     return { destination: target, url: created.url, message: '资料收集库已就绪，并设为默认保存位置。' };
   }
   async request(action, input = {}) {
-    const allowed = { state: [], configure: ['settings'], workspaces: [], destinations: ['workspaceId', 'query', 'cursors'], create: ['input', 'options', 'preview', 'force'],
+    const allowed = { state: [], configure: ['settings'], workspaces: [], destinations: ['workspaceId', 'query', 'cursors'], 'change-destination': ['pending', 'target'], create: ['input', 'options', 'preview', 'force'],
       select: ['id', 'ids', 'options', 'allowPartial'], cancel: ['id'], retry: ['id'], 'pause-all': [], 'resume-all': [], 'delete-task': ['id'], reread: ['id'], accounts: ['verify'], login: ['site'], prepare: [], 'create-library': ['workspaceId', 'parentId'],
       'video-hint': ['input'], redistill: ['id', 'directory', 'preference', 'destination', 'visionEngine'] };
     try {
@@ -610,9 +728,10 @@ class CollectionService extends EventEmitter {
       else if (action === 'configure') result = await this.configure(input.settings);
       else if (action === 'workspaces') result = await this.notion.workspaces(AbortSignal.timeout(45000));
       else if (action === 'destinations') result = await this.notion.search(input.workspaceId, input.query, input.cursors, AbortSignal.timeout(60000));
+      else if (action === 'change-destination') result = await this.changeDestination(input);
       else if (action === 'create') result = await this.create(input, { verifyDestination: true });
       else if (action === 'redistill') result = this.redistill(input);
-      else if (action === 'select') result = this.select(input.id, input);
+      else if (action === 'select') result = await this.selectVerified(input);
       else if (action === 'cancel') result = this.cancel(input.id);
       else if (action === 'retry') result = this.retry(input.id);
       else if (action === 'pause-all') result = await this.pauseAll();

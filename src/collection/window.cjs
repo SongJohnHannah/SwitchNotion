@@ -17,6 +17,7 @@ function setupCollection({ root, speech, webSources, createWindow, openSettings,
   }
   async function open(expanded = false) {
     await app.whenReady();
+    if (shortcutError) register();
     if (!window || window.isDestroyed()) {
       window = createWindow({ width: 580, height: 400, minWidth: 480, minHeight: 350, title: 'Switch Notion · 快捷收集',
         backgroundColor: '#ffffff', show: false, autoHideMenuBar: true, resizable: true, minimizable: true,
@@ -32,12 +33,15 @@ function setupCollection({ root, speech, webSources, createWindow, openSettings,
     window.webContents.send('collection:show', { expanded });
   }
   function register() {
+    const shortcut = service.settings.shortcut;
+    if (registered === shortcut && globalShortcut.isRegistered(shortcut)) return;
     if (registered) { globalShortcut.unregister(registered); registered = null; }
+    const previousError = shortcutError;
+    shortcutError = '全局快捷键注册失败。仍可从托盘打开快捷收集，打开时会重新尝试。';
     try {
-      if (globalShortcut.register(service.settings.shortcut, () => void open())) { registered = service.settings.shortcut; shortcutError = ''; }
-      else shortcutError = '快捷键已被其他应用占用，可在内容收集中更换；托盘入口仍可使用。';
-    } catch { shortcutError = '快捷键注册失败，请更换组合；托盘入口仍可使用。'; }
-    service.emit('change');
+      if (globalShortcut.register(shortcut, () => void open())) { registered = shortcut; shortcutError = ''; }
+    } catch {}
+    if (shortcutError !== previousError) service.emit('change');
   }
   ipcMain.handle('notion-switch:collection', async (event, action, input = {}) => {
     if (!window || window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== url) return { ok: false, error: '此操作只能从快捷收集窗口执行。' };

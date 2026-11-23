@@ -1,4 +1,5 @@
 const { evidenceLedger, evidenceReview } = require('./summary-templates.cjs');
+const { evidenceTitle, verificationTitle } = require('./report-markdown.cjs');
 
 const headings = /^##[ \t]+.+$|^###[ \t]+详情[ \t]*[｜|].+$/gm;
 const stepHeadings = new Set(['专业结论', '费曼解释', '给 AI 的指令', '实操复刻步骤与避坑清单', '证据链与底层原理', '去口水话精简稿']);
@@ -122,23 +123,28 @@ function confirmedCoaching(steps) {
     '[补充建议] 每次只教当前一关，让我提交实际操作结果并说清依据。检查结果后再解锁下一关。遇到偏差时只指出一处，给出修改示例，等我复验。'].join('');
 }
 
+function insertEvidencePoints(body, points) {
+  const [first, ...rest] = body.split('\n');
+  return (first && !first.startsWith('- ') ? [first, '', ...points, ...rest] : [...points, first, ...rest]).join('\n').trim();
+}
+
 function renderReview(markdown, { stepGap, groupGap, steps, groupProof, unresolvedItems, declaredSteps }, practice, chartProof) {
   const sections = markdown.split(/^(##[ \t]+.+|###[ \t]+详情[ \t]*[｜|].+)$/gm);
   for (let i = 1; i < sections.length; i += 2) {
     const heading = sections[i], title = heading.replace(/^#{2,3}[ \t]+(?:详情[ \t]*[｜|][ \t]*)?/, '').trim();
     let body = sections[i + 1].trim();
-    if (title === '补充核验' || !body) continue;
+    if ([verificationTitle, evidenceTitle].includes(title) || !body) continue;
     const hasChart = chartHeadings.has(title) || chartSubject.test(body);
     if (title === '给 AI 的指令' && steps.length) body = confirmedCoaching(steps);
     if ((stepGap || steps.length) && title === '实操复刻步骤与避坑清单') {
       const numbered = steps.map(({ number, quote, label }) => `- **原片第 ${number} 步** ${quote}${label ? ` [${label}]` : ''}`);
-      body = [...numbered, ...body.split('\n').filter(line => !numberedListItem.test(line))].join('\n').trim();
+      body = insertEvidencePoints(body.split('\n').filter(line => !numberedListItem.test(line)).join('\n'), numbered);
     }
     if ((stepGap || steps.length) && containsUnsupportedOrdinal(body, steps, declaredSteps)) return '';
     if (groupGap && hasChart) body = removeUnprovedGroups(body, groupProof, unresolvedItems);
     if (chartProof && hasChart) {
       body = filterClauses(body, clause => !(/归属|分组|标签.*对应/u.test(clause) && /待核实|无法确认|不能确认|未能确认/u.test(clause)));
-      if (title === '证据链与底层原理' && !body.includes(chartProof)) body = `- **邻帧分组** ${chartProof} [画面OCR]\n${body}`.trim();
+      if (title === '证据链与底层原理' && !body.includes(chartProof)) body = insertEvidencePoints(body, [`- **邻帧分组** ${chartProof} [画面OCR]`]);
     }
     const notes = [];
     for (const gap of [stepHeadings.has(title) ? stepGap : '', hasChart ? groupGap : '']) {

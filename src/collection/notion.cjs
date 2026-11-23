@@ -234,31 +234,44 @@ class CollectionNotion {
     }
     return { results, cursors: next, hasMore: Object.values(next).some(Boolean) };
   }
-  async verifyTarget(target, signal, { checkUploadLimit = true } = {}) {
+  async findLibrary(c) {
+    const ids = new Set();
+    let cursor;
+    do {
+      const children = await c.session.execute('read_block_children', { block_id: c.target.id, ...(cursor ? { start_cursor: cursor } : {}) });
+      for (const block of children.results) if (block.type === 'child_database' && block.child_database?.title === '资料收集') ids.add(block.id);
+      if (ids.size > 1) throw Error('所选页面下有多个「资料收集」数据库，请直接选择要写入的数据库。');
+      cursor = children.next_cursor;
+    } while (cursor);
+    const [id] = ids;
+    if (!id) return null;
+    const database = await c.session.execute('read_database', { database_id: id });
+    if (database.data_source_ids?.length !== 1 || database.data_sources?.length !== 1) throw Error('「资料收集」的可用数据源不唯一，请直接选择要写入的数据源。');
+    return { workspaceId: c.target.workspaceId, workspaceName: c.name, kind: 'database', id,
+      dataSourceId: database.data_sources[0].data_source_id, label: database.title || '资料收集', url: database.url, existing: true };
+  }
+  async verifyTarget(target, signal, { checkUploadLimit = true, resolveLibrary = false } = {}) {
     const c = await this.connect(target, signal);
-    if (target.kind === 'page') await c.session.execute('read_page_info', { page_id: target.id });
+    if (target.kind === 'page') {
+      await c.session.execute('read_page_info', { page_id: target.id });
+      if (resolveLibrary) target = await this.findLibrary(c) || target;
+    }
     else { const schema = await c.session.execute('read_database', target.dataSourceId ? { data_source_id: target.dataSourceId } : { database_id: target.id });
       if (!target.dataSourceId && schema.data_source_ids?.length !== 1) throw Error('此数据库包含多个数据源，请通过搜索结果选择具体的数据源。'); }
-    if (!checkUploadLimit) return;
+    const resolved = resolveLibrary ? { target: destination(target) } : undefined;
+    if (!checkUploadLimit) return resolved;
     const me = await c.client.request(c.cfg, 'GET', 'users/me', null, signal);
     const limit = me.bot?.workspace_limits?.max_file_upload_size_in_bytes;
-    return { limit: Number.isSafeInteger(limit) && limit > 0 ? limit : 5 * 1024 ** 2 };
+    return { ...resolved, limit: Number.isSafeInteger(limit) && limit > 0 ? limit : 5 * 1024 ** 2 };
   }
   async createLibrary(workspaceId, parentId, signal) {
     const c = await this.connect({ workspaceId, id: parentId, kind: 'page', label: '资料收集父页面' }, signal, 'collection-library:' + workspaceId + ':' + parentId);
     await c.session.execute('read_page_info', { page_id: parentId });
+    const existing = await this.findLibrary(c);
+    if (existing) return existing;
     const columns = [{ name: '标题', type: 'title' }, { name: '来源链接', type: 'url' },
       { name: '内容类型', type: 'multi_select', options: ['视频', '音频', '图片', '文章'] }, { name: '来源网站', type: 'rich_text' },
       { name: '收集时间', type: 'date' }, { name: '处理状态', type: 'select', options: ['已保存', '待补全'] }, { name: '标签', type: 'multi_select', options: [] }];
-    let cursor;
-    do {
-      const found = await c.session.execute('search_databases', { query: '资料收集', ...(cursor ? { start_cursor: cursor } : {}) });
-      for (const item of found.results.filter(item => item.title === '资料收集' && item.database_id)) {
-        const database = await c.client.request(c.cfg, 'GET', 'databases/' + item.database_id, null, signal);
-        if (database.parent?.page_id === parentId) return { workspaceId, workspaceName: c.name, kind: 'database', id: item.database_id, dataSourceId: item.data_source_id, label: '资料收集', url: item.url, existing: true };
-      }
-      cursor = found.has_more ? found.next_cursor : null;
-    } while (cursor);
     const created = await c.session.execute('create_database', { parent_page_id: parentId, title: '资料收集', columns, is_inline: false });
     if (!created.verified || !created.data_source_id) throw Error('资料收集数据库创建结果尚未核验，请检查页面后继续。');
     return { workspaceId, workspaceName: c.name, kind: 'database', id: created.database_id, dataSourceId: created.data_source_id, label: '资料收集', url: created.url };

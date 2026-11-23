@@ -14,7 +14,7 @@
       <label class="sr-only" for="links">网页链接或本地文件路径</label>
       <textarea id="links" rows="2" placeholder="粘贴链接或拖入本地图片、音视频，每批最多 100 项…" spellcheck="false"></textarea>
       <div class="destination-row"><span>保存到</span><button id="destination-pill" type="button" class="destination">选择工作区、数据库或页面 ⌄</button></div>
-      <div class="capture-actions"><button type="submit" class="primary" id="collect" aria-haspopup="dialog" aria-controls="prompt-dialog">提取 ↵</button><button type="button" class="secondary" id="redistill-local" aria-haspopup="dialog" aria-controls="redistill-dialog">本地资料再蒸馏</button></div>
+      <div class="capture-actions"><button type="submit" class="primary" id="collect" aria-haspopup="dialog" aria-controls="prompt-dialog">提取</button><button type="button" class="secondary" id="redistill-local" aria-haspopup="dialog" aria-controls="redistill-dialog">本地资料再蒸馏</button></div>
     </form>
     <div class="compact-footer"><button id="task-status" type="button" class="task-status" aria-controls="tasks-section" aria-expanded="false" hidden></button><span id="queue-state">支持网页链接和本地音视频路径</span><div id="queue-controls" class="queue-controls" aria-label="全部收集任务" hidden><button id="pause-all" type="button" class="text" title="暂停全部正在下载、等待和整理的任务，保留进度">全部暂停</button><button id="resume-all" type="button" class="text" title="继续全部未完成和失败的任务，复用已下载素材与已完成步骤">全部继续</button></div><button id="expand" class="text" aria-expanded="false" aria-controls="expanded">展开选项 ⌄</button></div>
     <div class="result-link" id="result-link" hidden><button id="last-result" class="text">打开刚保存的 Notion ↗</button><span id="last-report-links"></span><button id="last-redistill" class="text" hidden>按视频制作再蒸馏</button></div>
@@ -30,9 +30,9 @@
         <button id="settings-tab-advanced" type="button" role="tab" aria-selected="false" aria-controls="panel-advanced" tabindex="-1" data-tab="advanced">高级设置</button>
       </nav>
       <section id="panel-destination" class="panel" role="tabpanel" aria-labelledby="settings-tab-destination" data-panel="destination">
-        <div class="section-heading"><div><h2>保存位置</h2><p>选择工作区，再找到要保存的数据库或页面。</p></div><button id="connections" class="secondary">管理连接 ↗</button></div>
+        <div class="section-heading"><div><h2>保存位置</h2><p>选择工作区和保存位置，尚未开始上传的任务会一起切换。</p></div><button id="connections" class="secondary">管理连接 ↗</button></div>
         <label for="workspace">Notion 工作区</label>
-        <div class="row"><select id="workspace"><option value="">加载工作区…</option></select><button id="refresh-workspaces" class="secondary">刷新</button></div>
+        <div class="row"><select id="workspace"><option value="">加载工作区…</option></select><button id="refresh-workspaces" class="secondary">刷新</button><button id="cancel-destination-change" class="secondary" hidden>取消切换</button></div>
         <label class="sr-only" for="destination-search">搜索保存位置</label>
         <div class="search-row"><input id="destination-search" placeholder="搜索数据库、父页面，或粘贴 Notion 链接"><button id="search" class="secondary">搜索</button></div>
         <div id="destinations" class="destinations" aria-label="搜索结果"></div><button id="more-destinations" class="secondary more-button" hidden>加载更多位置</button>

@@ -37,6 +37,132 @@ async function until(check) { for (let n = 0; n < 600; n++) { if (check()) retur
 function gate() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 const sourceDocument = url => normalizeDocument({ title: '队列样片', url, nodes: [{ kind: 'video', url: url + '/video.mp4' }] });
 
+test('a restored collection parent reuses its existing library and inserts a database row', async t => {
+  const document = normalizeDocument({ url: 'https://example.com/restored-collection-parent', nodes: [{ kind: 'paragraph', text: '原文' }] });
+  const f = fixture(t, { document }), parent = { ...f.destination, label: '收集资料' };
+  f.service.settings = preferences({ ...f.service.settings, destination: parent, favorites: [parent] });
+  const database = randomUUID(), dataSource = randomUUID(), mutations = [];
+  const client = { open: () => ({ execute: async (name, args) => {
+    if (name === 'read_page_info') return { title: parent.label };
+    if (name === 'read_block_children') {
+      assert.equal(args.block_id, parent.id);
+      return args.start_cursor ? { results: [{ id: database, type: 'child_database', child_database: { title: '资料收集' } }] } : { results: [], next_cursor: 'more' };
+    }
+    if (name === 'read_database') {
+      const schema = { data_source_id: dataSource, title: '资料收集', properties: { 标题: { type: 'title' } } };
+      return args.database_id ? { title: '资料收集', data_sources: [schema], data_source_ids: [dataSource] } : schema;
+    }
+    mutations.push([name, args]); return { verified: true, page_id: randomUUID(), url: 'https://www.notion.so/test' };
+  } }), request: async () => ({ bot: {} }) };
+  const notion = f.service.notion = new CollectionNotion({ root: f.root, router: { prepare: async () => ({
+    workspaces: [{ id: parent.workspaceId, name: parent.workspaceName, cfg: { readOnly: false }, client }]
+  }) } });
+  notion.write = (job, _nodes, save, signal) => notion.createPage(job, save, signal);
+  const submitted = await f.service.request('create', { input: document.url });
+  assert.equal(submitted.ok, true, submitted.error);
+  await idle(f.service);
+  assert.deepEqual(mutations, [['create_database_entry', { data_source_id: dataSource, properties: { 标题: document.title } }]]);
+  assert.deepEqual(f.service.settings.destination, { ...parent, kind: 'database', label: '资料收集', id: database, dataSourceId: dataSource });
+  assert.deepEqual(f.service.settings.favorites, [f.service.settings.destination]);
+  assert.equal(submitted.result.destination.dataSourceId, dataSource);
+});
+
+test('a failed page lookup clears its hold without committing an older overlapping selection', async t => {
+  const f = fixture(t), first = gate();
+  const oldSelection = { ...f.destination, id: randomUUID() }, newSelection = { ...f.destination, id: randomUUID() };
+  f.service.notion.verifyTarget = async target => {
+    if (target.id === oldSelection.id) return first.promise;
+    if (target.id === newSelection.id) throw Error('无法读取页面。');
+    return { limit: 100 };
+  };
+  const older = f.service.request('change-destination', { target: oldSelection });
+  const newer = await f.service.request('change-destination', { target: newSelection });
+  first.resolve();
+  assert.equal(newer.ok, false);
+  assert.equal((await older).ok, false);
+  assert.equal(f.service.destinationChangePending, false);
+  assert.equal((await f.service.request('create', { input: 'https://example.com/after-selection' })).ok, true);
+  await idle(f.service);
+});
+
+test('switching workspace during media preparation uses the new workspace limit and locks the target at upload', async t => {
+  const f = fixture(t), preparing = gate(), uploading = gate(), limits = [], writes = [];
+  const next = { ...f.destination, workspaceId: randomUUID(), id: randomUUID(), dataSourceId: randomUUID(), kind: 'database' };
+  const third = { ...next, workspaceId: randomUUID(), id: randomUUID(), dataSourceId: randomUUID() };
+  f.service.browser.inspect = async url => sourceDocument(url);
+  f.service.notion.verifyTarget = async target => ({ limit: target.workspaceId === f.destination.workspaceId ? 500 : 100 });
+  f.service.media.prepareUpload = async (asset, _options, limit) => {
+    limits.push(limit);
+    if (limit === 500) await preparing.promise;
+    return [{ path: asset.path }];
+  };
+  const upload = f.service.notion.upload, write = f.service.notion.write;
+  f.service.notion.upload = async (...args) => { writes.push(args[1].options.destination); await uploading.promise; return upload(...args); };
+  f.service.notion.write = async (...args) => { writes.push(args[0].options.destination); return write(...args); };
+  try {
+    const { jobs: [{ id }] } = await f.service.create({ input: 'https://example.com/change-destination' });
+    await until(() => limits.length > 0);
+    const changed = await f.service.request('change-destination', { target: next });
+    assert.equal(changed.result?.updated, 1, changed.error);
+    const saved = JSON.parse(fs.readFileSync(path.join(f.service.location(f.service.jobs.get(id)), 'job.json'), 'utf8'));
+    assert.deepEqual(saved.options.destination, next);
+    preparing.resolve();
+    await until(() => writes.length > 0);
+    assert.deepEqual(limits, [500, 100]);
+    const late = await f.service.request('change-destination', { target: third });
+    assert.equal(late.result?.locked, 1, late.error);
+    uploading.resolve(); await idle(f.service);
+    assert.deepEqual(writes, [next, next]);
+    assert.equal(f.service.jobs.get(id).status, 'completed');
+  } finally { preparing.resolve(); uploading.resolve(); await idle(f.service); }
+});
+
+test('a text-only task waits for a destination while a workspace change is in progress', async t => {
+  const analysis = gate(), writes = [];
+  let analysing = false;
+  const url = 'https://example.com/await-destination';
+  const document = normalizeDocument({ url, nodes: [{ kind: 'paragraph', text: '内容' }] });
+  const f = fixture(t, { document, extraction: { run: async () => { analysing = true; return analysis.promise; } } });
+  const next = { ...f.destination, workspaceId: randomUUID(), id: randomUUID() };
+  f.service.notion.write = async job => { writes.push(job.options.destination); };
+  try {
+    await f.service.create({ input: url, options: { extraction: { mode: 'auto' } } });
+    await until(() => analysing);
+    const begun = await f.service.request('change-destination', { pending: true });
+    assert.equal(begun.ok, true, begun.error);
+    analysis.resolve({ text: '已识别' });
+    await until(() => f.service.status().jobs.some(job => job.message === '等待选择新的 Notion 保存位置…'));
+    assert.deepEqual(writes, []);
+    const selected = await f.service.request('change-destination', { target: next });
+    assert.equal(selected.result?.updated, 1, selected.error);
+    await idle(f.service);
+    assert.deepEqual(writes, [next]);
+  } finally { analysis.resolve({}); await f.service.request('change-destination', { target: null }); await idle(f.service); }
+});
+
+test('unfinished legacy jobs can change workspace unless their Notion journal already records an attempted write', async t => {
+  const f = fixture(t);
+  f.service.notion.verifyTarget = async () => { throw Error('Notion 暂时离线'); };
+  const { jobs } = await f.service.create({ input: 'https://example.com/legacy-ready\nhttps://example.com/legacy-write' });
+  await idle(f.service);
+  for (const { id } of jobs) {
+    const job = f.service.jobs.get(id);
+    assert.equal(job.status, 'failed');
+    delete job.notionWriteStarted; f.service.save(job);
+  }
+  await f.service.close();
+  const journal = path.join(f.root, 'write-journal'); fs.mkdirSync(journal);
+  fs.writeFileSync(path.join(journal, 'content-' + 'a'.repeat(64) + '.json'), JSON.stringify({
+    operation_scope: 'collection:' + jobs[1].id, name: 'create_database_entry', status: 'uncertain'
+  }));
+  const restored = new CollectionService({ root: f.root, binaries: { status: () => ({}) }, browser: {}, media: {}, notion: { verifyTarget: async () => {} } });
+  t.after(() => restored.close());
+  const next = { ...f.destination, workspaceId: randomUUID(), id: randomUUID() };
+  assert.deepEqual(await restored.request('change-destination', { target: next }), { ok: true, result: { updated: 1, locked: 1, duplicates: 0 } });
+  assert.deepEqual(restored.jobs.get(jobs[0].id).options.destination, next);
+  assert.deepEqual(restored.jobs.get(jobs[1].id).options.destination, f.destination);
+});
+
 test('direct collection checks the saved target after restart on Windows and Mac', async t => {
   for (const [platform, Notion] of [['Windows', CollectionNotion], ['Mac', MacCollectionNotion]]) await t.test(platform, async t => {
     const f = fixture(t), target = f.destination;
@@ -51,6 +177,7 @@ test('direct collection checks the saved target after restart on Windows and Mac
         open: () => ({ execute: async (name, args) => {
           reads.push([name, args.page_id]);
           if (outcome) throw Object.assign(Error('Notion API 返回 HTTP ' + outcome + '。'), { status: outcome });
+          if (name === 'read_block_children') return { results: [] };
           return { title: '资料收集' };
         } }), request: async () => ({ bot: {} })
       } }], unavailable: [] };
@@ -428,7 +555,7 @@ test('the actual style extractor and a restarted write retry reuse completed evi
   f.service.notion.write = async () => { throw Error('Notion 写入暂时失败'); };
   const created = f.service.redistill({ id, preference: '把字幕布局迁移到我的视频' }); await idle(f.service);
   const result = f.service.jobs.get(created.id); assert.equal(result.status, 'failed'); assert.equal(result.extraction.key, 'style');
-  assert.ok(prompts.some(messages => messages.some(message => message.content?.includes('## 蒸馏到我的视频'))));
+  assert.ok(prompts.some(messages => messages.some(message => message.content?.includes('## 用我的内容做新视频'))));
   const generated = prompts.length; assert.ok(generated > 0); await f.service.close();
   const restarted = new CollectionService({ root: f.root, downloadsDirectory: path.join(f.root, 'Downloads'), provider,
     binaries: { status: () => ({}) }, browser: {}, media: f.service.media, notion: { ...f.service.notion, write } }); t.after(() => restarted.close());
@@ -441,7 +568,7 @@ test('selecting both creates two documents, shares media, and recovers the secon
   const document = normalizeDocument({ title: '双向样片', url: 'https://example.com/video', nodes: [{ kind: 'video', url: 'https://example.com/video.mp4' }] });
   let contentCalls = 0, styleCalls = 0;
   const provider = { config: () => ({ mode: 'deepseek' }), key: () => 'fixture', async *generate({ messages }) {
-    if (messages[1].content.includes('## 蒸馏到我的视频')) {
+    if (messages[1].content.includes('## 用我的内容做新视频')) {
       if (++styleCalls === 1) throw Error('画面提取暂时失败');
       yield '## 原片效果怎么做\n画面独立结果\n## 展开细节\n### 详情｜技术实现\nWebGL 参考复现';
     } else { contentCalls++; yield '## 专业结论\n内容独立结果\n## 展开细节\n### 详情｜证据链与底层原理\n- 可核对内容'; }
@@ -493,7 +620,7 @@ test('selecting both creates two documents, shares media, and recovers the secon
   assert.equal(new Set([...plans.values()].map(plan => plan.blocks[0].video.file_upload.id)).size, 1);
   const content = fs.readFileSync(path.join(finished.exportDirectory, '内容理解.md'), 'utf8');
   const style = fs.readFileSync(path.join(finished.exportDirectory, '画面与视频制作拆解.md'), 'utf8');
-  assert.match(content, /内容独立结果[\s\S]+<summary>证据链与底层原理<\/summary>/);
+  assert.match(content, /内容独立结果[\s\S]+<summary>查看依据<\/summary>/);
   assert.doesNotMatch(content, /画面独立结果/);
   assert.match(style, /画面独立结果[\s\S]+<summary>技术实现<\/summary>/);
   assert.doesNotMatch(style, /内容独立结果/);
