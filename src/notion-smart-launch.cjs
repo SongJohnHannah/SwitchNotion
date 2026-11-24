@@ -3,6 +3,17 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 
+function supported(platform = process.platform, arch = process.arch) {
+  return platform === 'win32' && arch === 'x64' || platform === 'darwin' && arch === 'arm64';
+}
+function launchEnvironment(env, enabled, runId = '') {
+  const { NOTION_SWITCH_SMART_DIRECT: _enabled, NOTION_SWITCH_SMART_RUN_ID: _runId, ...clean } = env;
+  if (enabled) {
+    clean.NOTION_SWITCH_SMART_DIRECT = '1';
+    clean.NOTION_SWITCH_SMART_RUN_ID = runId;
+  }
+  return clean;
+}
 function statePath(root) { return path.join(root, 'smart-direct', 'state.json'); }
 function readState(root) { try { const state = JSON.parse(fs.readFileSync(statePath(root), 'utf8')); return state?.version === 1 ? state : null; } catch { return null; } }
 function isAlive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
@@ -58,4 +69,4 @@ function mediaPort(root, runId, host) {
       !Object.hasOwn(state.selections || {}, host) || !Number.isInteger(state.port) || state.port < 1 || state.port > 65535) return 0;
   return state.port;
 }
-module.exports = { start, bind, request, readState, mediaPort, executable };
+module.exports = { start, bind, request, readState, mediaPort, executable, supported, launchEnvironment };

@@ -2,6 +2,7 @@ const dns = require('node:dns').promises;
 const https = require('node:https');
 const net = require('node:net');
 const os = require('node:os');
+const { execFileSync } = require('node:child_process');
 
 const { mediaHosts: knownHosts, allowedHost } = require('./notion-media-requests.cjs');
 function publicIPv4(input) {
@@ -12,18 +13,29 @@ function publicIPv4(input) {
     !(a === 192 && b === 0 && (c === 0 || c === 2)) && !(a === 198 && (b === 18 || b === 19 || b === 51 && c === 100)) &&
     !(a === 203 && b === 0 && c === 113);
 }
-function chooseInterface(interfaces = os.networkInterfaces()) {
+function macPrimaryInterface() {
+  try {
+    const state = execFileSync('/usr/sbin/scutil', [], { input: 'show State:/Network/Global/IPv4\n',
+      encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'], timeout: 1000 });
+    return state.match(/PrimaryInterface\s*:\s*(en\d+)\b/)?.[1] || '';
+  } catch { return ''; }
+}
+function chooseInterface(interfaces = os.networkInterfaces(), { platform = process.platform, primary = macPrimaryInterface } = {}) {
   const choices = [];
+  const mac = platform === 'darwin';
   for (const [name, addresses] of Object.entries(interfaces)) {
     if (/^(?:u?tun|tap)\d*$/i.test(name) || /(?:loopback|virtual|vethernet|vmware|hyper-v|wsl|tunnel|\btun\b|\btap\b|vpn|wireguard|tailscale|zerotier)/i.test(name)) continue;
+    if (mac && !/^en\d+$/.test(name)) continue;
     for (const row of addresses || []) {
       if (row.family !== 'IPv4' && row.family !== 4 || row.internal || net.isIP(row.address) !== 4 || row.address.startsWith('169.254.')) continue;
-      const rank = /^(?:wlan|wi-?fi|无线)/i.test(name) ? 0 : /^(?:ethernet|以太网)/i.test(name) ? 1 : 2;
+      const rank = mac ? Number(name.slice(2)) : /^(?:wlan|wi-?fi|无线)/i.test(name) ? 0 : /^(?:ethernet|以太网)/i.test(name) ? 1 : 2;
       choices.push({ name, address: row.address, rank });
     }
   }
   choices.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
-  return choices.length ? { name: choices[0].name, address: choices[0].address } : null;
+  const preferred = mac && choices.length > 1 ? primary() : '';
+  const selected = choices.find(({ name }) => name === preferred) || choices[0];
+  return selected ? { name: selected.name, address: selected.address } : null;
 }
 function requestHttps({ host, target, localAddress, pathname = '/', method = 'HEAD', headers = {}, timeoutMs = 4500, maxBytes = 0 }) {
   return new Promise(resolve => {
@@ -45,7 +57,9 @@ function requestHttps({ host, target, localAddress, pathname = '/', method = 'HE
   });
 }
 async function dohA(host, localAddress, timeoutMs = 4500, request = requestHttps) {
-  const result = await request({ host: 'doh.pub', localAddress, timeoutMs, method: 'GET', maxBytes: 256 * 1024,
+  // A VPN can return a synthetic IP for the resolver itself. Bootstrap DNSPod
+  // with its public address and still authenticate the TLS connection as doh.pub.
+  const result = await request({ host: 'doh.pub', target: '1.12.12.12', localAddress, timeoutMs, method: 'GET', maxBytes: 256 * 1024,
     pathname: '/dns-query?name=' + encodeURIComponent(host) + '&type=A', headers: { accept: 'application/dns-json' } });
   if (result?.status !== 200 || !result.body) return [];
   try {

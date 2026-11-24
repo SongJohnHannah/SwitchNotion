@@ -47,7 +47,8 @@ class SettingsService {
   async state() {
     const profiles = await this.profiles(), status = this.provider.status();
     const network = accelerator.read(this.root), recorded = smartLaunch.readState(this.root), activeId = process.env.NOTION_SWITCH_SMART_RUN_ID;
-    const launchedWithMedia = process.env.NOTION_SWITCH_SMART_DIRECT === '1';
+    const supported = smartLaunch.supported();
+    const launchedWithMedia = supported && process.env.NOTION_SWITCH_SMART_DIRECT === '1';
     const runtime = launchedWithMedia && activeId && recorded?.runId === activeId && recorded.scope === 'media' ? {
       state: recorded.state, checkedDomains: recorded.checkedDomains || 0, reachableDomains: recorded.reachableDomains || 0,
       lastCheck: recorded.lastCheck || '', refreshing: recorded.refreshing === true, message: recorded.message || '', usedFallback: this.mediaFallback()
@@ -56,7 +57,7 @@ class SettingsService {
       { state: 'stopped', message: network.smartDirect ? '保存后需重新打开 Switch Notion。' : '' };
     const project = process.env.NOTION_SWITCH_PROJECT || path.dirname(this.root);
     return { workspaces: profiles.map(p => this.publicProfile(p)), accelerator: { ...network, runtime,
-      supported: process.platform === 'win32' && process.arch === 'x64', componentReady: !!smartLaunch.executable(this.root, project) },
+      supported, componentReady: supported && !!smartLaunch.executable(this.root, project) },
       webSources: this.webSources.state(), deepseek: { keyConfigured: status.keyConfigured === true, model: models.some(m => m.apiId === status.model) ? status.model : 'deepseek-flash', thinking: status.thinking === true, reasoningEffort: status.reasoningEffort || 'high', multiAgent: status.multiAgent !== false, models: models.map(m => ({ id: m.apiId, name: m.label })) } };
   }
   async identity(apiKey) {
@@ -151,7 +152,7 @@ class SettingsService {
     if (input.smartDirect !== undefined) {
       if (!['enabled', 'disabled'].includes(input.smartDirect)) throw Error('请选择有效的 Notion 直连设置。');
       const enabled = input.smartDirect === 'enabled', project = process.env.NOTION_SWITCH_PROJECT || path.dirname(this.root);
-      if (enabled && (process.platform !== 'win32' || process.arch !== 'x64')) throw Error('当前平台尚未接入 Notion 直连加速。');
+      if (enabled && !smartLaunch.supported()) throw Error('当前平台尚未接入 Notion 直连加速。');
       if (enabled && !smartLaunch.executable(this.root, project)) throw Error('当前缺少 Notion 直连组件，请先准备 Caddy。');
       accelerator.save(this.root, { smartDirect: enabled, bypassVpn: false, autoIp: false });
       return { message: (enabled ? '图片和视频直连加速已开启' : '图片和视频直连加速已关闭') + '，重新打开 Switch Notion 后生效。', ...accelerator.read(this.root) };

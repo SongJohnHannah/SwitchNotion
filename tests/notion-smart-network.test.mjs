@@ -25,9 +25,21 @@ test('selects a physical interface rather than the VPN adapter', () => {
     'neko-tun': [{ family: 'IPv4', address: '172.19.0.1', internal: false }],
     'vEthernet (Default Switch)': [{ family: 'IPv4', address: '172.20.0.1', internal: false }],
     WLAN: [{ family: 'IPv4', address: '192.168.0.106', internal: false }]
-  });
+  }, { platform: 'win32' });
   assert.deepEqual(selected, { name: 'WLAN', address: '192.168.0.106' });
-  assert.equal(smart.chooseInterface({ 'neko-tun': [{ family: 'IPv4', address: '172.19.0.1', internal: false }] }), null);
+  assert.equal(smart.chooseInterface({ 'neko-tun': [{ family: 'IPv4', address: '172.19.0.1', internal: false }] }, { platform: 'win32' }), null);
+});
+
+test('Mac prefers the active physical interface and ignores VPN and virtual interfaces', () => {
+  const interfaces = {
+    utun4: [{ family: 'IPv4', address: '172.19.0.1' }],
+    bridge100: [{ family: 'IPv4', address: '192.168.64.1' }],
+    en0: [{ family: 'IPv4', address: '192.168.1.2' }],
+    en8: [{ family: 'IPv4', address: '10.20.30.2' }]
+  };
+  assert.deepEqual(smart.chooseInterface(interfaces, { platform: 'darwin', primary: () => 'en8' }), { name: 'en8', address: '10.20.30.2' });
+  assert.deepEqual(smart.chooseInterface(interfaces, { platform: 'darwin', primary: () => 'utun4' }), { name: 'en0', address: '192.168.1.2' });
+  assert.equal(smart.chooseInterface({ utun4: interfaces.utun4, bridge100: interfaces.bridge100 }, { platform: 'darwin' }), null);
 });
 
 test('each host selects only an address that completes both direct probes', async () => {
@@ -67,6 +79,18 @@ test('a stalled system DNS lookup cannot prevent direct address selection', asyn
     new Promise(resolve => setTimeout(() => resolve('timed out waiting for address selection'), 200))
   ]);
   assert.deepEqual(result, ['208.103.161.2']);
+});
+
+test('encrypted DNS works without resolving the resolver through the VPN', async () => {
+  const options = { localAddress: '192.168.0.106', timeoutMs: 1000, lookup: async () => ['198.18.0.47'],
+    resolve: (host, localAddress, timeoutMs) => smart.dohA(host, localAddress, timeoutMs, async request => {
+      assert.equal(request.host, 'doh.pub');
+      assert.equal(request.target, '1.12.12.12');
+      assert.equal(request.localAddress, '192.168.0.106');
+      assert.equal(request.pathname, '/dns-query?name=file.notion.so&type=A');
+      return { status: 200, body: Buffer.from(JSON.stringify({ Answer: [{ type: 1, data: '208.103.161.2' }] })) };
+    }) };
+  assert.deepEqual(await smart.addressesFor('file.notion.so', options), ['208.103.161.2']);
 });
 
 test('image selection measures a real image response rather than only a TLS handshake', async () => {
@@ -139,7 +163,7 @@ test('an unsuccessful configuration reload preserves the last active addresses',
 
 function processExecPath() { return process.execPath; }
 
-test('platform binary lookup uses extensionless Caddy files and leaves a Mac integration point', t => {
+test('media routing supports Windows x64 and Apple Silicon with extensionless Caddy files', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'notion-smart-path-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const name of ['windows-amd64', 'darwin-arm64']) {
@@ -148,13 +172,21 @@ test('platform binary lookup uses extensionless Caddy files and leaves a Mac int
   assert.equal(smartLaunch.executable(root, root, 'win32', 'x64'), path.join(root, 'caddy-route', 'windows-amd64', 'caddy'));
   assert.equal(smartLaunch.executable(root, root, 'darwin', 'arm64'), path.join(root, 'caddy-route', 'darwin-arm64', 'caddy'));
   assert.equal(smartLaunch.executable(root, root, 'linux', 'x64'), '');
+  for (const [platform, arch] of [['darwin', 'arm64'], ['win32', 'x64']]) assert.equal(smartLaunch.supported(platform, arch), true);
+  for (const [platform, arch] of [['darwin', 'x64'], ['win32', 'arm64'], ['linux', 'arm64']]) assert.equal(smartLaunch.supported(platform, arch), false);
 });
 
-test('the Windows setting enables one direct mode and turns off the old conflicting switches', { skip: process.platform !== 'win32' || process.arch !== 'x64' }, async t => {
+test('supported desktop builds enable media routing only when Caddy exists and turn off the old conflicting switches', { skip: !smartLaunch.supported() }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'notion-smart-settings-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const dir = path.join(root, 'caddy-route', 'windows-amd64'); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'caddy'), 'fixture');
+  const target = process.platform === 'darwin' ? 'darwin-arm64' : 'windows-amd64';
+  const dir = path.join(root, 'caddy-route', target);
   const service = new SettingsService({ root });
+  assert.equal((await service.state()).accelerator.supported, true);
+  assert.equal((await service.state()).accelerator.componentReady, false);
+  await assert.rejects(service.saveAccelerator({ smartDirect: 'enabled' }), /Caddy/);
+  fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'caddy'), 'fixture');
+  assert.equal((await service.state()).accelerator.componentReady, true);
   const enabled = await service.saveAccelerator({ smartDirect: 'enabled' });
   assert.equal(enabled.smartDirect, true); assert.equal(enabled.autoIp, false); assert.equal(enabled.bypassVpn, false);
   assert.equal((await service.saveAccelerator({ smartDirect: 'disabled' })).smartDirect, false);

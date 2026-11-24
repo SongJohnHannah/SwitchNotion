@@ -32,9 +32,11 @@ async function refreshThinking() {
 }
 function renderNetworkStatus(accelerator) {
   const network = accelerator.runtime || { state: 'stopped' };
-  $('notion-smart-status').textContent = accelerator.supported === false ? '当前版本的直连加速已预留 Mac 接口，Windows 端可用。' :
-    network.state === 'ready' ? (network.usedFallback ? '近期有媒体请求切回系统网络。其他可用地址仍优先直连。' :
-      network.refreshing ? '正在检测媒体直连地址…' : '媒体直连服务运行中' + (network.checkedDomains ? ` · 已检测 ${network.checkedDomains} 个域名，${network.reachableDomains} 个有可用地址` : ' · 正在检测媒体地址')) :
+  $('notion-smart-status').textContent = accelerator.supported === false ? '图片和视频直连加速支持 Apple Silicon Mac 和 Windows x64。' :
+    accelerator.componentReady === false ? '缺少 Caddy 直连组件，当前使用系统网络。' :
+    network.state === 'ready' ? (network.refreshing || !network.checkedDomains ? '正在检测媒体直连地址…' :
+      !network.reachableDomains ? '未找到可用的直连地址，当前使用系统网络。' :
+        `已检测 ${network.checkedDomains} 个域名，${network.reachableDomains} 个可直连。` + (network.usedFallback ? '近期有媒体请求切回系统网络。' : '')) :
       network.message || (accelerator.smartDirect ? '已开启，重新打开 Switch Notion 后生效。' : '直连加速未开启。');
   $('refresh-accelerator').disabled = network.state !== 'ready' || network.refreshing === true;
   $('refresh-accelerator').dataset.unavailable = $('refresh-accelerator').disabled ? 'true' : 'false';

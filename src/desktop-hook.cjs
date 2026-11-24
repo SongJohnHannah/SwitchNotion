@@ -2,14 +2,21 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { app, session, BrowserWindow, dialog, Notification, ipcMain, Menu, MenuItem, shell } = require('electron');
+const { app, session, BrowserWindow, dialog, Notification, ipcMain, Menu, MenuItem, powerMonitor, shell } = require('electron');
 const platform = require('./platform/index.cjs').createDesktopPlatform();
 const { initializeRuntime, disableBuiltinUpdates } = require('./runtime-bootstrap.cjs');
 const root = initializeRuntime({ app, dialog, platform });
 if (!root) return;
+const smartLaunch = require('./notion-smart-launch.cjs');
+const mediaEnabled = smartLaunch.supported() && process.env.NOTION_SWITCH_SMART_DIRECT === '1';
 const smartRunId = process.env.NOTION_SWITCH_SMART_RUN_ID;
-if (/^[a-f\d-]{36}$/i.test(smartRunId || '')) app.on('will-quit', () => {
-  try { require('./notion-smart-launch.cjs').request(root, 'stop', smartRunId); } catch {}
+if (mediaEnabled && /^[a-f\d-]{36}$/i.test(smartRunId || '')) app.on('will-quit', () => {
+  try { smartLaunch.request(root, 'stop', smartRunId); } catch {}
+});
+if (platform.id === 'darwin' && mediaEnabled && smartRunId) app.whenReady().then(() => {
+  powerMonitor.on('resume', () => {
+    try { smartLaunch.request(root, 'refresh', smartRunId); } catch {}
+  });
 });
 disableBuiltinUpdates(root);
 require('./app-branding.cjs').installAppBranding(require('electron'));
@@ -64,7 +71,7 @@ const log = event => fs.appendFileSync(logFile, JSON.stringify({ time: new Date(
 let mediaFallbackAt = 0;
 const mediaEvents = new Map();
 const media = createNotionMedia({
-  enabled: platform.id === 'win32' && process.env.NOTION_SWITCH_SMART_DIRECT === '1',
+  enabled: mediaEnabled,
   root,
   onResult: event => {
     if (event.route === 'system') mediaFallbackAt = Date.now();

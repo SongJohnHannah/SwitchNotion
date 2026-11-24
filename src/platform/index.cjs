@@ -4,6 +4,7 @@ const childProcess = require('node:child_process');
 const { windows } = require('./windows.cjs');
 const { macos } = require('./macos.cjs');
 const network = require('../notion-accelerator.cjs');
+const { launchEnvironment } = require('../notion-smart-launch.cjs');
 
 function unsupported(id, capability) {
   const error = Error(`${id === 'darwin' ? 'macOS' : id} 的${capability === 'syncLogin' ? '登录同步' : '桌面运行'}尚未实现或验证。`);
@@ -74,9 +75,7 @@ function createDesktopPlatform({ id = process.platform, arch = process.arch, env
       const args = ['--enable-logging=stderr'];
       if (bypassed) args.push('--proxy-bypass-list=' + network.bypassList);
       if (rules) args.push('--host-resolver-rules=' + rules);
-      const env = { ...launchEnv, NOTION_SWITCH_ROOT: stateRoot };
-      if (smartDirect) { env.NOTION_SWITCH_SMART_DIRECT = '1'; env.NOTION_SWITCH_SMART_RUN_ID = smartRunId; }
-      else { delete env.NOTION_SWITCH_SMART_DIRECT; delete env.NOTION_SWITCH_SMART_RUN_ID; }
+      const env = launchEnvironment({ ...launchEnv, NOTION_SWITCH_ROOT: stateRoot }, smartDirect, smartRunId);
       // 系统代理关闭时，环境里残留的 HTTP(S)_PROXY 会让 Electron 网络栈继续尝试已经不存在的代理。
       if (!bypassed && !proxyEnabled) for (const key of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) delete env[key];
       if (bypassed) env.NO_PROXY = [env.NO_PROXY, network.bypassEnv].filter(Boolean).join(',');
