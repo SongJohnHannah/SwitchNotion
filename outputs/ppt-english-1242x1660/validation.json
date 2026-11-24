@@ -1,0 +1,190 @@
+{
+  "outputSize": [
+    1242,
+    1660
+  ],
+  "pages": 10,
+  "mode": "Complete original slides centered on white portrait canvases",
+  "slides": [
+    {
+      "page": 1,
+      "file": "slide-01.png",
+      "width": 1242,
+      "height": 1660,
+      "slidePosition": [
+        0,
+        480,
+        1242,
+        699
+      ],
+      "picturePosition": [
+        0,
+        483,
+        1242,
+        693
+      ]
+    },
+    {
+      "page": 2,
+      "file": "slide-02.png",
+      "width": 1242,
+      "height": 1660,
+      "slidePosition": [
+        0,
+        480,
+        1242,
+        699
+      ],
+      "picturePosition": [
+        0,
+        483,
+        1242,
+        693
+      ]
+    },
+    {
+      "page": 3,
+      "file": "slide-03.png",
+      "width": 1242,
+      "height": 1660,
+      "slidePosition": [
+        0,
+        480,
+        1242,
+        699
+      ],
+      "picturePosition": [
+        0,
+        483,
+        1242,
+        693
+      ]
+    },
+    {
+      "page": 4,
+      "file": "slide-04.png",
+      "width": 1242,
+      "height": 1660,
+      "slidePosition": [
+        0,
+        480,
+        1242,
+        699
+      ],
+      "picturePosition": [
+        0,
+        483,
+        1242,
+        693
+      ]
+    },
+    {
+      "page": 5,
+      "file": "slide-05.png",
+      "width": 1242,
+      "height": 1660,
+      "slidePosition": [
+        0,
+        480,
+        1242,
+        699
+      ],
+      "picturePosition": [
+        0,
+        483,
+        1242,
+        693
+      ]
+    },
+    {
+      "page": 6,
+      "file": "slide-06.png",
+      "width": 1242,
+      "height": 1660,
+      "slidePosition": [
+        0,
+        480,
+        1242,
+        699
+      ],
+      "picturePosition": [
+        0,
+        483,
+        1242,
+        693
+      ]
+    },
+    {
+      "page": 7,
+      "file": "slide-07.png",
+      "width": 1242,
+      "height": 1660,
+      "slidePosition": [
+        0,
+        480,
+        1242,
+        699
+      ],
+      "picturePosition": [
+        0,
+        483,
+        1242,
+        693
+      ]
+    },
+    {
+      "page": 8,
+      "file": "slide-08.png",
+      "width": 1242,
+      "height": 1660,
+      "slidePosition": [
+        0,
+        480,
+        1242,
+        699
+      ],
+      "picturePosition": [
+        0,
+        483,
+        1242,
+        693
+      ]
+    },
+    {
+      "page": 9,
+      "file": "slide-09.png",
+      "width": 1242,
+      "height": 1660,
+      "slidePosition": [
+        0,
+        480,
+        1242,
+        699
+      ],
+      "picturePosition": [
+        0,
+        483,
+        1242,
+        693
+      ]
+    },
+    {
+      "page": 10,
+      "file": "slide-10.png",
+      "width": 1242,
+      "height": 1660,
+      "slidePosition": [
+        0,
+        480,
+        1242,
+        699
+      ],
+      "picturePosition": [
+        0,
+        483,
+        1242,
+        693
+      ]
+    }
+  ]
+}

@@ -1,0 +1,127 @@
+{
+  "count": 10,
+  "width": 1242,
+  "height": 1660,
+  "pages": [
+    {
+      "page": 1,
+      "file": "images/page-01.png",
+      "generatedDimensions": [
+        1085,
+        1450
+      ],
+      "dimensions": [
+        1242,
+        1660
+      ]
+    },
+    {
+      "page": 2,
+      "file": "images/page-02.png",
+      "generatedDimensions": [
+        1085,
+        1450
+      ],
+      "dimensions": [
+        1242,
+        1660
+      ]
+    },
+    {
+      "page": 3,
+      "file": "images/page-03.png",
+      "generatedDimensions": [
+        1085,
+        1449
+      ],
+      "dimensions": [
+        1242,
+        1660
+      ]
+    },
+    {
+      "page": 4,
+      "file": "images/page-04.png",
+      "generatedDimensions": [
+        1085,
+        1450
+      ],
+      "dimensions": [
+        1242,
+        1660
+      ]
+    },
+    {
+      "page": 5,
+      "file": "images/page-05.png",
+      "generatedDimensions": [
+        1085,
+        1450
+      ],
+      "dimensions": [
+        1242,
+        1660
+      ]
+    },
+    {
+      "page": 6,
+      "file": "images/page-06.png",
+      "generatedDimensions": [
+        1084,
+        1451
+      ],
+      "dimensions": [
+        1242,
+        1660
+      ]
+    },
+    {
+      "page": 7,
+      "file": "images/page-07.png",
+      "generatedDimensions": [
+        1085,
+        1450
+      ],
+      "dimensions": [
+        1242,
+        1660
+      ]
+    },
+    {
+      "page": 8,
+      "file": "images/page-08.png",
+      "generatedDimensions": [
+        1085,
+        1450
+      ],
+      "dimensions": [
+        1242,
+        1660
+      ]
+    },
+    {
+      "page": 9,
+      "file": "images/page-09.png",
+      "generatedDimensions": [
+        1085,
+        1450
+      ],
+      "dimensions": [
+        1242,
+        1660
+      ]
+    },
+    {
+      "page": 10,
+      "file": "images/page-10.png",
+      "generatedDimensions": [
+        1085,
+        1450
+      ],
+      "dimensions": [
+        1242,
+        1660
+      ]
+    }
+  ]
+}

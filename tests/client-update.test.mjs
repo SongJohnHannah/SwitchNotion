@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import clientModule from '../src/client-update.cjs';
@@ -11,7 +12,12 @@ function fixture(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const seed = path.join(dir, 'seed'), remote = path.join(dir, 'remote.git'), project = path.join(dir, 'project'), root = path.join(dir, 'state');
   fs.mkdirSync(seed); fs.mkdirSync(root);
-  const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
+  // These repositories model HTTPS and SSH explicitly. A user's insteadOf
+  // rules must not rewrite the fixture remote and bypass the fallback case.
+  Object.assign(env, { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' });
+  const git = (cwd, args) => execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   git(seed, ['init', '--initial-branch=main']);
   const identity = cwd => { git(cwd, ['config', 'user.name', 'Fixture']); git(cwd, ['config', 'user.email', 'fixture@example.invalid']); };
   identity(seed);
